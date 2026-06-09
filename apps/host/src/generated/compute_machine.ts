@@ -1,5 +1,6 @@
 // AUTO-GENERATED from the "compute_machine" machine manifest by machinen bindgen.
 // Do not edit by hand — regenerate with `pnpm bindgen`.
+import { machineModule } from '@federated-compute/machinen-plugin/client';
 
 export interface ComputeMachineMath {
   add(a: number, b: number): Promise<number>;
@@ -21,3 +22,7 @@ export interface ComputeMachineModules {
   './text': ComputeMachineText;
   './system': ComputeMachineSystem;
 }
+
+export const math = machineModule<ComputeMachineMath>('compute_machine', './math', { version: '^1.0.0' });
+export const text = machineModule<ComputeMachineText>('compute_machine', './text', { version: '^1.0.0' });
+export const system = machineModule<ComputeMachineSystem>('compute_machine', './system', { version: '^1.0.0' });

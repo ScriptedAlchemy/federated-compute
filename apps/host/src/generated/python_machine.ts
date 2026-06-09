@@ -1,5 +1,6 @@
 // AUTO-GENERATED from the "python_machine" machine manifest by machinen bindgen.
 // Do not edit by hand — regenerate with `pnpm bindgen`.
+import { machineModule } from '@federated-compute/machinen-plugin/client';
 
 export interface PythonMachineStats {
   mean(values: number[]): Promise<number>;
@@ -21,3 +22,7 @@ export interface PythonMachineModules {
   './data': PythonMachineData;
   './python': PythonMachinePython;
 }
+
+export const stats = machineModule<PythonMachineStats>('python_machine', './stats', { version: '^1.0.0' });
+export const data = machineModule<PythonMachineData>('python_machine', './data', { version: '^1.0.0' });
+export const python = machineModule<PythonMachinePython>('python_machine', './python', { version: '^1.0.0' });

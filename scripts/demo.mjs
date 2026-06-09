@@ -14,9 +14,9 @@ const host = spawn('node', [path.join(ROOT, 'apps/host/dist/index.js')], {
   env: {
     ...process.env,
     MACHINEN_TOKEN: token,
-    COMPUTE_MACHINE: 'machinen+http://127.0.0.1:3801',
-    JAVA_MACHINE: 'machinen+http://127.0.0.1:3802',
-    PYTHON_MACHINE: 'machinen+http://127.0.0.1:3803',
+    MACHINEN_REMOTE_COMPUTE_MACHINE: 'machinen+http://127.0.0.1:3801',
+    MACHINEN_REMOTE_JAVA_MACHINE: 'machinen+http://127.0.0.1:3802',
+    MACHINEN_REMOTE_PYTHON_MACHINE: 'machinen+http://127.0.0.1:3803',
   },
   stdio: 'inherit',
 });

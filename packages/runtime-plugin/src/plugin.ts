@@ -34,8 +34,8 @@ export interface MachinenPluginOptions {
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
   machineHooks: MachineHooks;
-  /** Pre-boot/attach all known machines (the preloadRemote analog). */
-  warm(remoteNames?: string[]): Promise<void>;
+  /** Pre-boot/attach machines (the preloadRemote analog). Accepts names or {name, entry} pairs. */
+  warm(remotes?: (string | { name: string; entry: string })[]): Promise<void>;
   /** Per-machine call statistics. */
   metrics(): Record<string, MachineMetrics>;
   /** Snapshot a booted machine by remote name (driver permitting). */
@@ -290,15 +290,18 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       return args;
     },
 
-    async warm(remoteNames) {
-      const names = remoteNames ?? [...knownRemotes.keys()];
+    async warm(remotes) {
+      const targets = remotes ?? [...knownRemotes.keys()];
       await Promise.all(
-        names.map((name) => {
-          const entry = knownRemotes.get(name);
-          if (!entry) {
-            throw new Error(`[machinen-plugin] cannot warm unknown machine "${name}"`);
+        targets.map((target) => {
+          if (typeof target !== 'string') {
+            return ensureMachine(target.name, target.entry);
           }
-          return ensureMachine(name, entry);
+          const entry = knownRemotes.get(target);
+          if (!entry) {
+            throw new Error(`[machinen-plugin] cannot warm unknown machine "${target}"`);
+          }
+          return ensureMachine(target, entry);
         }),
       );
     },

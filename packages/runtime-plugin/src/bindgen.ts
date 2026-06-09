@@ -14,20 +14,30 @@ function renderFunction(name: string, sig: FunctionSignature): string {
   return `  ${name}(${params}): ${returns};`;
 }
 
+function identifier(exposePath: string): string {
+  return exposePath.replace(/^\.\//, '').replace(/[^a-zA-Z0-9_$]/g, '_');
+}
+
 /**
- * Bindgen: turn a machine's typed manifest into TypeScript interfaces, so the
- * consumer's `loadRemote<T>` types come from the machine itself instead of
- * being hand-written.
+ * Bindgen: turn a machine's typed manifest into ready-to-import TypeScript.
+ * Emits interfaces (typing) plus lazy module bindings, so end-user code is:
+ *
+ *   import { strings } from './machines/java_machine';
+ *   await strings.upper('hi');   // a call into the machine
  */
 export function generateBindings(manifest: MachineExposeManifest): string {
   const machineName = pascalCase(manifest.name);
+  const major = manifest.version?.split('.')[0] ?? '0';
+  const versionRange = `^${major}.0.0`;
   const lines: string[] = [
     `// AUTO-GENERATED from the "${manifest.name}" machine manifest by machinen bindgen.`,
     '// Do not edit by hand — regenerate with `pnpm bindgen`.',
+    "import { machineModule } from '@federated-compute/machinen-plugin/client';",
     '',
   ];
 
   const moduleMap: string[] = [];
+  const bindings: string[] = [];
   for (const [exposePath, fns] of Object.entries(manifest.exposes)) {
     const interfaceName = machineName + pascalCase(exposePath);
     lines.push(`export interface ${interfaceName} {`);
@@ -36,8 +46,12 @@ export function generateBindings(manifest: MachineExposeManifest): string {
     }
     lines.push('}', '');
     moduleMap.push(`  '${exposePath}': ${interfaceName};`);
+    bindings.push(
+      `export const ${identifier(exposePath)} = machineModule<${interfaceName}>('${manifest.name}', '${exposePath}', { version: '${versionRange}' });`,
+    );
   }
 
   lines.push(`export interface ${machineName}Modules {`, ...moduleMap, '}', '');
+  lines.push(...bindings, '');
   return lines.join('\n');
 }

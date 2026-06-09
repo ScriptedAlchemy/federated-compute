@@ -37,4 +37,19 @@ describe('generateBindings', () => {
     expect(src).toContain("'./compute': JavaMachineCompute;");
     expect(src).toContain('export interface JavaMachineModules {');
   });
+
+  test('emits ready-to-import lazy module bindings for end users', () => {
+    const src = generateBindings(manifest);
+
+    expect(src).toContain(
+      "import { machineModule } from '@federated-compute/machinen-plugin/client';",
+    );
+    // import { strings } from './java_machine' — call strings.upper(...) directly.
+    expect(src).toContain(
+      "export const strings = machineModule<JavaMachineStrings>('java_machine', './strings', { version: '^1.0.0' });",
+    );
+    expect(src).toContain(
+      "export const compute = machineModule<JavaMachineCompute>('java_machine', './compute', { version: '^1.0.0' });",
+    );
+  });
 });
