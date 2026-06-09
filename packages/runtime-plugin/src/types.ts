@@ -35,7 +35,7 @@ export interface MachineMetaData {
 
 /**
  * Protocol v3 manifest: the machine analog of `mf-manifest.json`.
- * Served at `/mf-manifest.json` (with `/mf/manifest` as an alias).
+ * Served at `/mf-manifest.json`.
  */
 export interface MachineExposeManifest {
   name: string;

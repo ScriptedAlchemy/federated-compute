@@ -143,10 +143,8 @@ async function waitForManifest(
       throw new Error(`[machinen-plugin] guest process for "${entry}" exited early`);
     }
     try {
-      // Prefer the health probe; fall back to the manifest for older guests.
-      if (handle.health && (await handle.health())) return;
-      await handle.manifest();
-      return;
+      if (await handle.health!()) return;
+      throw new Error('health probe not ready');
     } catch (error) {
       lastError = error;
       await sleep(100);

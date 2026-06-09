@@ -101,7 +101,7 @@ for (const target of targets) {
 
     test('requests without the bearer token are rejected with 401', { timeout: 30_000 }, async () => {
       const { port } = await bootOnce(target);
-      const res = await fetch(`http://127.0.0.1:${port}/mf/manifest`);
+      const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`);
       expect(res.status).toBe(401);
     });
 

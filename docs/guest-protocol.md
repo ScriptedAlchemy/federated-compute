@@ -26,7 +26,7 @@ and by orchestrators (k8s probes, load balancers).
 { "ok": true, "name": "java_machine" }
 ```
 
-## `GET /mf-manifest.json` (alias: `GET /mf/manifest`)
+## `GET /mf-manifest.json`
 
 ```json
 {

@@ -15,9 +15,10 @@ import java.util.function.Function;
 
 /**
  * Machine guest service in Java. Implements the federated-compute guest
- * protocol (GET /mf/manifest, POST /mf/call) so the Module Federation host
- * can bind its exposed functions like imported modules. Zero dependencies:
- * run directly with `java Main.java` (source-file mode).
+ * protocol v3 (GET /mf-manifest.json, GET /mf/health, POST /mf/call,
+ * GET/POST /mf/state) so the Module Federation host can bind its exposed
+ * functions like imported modules. Zero dependencies: run directly with
+ * `java Main.java` (source-file mode).
  */
 public class Main {
 
@@ -71,7 +72,6 @@ public class Main {
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "3802"));
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
     server.createContext("/mf-manifest.json", Main::handleManifest);
-    server.createContext("/mf/manifest", Main::handleManifest);
     server.createContext("/mf/health", Main::handleHealth);
     server.createContext("/mf/call", Main::handleCall);
     server.createContext("/mf/state", Main::handleState);

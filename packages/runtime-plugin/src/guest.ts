@@ -187,7 +187,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized', type: 'AuthError' } }));
         return;
       }
-      if (req.method === 'GET' && (req.url === '/mf-manifest.json' || req.url === '/mf/manifest')) {
+      if (req.method === 'GET' && req.url === '/mf-manifest.json') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(guest.manifest()));
         return;

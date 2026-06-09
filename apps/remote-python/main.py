@@ -1,8 +1,9 @@
 """Machine guest service in Python.
 
-Implements the federated-compute guest protocol v2 (GET /mf/manifest,
-POST /mf/call) so the Module Federation host can bind its exposed functions
-like imported modules. Stdlib only: run with `python3 main.py`.
+Implements the federated-compute guest protocol v3 (GET /mf-manifest.json,
+GET /mf/health, POST /mf/call, GET/POST /mf/state) so the Module Federation
+host can bind its exposed functions like imported modules. Stdlib only: run
+with `python3 main.py`.
 """
 
 import json
@@ -128,7 +129,7 @@ class GuestHandler(BaseHTTPRequestHandler):
             return
         if self._unauthorized():
             return
-        if self.path in ("/mf-manifest.json", "/mf/manifest"):
+        if self.path == "/mf-manifest.json":
             self._send(manifest())
         elif self.path == "/mf/state":
             self._send({"ok": True, "state": STATE.dehydrate()})
