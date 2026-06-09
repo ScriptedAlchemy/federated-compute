@@ -1,5 +1,12 @@
-import { afterEach, describe, expect, test } from 'vitest';
-import { createMachines, envKeyFor } from '../src/client.js';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import {
+  configureMachines,
+  createMachines,
+  envKeyFor,
+  machineModule,
+  resetMachines,
+} from '../src/client.js';
+import { MachineVersionError } from '../src/errors.js';
 import { createGuestRuntime } from '../src/guest.js';
 import { inProcessDriver } from '../src/drivers/in-process.js';
 import type { MachineDriver } from '../src/types.js';
@@ -34,6 +41,11 @@ function demoGuest(name: string) {
     },
   });
 }
+
+type MathModule = {
+  add(a: number, b: number): Promise<number>;
+  countdown(from: number): AsyncIterable<number>;
+};
 
 const cleanupEnv: string[] = [];
 afterEach(() => {
@@ -125,5 +137,126 @@ describe('createMachines facade', () => {
     await client.machine(name).math.add(1, 1);
     expect(client.metrics()[name].calls).toBe(1);
     expect(typeof client.plugin.machineHooks.beforeCall.on).toBe('function');
+  });
+});
+
+describe('client-level version pinning', () => {
+  test('warm() enforces options.versions against the machine manifest', async () => {
+    const { name, entry } = unique('verfail');
+    const client = createMachines({
+      remotes: { [name]: entry },
+      versions: { [name]: '^9.0.0' },
+      driver: inProcessDriver(demoGuest(name)),
+    });
+
+    await expect(client.warm()).rejects.toThrow(MachineVersionError);
+  });
+
+  test('warm() succeeds when options.versions is satisfied', async () => {
+    const { name, entry } = unique('verok');
+    const client = createMachines({
+      remotes: { [name]: entry },
+      versions: { [name]: '^1.0.0' },
+      driver: inProcessDriver(demoGuest(name)),
+    });
+
+    await client.warm();
+    await expect(client.machine(name).math.add(1, 2)).resolves.toBe(3);
+  });
+
+  test('an explicit ?version= on the entry wins over options.versions', async () => {
+    const { name, entry } = unique('verentry');
+    const client = createMachines({
+      remotes: { [name]: `${entry}?version=^1.0.0` },
+      versions: { [name]: '^9.0.0' },
+      driver: inProcessDriver(demoGuest(name)),
+    });
+
+    await expect(client.warm()).resolves.toBeUndefined();
+  });
+
+  test('options.versions wins over the per-module version pin', async () => {
+    const { name, entry } = unique('veropts');
+    const client = createMachines({
+      remotes: { [name]: entry },
+      versions: { [name]: '^9.0.0' },
+      driver: inProcessDriver(demoGuest(name)),
+    });
+
+    await expect(client.machine(name, { version: '^1.0.0' }).math.add(1, 2)).rejects.toThrow(
+      MachineVersionError,
+    );
+  });
+});
+
+describe('machineModule bindings', () => {
+  beforeEach(() => resetMachines());
+  afterEach(() => resetMachines());
+
+  test('stream functions return a real AsyncIterable, not a thenable', async () => {
+    const { name, entry } = unique('mm_stream');
+    configureMachines({ remotes: { [name]: entry }, driver: inProcessDriver(demoGuest(name)) });
+    const math = machineModule<MathModule>(name, './math', { streams: ['countdown'] });
+
+    const result = math.countdown(2);
+    expect(result instanceof Promise).toBe(false);
+    expect((result as { then?: unknown }).then).toBeUndefined();
+
+    const chunks: number[] = [];
+    for await (const n of result) chunks.push(n);
+    expect(chunks).toEqual([2, 1, 0]);
+  });
+
+  test('unary functions return a true Promise', async () => {
+    const { name, entry } = unique('mm_unary');
+    configureMachines({ remotes: { [name]: entry }, driver: inProcessDriver(demoGuest(name)) });
+    const math = machineModule<MathModule>(name, './math', { streams: ['countdown'] });
+
+    const result = math.add(2, 3);
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toBe(5);
+  });
+});
+
+describe('default client', () => {
+  beforeEach(() => resetMachines());
+  afterEach(() => resetMachines());
+
+  test('configureMachines + machineModule works end to end', async () => {
+    const { name, entry } = unique('dc_e2e');
+    configureMachines({ remotes: { [name]: entry }, driver: inProcessDriver(demoGuest(name)) });
+
+    const math = machineModule<MathModule>(name, './math', { streams: ['countdown'] });
+    await expect(math.add(20, 22)).resolves.toBe(42);
+  });
+
+  test('configureMachines after first use throws', async () => {
+    const { name, entry } = unique('dc_late');
+    configureMachines({ remotes: { [name]: entry }, driver: inProcessDriver(demoGuest(name)) });
+    await machineModule<MathModule>(name, './math').add(1, 1);
+
+    expect(() => configureMachines({})).toThrow(/before any machine call/);
+  });
+
+  test('resetMachines allows reconfiguration', async () => {
+    const a = unique('dc_reset_a');
+    configureMachines({ remotes: { [a.name]: a.entry }, driver: inProcessDriver(demoGuest(a.name)) });
+    await expect(machineModule<MathModule>(a.name, './math').add(1, 2)).resolves.toBe(3);
+    expect(() => configureMachines({})).toThrow();
+
+    resetMachines();
+    const b = unique('dc_reset_b');
+    configureMachines({ remotes: { [b.name]: b.entry }, driver: inProcessDriver(demoGuest(b.name)) });
+    await expect(machineModule<MathModule>(b.name, './math').add(3, 4)).resolves.toBe(7);
+  });
+
+  test('remote addresses resolve from env vars through the default client', async () => {
+    const { name, entry } = unique('dc_env');
+    const envKey = envKeyFor(name);
+    process.env[envKey] = entry;
+    cleanupEnv.push(envKey);
+
+    configureMachines({ driver: inProcessDriver(demoGuest(name)) });
+    await expect(machineModule<MathModule>(name, './math').add(5, 5)).resolves.toBe(10);
   });
 });

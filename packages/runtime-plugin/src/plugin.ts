@@ -287,6 +287,13 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       return args;
     },
 
+    // Capture machine remotes added at runtime via instance.registerRemotes()
+    // so warm() accepts them by name too.
+    registerRemote(args) {
+      rememberRemotes([args.remote as { name?: string; entry?: string }]);
+      return args;
+    },
+
     async warm(remotes) {
       const targets = remotes ?? [...knownRemotes.keys()];
       await Promise.all(

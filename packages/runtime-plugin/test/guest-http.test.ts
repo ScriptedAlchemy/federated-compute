@@ -102,3 +102,43 @@ describe('guest over HTTP', () => {
     expect((await res.json()).ok).toBe(true);
   });
 });
+
+describe('guest runtime naming validation', () => {
+  test('throws for an expose path that is not a JS identifier', () => {
+    expect(() =>
+      createGuestRuntime({
+        name: 'bad_guest',
+        exposes: { './word-count': { count: () => 0 } },
+      }),
+    ).toThrow(/word-count.*'\.\/'.*JS identifier/s);
+  });
+
+  test('throws for an expose path missing the "./" prefix', () => {
+    expect(() =>
+      createGuestRuntime({
+        name: 'bad_guest',
+        exposes: { math: { add: () => 0 } },
+      }),
+    ).toThrow(/"math".*'\.\/'/s);
+  });
+
+  test('throws for a function name that is not a JS identifier', () => {
+    expect(() =>
+      createGuestRuntime({
+        name: 'bad_guest',
+        exposes: { './math': { 'do-thing': () => 0 } },
+      }),
+    ).toThrow(/do-thing.*JS identifier/s);
+  });
+
+  test('accepts valid expose paths and function names', () => {
+    const guest = createGuestRuntime({
+      name: 'good_guest',
+      exposes: {
+        './math': { add: (a: number, b: number) => a + b },
+        './_private': { $compute: () => 1 },
+      },
+    });
+    expect(Object.keys(guest.manifest().exposes)).toEqual(['./math', './_private']);
+  });
+});

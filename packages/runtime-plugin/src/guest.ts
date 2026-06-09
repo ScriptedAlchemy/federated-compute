@@ -47,6 +47,11 @@ function normalize(entry: ExposedFunction): NormalizedFn {
   };
 }
 
+// Identifier-safe names keep host-side property access (machine.math.add) and
+// bindgen's generated exports consistent — no sanitization divergence.
+const EXPOSE_PATH_RE = /^\.\/[A-Za-z_$][A-Za-z0-9_$]*$/;
+const FUNCTION_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 /**
  * The piece that runs *inside* the machine: a registry of exposed functions
  * with a typed manifest, mirroring Module Federation's `exposes` config.
@@ -54,8 +59,22 @@ function normalize(entry: ExposedFunction): NormalizedFn {
 export function createGuestRuntime(config: GuestConfig): GuestRuntime {
   const modules = new Map<string, Map<string, NormalizedFn>>();
   for (const [path, fns] of Object.entries(config.exposes)) {
+    if (!EXPOSE_PATH_RE.test(path)) {
+      throw new Error(
+        `invalid expose path "${path}": expose paths must be './' followed by a valid JS identifier ` +
+          `(e.g. './math') — the './' prefix is required — so generated bindings and property access stay consistent`,
+      );
+    }
     const mod = new Map<string, NormalizedFn>();
-    for (const [name, entry] of Object.entries(fns)) mod.set(name, normalize(entry));
+    for (const [name, entry] of Object.entries(fns)) {
+      if (!FUNCTION_NAME_RE.test(name)) {
+        throw new Error(
+          `invalid function name "${name}" in expose "${path}": function names must be valid JS identifiers ` +
+            `so generated bindings and property access stay consistent`,
+        );
+      }
+      mod.set(name, normalize(entry));
+    }
     modules.set(path, mod);
   }
 

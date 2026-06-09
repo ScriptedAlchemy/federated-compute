@@ -49,7 +49,16 @@ describe('generateBindings', () => {
       "export const strings = machineModule<JavaMachineStrings>('java_machine', './strings', { version: '^1.0.0' });",
     );
     expect(src).toContain(
-      "export const compute = machineModule<JavaMachineCompute>('java_machine', './compute', { version: '^1.0.0' });",
+      "export const compute = machineModule<JavaMachineCompute>('java_machine', './compute', { version: '^1.0.0', streams: ['countdown'] });",
     );
+  });
+
+  test('emits streams metadata only for modules with streaming functions', () => {
+    const src = generateBindings(manifest);
+
+    // './compute' has a streaming function, './strings' is purely unary.
+    expect(src).toContain("'./compute', { version: '^1.0.0', streams: ['countdown'] }");
+    expect(src).toContain("'./strings', { version: '^1.0.0' }");
+    expect(src).not.toContain("'./strings', { version: '^1.0.0', streams");
   });
 });

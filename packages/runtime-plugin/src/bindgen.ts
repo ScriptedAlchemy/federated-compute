@@ -46,8 +46,12 @@ export function generateBindings(manifest: MachineExposeManifest): string {
     }
     lines.push('}', '');
     moduleMap.push(`  '${exposePath}': ${interfaceName};`);
+    const streamFns = Object.entries(fns)
+      .filter(([, sig]) => sig.stream)
+      .map(([fn]) => `'${fn}'`);
+    const streamsOpt = streamFns.length ? `, streams: [${streamFns.join(', ')}]` : '';
     bindings.push(
-      `export const ${identifier(exposePath)} = machineModule<${interfaceName}>('${manifest.name}', '${exposePath}', { version: '${versionRange}' });`,
+      `export const ${identifier(exposePath)} = machineModule<${interfaceName}>('${manifest.name}', '${exposePath}', { version: '${versionRange}'${streamsOpt} });`,
     );
   }
 

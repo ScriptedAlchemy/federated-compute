@@ -17,6 +17,18 @@ export {
 } from './policy.js';
 export { generateBindings } from './bindgen.js';
 export {
+  configureMachines,
+  createMachines,
+  envKeyFor,
+  getMachines,
+  machineModule,
+  resetMachines,
+  type MachineModuleOptions,
+  type MachineProxy,
+  type MachinesClient,
+  type MachinesOptions,
+} from './client.js';
+export {
   formatMachineEntry,
   isMachineEntry,
   normalizeExpose,

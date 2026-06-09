@@ -62,6 +62,14 @@ and by orchestrators (k8s probes, load balancers).
   they feed `machinen-bindgen`, which generates host-side interfaces.
 - `stream: true` marks a function whose result is a stream of `returns` chunks.
 
+### Naming
+
+Expose paths must be `./` followed by a valid JS identifier (`./math`, not
+`./word-count`), and function names must be valid JS identifiers. This keeps
+host-side property access (`machine.math.add`) and generated binding exports
+consistent across languages; guest runtimes reject invalid names at
+construction time.
+
 ## `POST /mf/call`
 
 Request body (guests should cap bodies, 5 MB reference; respond `413` beyond):

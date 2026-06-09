@@ -23,6 +23,6 @@ export interface ComputeMachineModules {
   './system': ComputeMachineSystem;
 }
 
-export const math = machineModule<ComputeMachineMath>('compute_machine', './math', { version: '^1.0.0' });
+export const math = machineModule<ComputeMachineMath>('compute_machine', './math', { version: '^1.0.0', streams: ['countdown'] });
 export const text = machineModule<ComputeMachineText>('compute_machine', './text', { version: '^1.0.0' });
 export const system = machineModule<ComputeMachineSystem>('compute_machine', './system', { version: '^1.0.0' });

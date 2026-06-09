@@ -25,6 +25,12 @@ export interface MachinesOptions {
   driver?: MachineDriver;
   /** Defaults to the MACHINEN_TOKEN env var. */
   token?: string;
+  /**
+   * Semver ranges by remote name. Overrides per-module pins from generated
+   * bindings, so version policy survives paths (like warm()) that register
+   * entries before any binding runs.
+   */
+  versions?: Record<string, string>;
   calls?: CallPolicy;
   /** Default true: machines restart-and-retry transparently after crashes. */
   restartOnCrash?: boolean;
@@ -33,6 +39,8 @@ export interface MachinesOptions {
 export interface MachineModuleOptions {
   /** Semver range pinned onto the entry (MF requiredVersion analog). */
   version?: string;
+  /** Function names that stream: bindings return an AsyncIterable instead of a Promise. */
+  streams?: string[];
 }
 
 type AnyFn = (...args: any[]) => any;
@@ -119,7 +127,9 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     const spec = parseMachineEntry(name, base);
     const token = options.token ?? process.env.MACHINEN_TOKEN;
     if (token && !spec.params.has('token')) spec.params.set('token', token);
-    if (opts?.version && !spec.params.has('version')) spec.params.set('version', opts.version);
+    // Priority: explicit ?version= on the entry > client options.versions > module pin.
+    const version = options.versions?.[name] ?? opts?.version;
+    if (version && !spec.params.has('version')) spec.params.set('version', version);
     return formatMachineEntry(spec);
   }
 
@@ -233,18 +243,43 @@ export function getMachines(): MachinesClient {
   return (defaultClient ??= createMachines(defaultOptions));
 }
 
-/** Used by generated bindings: a typed, lazy module bound to the default client. */
+/** Clears the default client and its options. For tests and hot-reload. */
+export function resetMachines(): void {
+  defaultClient = undefined;
+  defaultOptions = {};
+}
+
+/**
+ * Used by generated bindings: a typed, lazy module bound to the default
+ * client. Unlike the dual-shape results of raw machine proxies, typed
+ * bindings return the real thing — a Promise for unary functions, an
+ * AsyncIterable for functions listed in `opts.streams`.
+ */
 export function machineModule<M extends AnyModule>(
   machineName: string,
   modulePath: string,
   opts?: MachineModuleOptions,
 ): M {
   let mod: AnyModule | undefined;
+  const streams = new Set(opts?.streams ?? []);
+  const wrappers = new Map<string, AnyFn>();
+  const binding = (fnName: string): AnyFn => {
+    mod ??= getMachines().machine(machineName, opts)[normalizeExpose(modulePath)];
+    return mod[fnName];
+  };
   return new Proxy({} as M, {
     get(_target, fnName) {
       if (!stringProp(fnName)) return undefined;
-      mod ??= getMachines().machine(machineName, opts)[normalizeExpose(modulePath)];
-      return mod[fnName];
+      let wrapper = wrappers.get(fnName);
+      if (!wrapper) {
+        wrapper = streams.has(fnName)
+          ? async function* (...args: unknown[]) {
+              yield* binding(fnName)(...args);
+            }
+          : async (...args: unknown[]) => binding(fnName)(...args);
+        wrappers.set(fnName, wrapper);
+      }
+      return wrapper;
     },
   });
 }
