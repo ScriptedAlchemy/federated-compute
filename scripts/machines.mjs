@@ -16,7 +16,7 @@ export const MACHINES = [
   {
     name: 'java_machine',
     port: 3802,
-    command: ['java', path.join(ROOT, 'apps/remote-java/Main.java')],
+    command: ['java', '-jar', path.join(ROOT, 'apps/remote-java/dist/java-machine.jar')],
   },
   {
     name: 'python_machine',

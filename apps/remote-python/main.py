@@ -1,172 +1,29 @@
 """Machine guest service in Python.
 
-Implements the federated-compute guest protocol v3 (GET /mf-manifest.json,
-GET /mf/health, POST /mf/call, GET/POST /mf/state) so the Module Federation
-host can bind its exposed functions like imported modules. Stdlib only: run
-with `python3 main.py`.
+Thin entrypoint for the federated-compute guest protocol v3 service; the
+implementation lives in the ``machinen_guest`` package next to this file.
+Stdlib only: run with `python3 main.py`.
 """
 
-import json
 import os
-import statistics
-import sys
-from collections import Counter
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-NAME = "python_machine"
-VERSION = "1.0.0"
-TOKEN = os.environ.get("MACHINEN_TOKEN") or None
+from machinen_guest.modules import default_modules
+from machinen_guest.registry import Registry
+from machinen_guest.server import ServerConfig, serve
+from machinen_guest.state import CounterState
 
 
-def sig(returns, *params):
-    return {"params": [{"name": n, "type": t} for n, t in params], "returns": returns}
-
-
-class CounterState:
-    """Warm state that survives snapshot/restore."""
-
-    def __init__(self):
-        self.count = 0
-
-    def increment(self):
-        self.count += 1
-        return self.count
-
-    def dehydrate(self):
-        return {"counter": self.count}
-
-    def rehydrate(self, state):
-        self.count = int(state.get("counter", 0))
-
-
-STATE = CounterState()
-
-
-# MF-style exposes: module path -> function name -> (implementation, signature).
-EXPOSES = {
-    "./stats": {
-        "mean": (lambda values: statistics.fmean(values), sig("number", ("values", "number[]"))),
-        "median": (lambda values: statistics.median(values), sig("number", ("values", "number[]"))),
-        "stdev": (lambda values: statistics.stdev(values), sig("number", ("values", "number[]"))),
-    },
-    "./data": {
-        "wordCount": (
-            lambda text: dict(Counter(text.lower().split())),
-            sig("Record<string, number>", ("text", "string")),
-        ),
-        "sortNumbers": (lambda values: sorted(values), sig("number[]", ("values", "number[]"))),
-    },
-    "./counter": {
-        "increment": (lambda: STATE.increment(), sig("number")),
-        "current": (lambda: STATE.count, sig("number")),
-    },
-    "./python": {
-        "info": (
-            lambda: {
-                "pid": os.getpid(),
-                "pythonVersion": sys.version.split()[0],
-                "implementation": sys.implementation.name,
-                "hint": "this ran inside the Python machine, not in the host process",
-            },
-            sig("{ pid: number; pythonVersion: string; implementation: string; hint: string }"),
-        ),
-    },
-}
-
-
-def manifest():
-    return {
-        "name": NAME,
-        "protocol": 3,
-        "version": VERSION,
-        "metaData": {
-            "runtime": f"{sys.implementation.name} {sys.version.split()[0]}",
-            "features": ["state"],
-        },
-        "exposes": {
-            path: {fn: signature for fn, (_, signature) in fns.items()}
-            for path, fns in EXPOSES.items()
-        },
-    }
-
-
-def dispatch(module, fn, args):
-    mod = EXPOSES.get(module)
-    if mod is None:
-        raise ValueError(f'unknown module "{module}"')
-    entry = mod.get(fn)
-    if entry is None:
-        raise ValueError(f'module "{module}" has no function "{fn}"')
-    handler, _ = entry
-    return handler(*args)
-
-
-class GuestHandler(BaseHTTPRequestHandler):
-    def log_message(self, *args):
+def main() -> None:
+    config = ServerConfig(
+        port=int(os.environ.get("PORT", "3803")),
+        token=os.environ.get("MACHINEN_TOKEN") or None,
+    )
+    state = CounterState()
+    registry = Registry(default_modules(state))
+    try:
+        serve(config, registry, state)
+    except KeyboardInterrupt:
         pass
-
-    def _send(self, payload, status=200):
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _unauthorized(self):
-        if TOKEN is None:
-            return False
-        if self.headers.get("authorization") == f"Bearer {TOKEN}":
-            return False
-        self._send(
-            {"ok": False, "error": {"message": "unauthorized", "type": "AuthError"}}, status=401
-        )
-        return True
-
-    def do_GET(self):
-        if self.path == "/mf/health":
-            self._send({"ok": True, "name": NAME})
-            return
-        if self._unauthorized():
-            return
-        if self.path == "/mf-manifest.json":
-            self._send(manifest())
-        elif self.path == "/mf/state":
-            self._send({"ok": True, "state": STATE.dehydrate()})
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        if self._unauthorized():
-            return
-        if self.path not in ("/mf/call", "/mf/state"):
-            self.send_response(404)
-            self.end_headers()
-            return
-        try:
-            length = int(self.headers.get("content-length", "0"))
-            request = json.loads(self.rfile.read(length))
-            if self.path == "/mf/state":
-                STATE.rehydrate(request.get("state") or {})
-                self._send({"ok": True})
-                return
-            result = dispatch(request["module"], request["fn"], request.get("args") or [])
-            self._send({"ok": True, "result": result})
-        except Exception as error:  # noqa: BLE001 - guest boundary
-            self._send(
-                {
-                    "ok": False,
-                    "error": {"message": str(error), "type": type(error).__name__},
-                }
-            )
-
-
-def main():
-    port = int(os.environ.get("PORT", "3803"))
-    server = ThreadingHTTPServer(("127.0.0.1", port), GuestHandler)
-    print(f"[remote-python] machine guest listening on 127.0.0.1:{port}", flush=True)
-    server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+{
+  "name": "remote-java",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "java -jar dist/java-machine.jar"
+  }
+}

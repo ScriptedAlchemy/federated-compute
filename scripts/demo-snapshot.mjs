@@ -18,7 +18,7 @@ const token = 'snap-secret';
 
 const images = {
   compute_machine: path.join(ROOT, 'apps/remote/dist/index.js'),
-  java_machine: path.join(ROOT, 'apps/remote-java/Main.java'),
+  java_machine: path.join(ROOT, 'apps/remote-java/dist/java-machine.jar'),
   python_machine: path.join(ROOT, 'apps/remote-python/main.py'),
 };
 

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { getFreePort, processDriver } from '../src/drivers/process.js';
@@ -12,9 +13,22 @@ function runtimeAvailable(cmd: string): boolean {
   return spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status !== null;
 }
 
+/** The Java machine's image is its build artifact; build it via the machine's own build script. */
+function ensureJavaJar(): string {
+  const jar = path.join(APPS, 'remote-java/dist/java-machine.jar');
+  if (!existsSync(jar)) {
+    const result = spawnSync('node', ['build.mjs'], {
+      cwd: path.join(APPS, 'remote-java'),
+      stdio: 'inherit',
+    });
+    if (result.status !== 0) throw new Error('remote-java build failed');
+  }
+  return jar;
+}
+
 interface GuestTarget {
   label: string;
-  image: string;
+  image: () => string;
   expectName: string;
   sampleCall: { module: string; fn: string; args: unknown[]; expect: unknown };
   available: boolean;
@@ -23,14 +37,14 @@ interface GuestTarget {
 const targets: GuestTarget[] = [
   {
     label: 'java guest',
-    image: path.join(APPS, 'remote-java/Main.java'),
+    image: ensureJavaJar,
     expectName: 'java_machine',
     sampleCall: { module: './strings', fn: 'upper', args: ['ok'], expect: 'OK' },
     available: runtimeAvailable('java'),
   },
   {
     label: 'python guest',
-    image: path.join(APPS, 'remote-python/main.py'),
+    image: () => path.join(APPS, 'remote-python/main.py'),
     expectName: 'python_machine',
     sampleCall: { module: './data', fn: 'sortNumbers', args: [[3, 1, 2]], expect: [1, 2, 3] },
     available: runtimeAvailable('python3'),
@@ -50,7 +64,7 @@ function bootOnce(target: GuestTarget): Promise<{ handle: MachineHandle; port: n
       const port = await getFreePort();
       const spec = parseMachineEntry(
         'conformance',
-        `machinen://${target.image}?port=${port}&token=${TOKEN}`,
+        `machinen://${target.image()}?port=${port}&token=${TOKEN}`,
       );
       const handle = await processDriver().boot(spec);
       disposers.push(() => handle.dispose?.());

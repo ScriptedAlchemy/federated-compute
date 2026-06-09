@@ -155,8 +155,8 @@ is public, where the same `MachineDriver` interface snapshots whole microVMs.
 ```
 packages/runtime-plugin   @federated-compute/machinen-plugin (plugin, hooks, drivers, guest runtime, bindgen)
 apps/remote               machine: Node guest (Rsbuild, node target)
-apps/remote-java          machine: Java 21 guest (single file, zero deps)
-apps/remote-python        machine: Python 3 guest (single file, stdlib only)
+apps/remote-java          machine: Java 21 service (src/dev/machinen/* — server, runtime, modules, state; builds dist/java-machine.jar, zero deps)
+apps/remote-python        machine: Python 3 service (machinen_guest package — protocol, registry, server, modules; stdlib only)
 apps/host                 consumer: attaches to all machines by address only
 scripts/                  dev orchestrator (stands in for per-machine deployments)
 docs/guest-protocol.md    the wire protocol any guest language implements
@@ -166,14 +166,15 @@ docs/guest-protocol.md    the wire protocol any guest language implements
 
 ```bash
 pnpm install
-pnpm test         # unit tests + cross-language conformance suite
-pnpm -r build
-pnpm demo         # boots all machines as separate services, runs the host
-pnpm bindgen      # regenerate typed bindings from machine manifests
+pnpm test           # unit tests + cross-language conformance suite
+pnpm -r build       # plugin, node apps, and the Java machine's jar
+pnpm demo           # boots all machines as separate services, runs the host
+pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
+pnpm bindgen        # pull typed bindings from the deployed machines
 ```
 
 Requires Node 22+, a JDK 21+ for the Java machine, and Python 3 for the
-Python machine. CI runs the full suite plus the end-to-end demo.
+Python machine. CI runs the full suite plus both demos.
 
 ## Status
 
