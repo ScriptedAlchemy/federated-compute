@@ -1,0 +1,59 @@
+/* Shared design system for the demo pages. Page-specific accent tokens,
+   backgrounds, paddings, and component styles stay inline in each page. */
+:root {
+  --bg: #07090d;
+  --panel: #0d1117;
+  --panel-edge: #1b232e;
+  --ink: #c9d4e0;
+  --ink-dim: #5a6878;
+  --display: 'Chakra Petch', sans-serif;
+  --mono: 'IBM Plex Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+header {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 28px 32px 18px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+header h1 {
+  font-family: var(--display);
+  font-size: 22px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+}
+.panel h2 {
+  font-family: var(--display);
+  font-size: 12px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 12px;
+}
+/* range inputs are excluded so gravity's slider keeps its native look */
+input:not([type=range]), textarea, button, select {
+  font-family: var(--mono); font-size: 13px;
+  background: #0a0f15; color: var(--ink);
+  border: 1px solid var(--panel-edge); border-radius: 4px;
+  padding: 7px 10px;
+}
+button {
+  cursor: pointer;
+  font-family: var(--display); font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; font-size: 11px;
+  background: #15202b;
+  transition: background .15s;
+}
+button:hover { background: #1d2c3a; }
+button:active { transform: translateY(1px); }
+.row { display: flex; align-items: center; flex-wrap: wrap; }

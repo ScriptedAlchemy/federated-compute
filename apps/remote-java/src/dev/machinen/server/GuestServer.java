@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +48,7 @@ public final class GuestServer {
   private void route(HttpExchange ex) throws IOException {
     switch (ex.getRequestURI().getPath()) {
       case "/mf-manifest.json" -> handleManifest(ex);
+      case "/mf-types.ts" -> handleTypes(ex);
       case "/mf/health" -> handleHealth(ex);
       case "/mf/call" -> handleCall(ex);
       case "/mf/state" -> handleState(ex);
@@ -72,6 +75,26 @@ public final class GuestServer {
         "features", List.of("state")));
     manifest.put("exposes", exposes.manifestExposes());
     send(ex, 200, Json.write(manifest));
+  }
+
+  /**
+   * Serves the static {@code mf-types.ts} artifact published by this
+   * machine's build (see build.mjs), found via the MACHINEN_TYPES_FILE env
+   * var (default: {@code mf-types.ts} in the working directory). 404 when
+   * the artifact was not published — consumers fall back to the manifest.
+   */
+  private void handleTypes(HttpExchange ex) throws IOException {
+    if (unauthorized(ex)) return;
+    if (!ex.getRequestMethod().equals("GET")) {
+      send(ex, 404, "{}");
+      return;
+    }
+    Path typesFile = Path.of(System.getenv().getOrDefault("MACHINEN_TYPES_FILE", "mf-types.ts"));
+    if (!Files.isRegularFile(typesFile)) {
+      send(ex, 404, "{}");
+      return;
+    }
+    send(ex, 200, "application/typescript", Files.readString(typesFile, StandardCharsets.UTF_8));
   }
 
   private void handleCall(HttpExchange ex) throws IOException {
@@ -145,8 +168,13 @@ public final class GuestServer {
   }
 
   private static void send(HttpExchange ex, int status, String json) throws IOException {
-    byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-    ex.getResponseHeaders().set("content-type", "application/json");
+    send(ex, status, "application/json", json);
+  }
+
+  private static void send(HttpExchange ex, int status, String contentType, String body)
+      throws IOException {
+    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    ex.getResponseHeaders().set("content-type", contentType);
     ex.sendResponseHeaders(status, bytes.length);
     try (OutputStream out = ex.getResponseBody()) {
       out.write(bytes);

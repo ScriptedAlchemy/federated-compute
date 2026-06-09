@@ -73,13 +73,21 @@ construction time.
 ## `GET /mf-types.ts` (optional, recommended)
 
 Type distribution, MF's `@mf-types` analog: the machine publishes its own
-ready-to-import TypeScript bindings next to its manifest. Consumers' bindgen
-(`machinen-bindgen`, `fetchBindingsSource`) downloads this artifact from the
-deployed machine's URL — never from its source tree. Machines that don't
-serve it (any language without TS codegen) are still fully supported: their
-manifest carries complete signatures and consumers render bindings from it.
-Generate the artifact in the machine's own build/CI if you want to publish it
-statically.
+ready-to-import TypeScript bindings next to its manifest. For non-TS guests
+this is a **static artifact**: the machine's own build/CI boots the guest,
+runs `machinen-bindgen` against it, and ships the output with the deploy —
+the guest then serves that file as-is. The Java reference guest serves the
+file named by `MACHINEN_TYPES_FILE` (default `mf-types.ts` in its working
+directory), and its `build.mjs` publishes `dist/mf-types.ts` this way; the
+Python guest serves `mf-types.ts` beside `main.py` when present (its CI
+would run `machinen-bindgen` to produce it — none is committed here, so it
+answers 404). The Node guest has the generator in-process and renders the
+artifact on the fly. Machines without the artifact answer 404 and stay fully
+supported: consumers' bindgen (`machinen-bindgen`, `fetchBindingsSource`)
+falls back to rendering bindings from the manifest, which carries complete
+signatures. Either way the artifact is downloaded from the deployed
+machine's URL — never read from its source tree. Auth matches the manifest:
+the bearer token is required when one is configured.
 
 ## `GET /mf/state` and `POST /mf/state` (optional capability)
 

@@ -108,4 +108,26 @@ describe('fetchBindingsSource (host-side, network only)', () => {
     expect(source).toContain('export interface JavaMachineStrings {');
     expect(source).toContain("machineModule<JavaMachineStrings>('java_machine', './strings'");
   });
+
+  test('rejects manifest fallbacks that speak a different protocol version', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/mf-manifest.json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ...manifest, protocol: 2 }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    rawServers.push(server);
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () =>
+        resolve((server.address() as { port: number }).port),
+      ),
+    );
+
+    await expect(fetchBindingsSource(`http://127.0.0.1:${port}`)).rejects.toThrow(
+      /guest protocol 2, expected 3/,
+    );
+  });
 });

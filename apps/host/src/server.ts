@@ -1,5 +1,6 @@
 // Interactive demo backend: every handler is plain binding usage; machines
 // attach lazily on first call.
+import { once } from 'node:events';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -33,11 +34,38 @@ interface ActivityEvent {
 const machineStatus = new Map<string, MachineStatus>(
   MACHINES.map((name) => [name, { attached: false }]),
 );
-const events: ActivityEvent[] = [];
+
+/** Fixed-capacity ring buffer: O(1) push, oldest entries overwritten. */
+class RingBuffer<T> {
+  private readonly buffer: T[];
+  private head = 0;
+  private size = 0;
+
+  constructor(private readonly capacity: number) {
+    this.buffer = new Array<T>(capacity);
+  }
+
+  push(item: T) {
+    this.buffer[this.head] = item;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.size < this.capacity) this.size++;
+  }
+
+  /** Last n items, newest-last. */
+  latest(n: number): T[] {
+    const count = Math.min(n, this.size);
+    const out: T[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      out[i] = this.buffer[(this.head - count + i + this.capacity) % this.capacity];
+    }
+    return out;
+  }
+}
+
+const events = new RingBuffer<ActivityEvent>(200);
 
 function logEvent(kind: ActivityEvent['kind'], detail: string) {
   events.push({ ts: Date.now(), kind, detail });
-  if (events.length > 200) events.splice(0, events.length - 200);
 }
 
 function errorMessage(error: unknown): string {
@@ -90,7 +118,7 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function handleStatus(res: http.ServerResponse) {
+function handleDashboard(_req: http.IncomingMessage, res: http.ServerResponse) {
   const metrics = getMachines().metrics();
   json(res, 200, {
     machines: MACHINES.map((name) => ({
@@ -98,6 +126,7 @@ async function handleStatus(res: http.ServerResponse) {
       ...machineStatus.get(name),
       metrics: metrics[name] ?? null,
     })),
+    events: events.latest(40),
   });
 }
 
@@ -154,19 +183,28 @@ async function handleCountdown(req: http.IncomingMessage, res: http.ServerRespon
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
-  let closed = false;
-  req.on('close', () => {
-    closed = true;
-  });
+  // Respect backpressure: wait for 'drain' when the kernel buffer is full,
+  // but stop waiting (and producing) as soon as the client disconnects.
+  const closed = new AbortController();
+  req.once('close', () => closed.abort());
+  const write = async (payload: string) => {
+    if (!res.write(payload)) {
+      await once(res, 'drain', { signal: closed.signal }).catch(() => {});
+    }
+  };
   try {
     for await (const tick of math.countdown(from)) {
-      if (closed) return;
-      res.write(`data: ${JSON.stringify({ tick })}\n\n`);
+      if (closed.signal.aborted) return;
+      await write(`data: ${JSON.stringify({ tick })}\n\n`);
+      if (closed.signal.aborted) return;
       await new Promise((r) => setTimeout(r, 250)); // pace it for the eye
     }
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    if (closed.signal.aborted) return;
+    await write(`data: ${JSON.stringify({ done: true })}\n\n`);
   } catch (error) {
-    res.write(`data: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
+    if (!closed.signal.aborted) {
+      await write(`data: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
+    }
   }
   res.end();
 }
@@ -251,46 +289,56 @@ async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerRe
 
 const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 
+// Pretty page routes -> files in PUBLIC_DIR; other assets (*.css) are served
+// by filename. The asset pattern admits no '/' so paths can't escape the dir.
+const PAGES: Record<string, string> = { '/': 'index.html', '/gravity': 'gravity.html' };
+const CSS_ASSET_RE = /^\/[A-Za-z0-9_-]+\.css$/;
+
+/** Serve a page or asset from PUBLIC_DIR; false when the path is not static. */
+async function serveStatic(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  if (req.method !== 'GET') return false;
+  const page = PAGES[url.pathname];
+  const file = page ?? (CSS_ASSET_RE.test(url.pathname) ? url.pathname.slice(1) : undefined);
+  if (!file) return false;
+  try {
+    const body = await readFile(path.join(PUBLIC_DIR, file));
+    res.writeHead(200, { 'content-type': page ? 'text/html' : 'text/css' });
+    res.end(body);
+  } catch {
+    json(res, 404, { error: 'not found' });
+  }
+  return true;
+}
+
+type RouteHandler = (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+) => Promise<void> | void;
+
+const routes = new Map<string, RouteHandler>([
+  ['GET /api/dashboard', handleDashboard],
+  ['POST /api/pipeline', handlePipeline],
+  ['POST /api/compute', handleCompute],
+  ['GET /api/countdown', handleCountdown],
+  ['POST /api/counter', handleCounter],
+  ['POST /api/report/remote', handleReportRemote],
+  ['POST /api/report/colocated', handleReportColocated],
+  ['GET /api/region/latency', handleRegionLatency],
+  ['POST /api/region/latency', handleRegionLatency],
+]);
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
   try {
-    if (req.method === 'GET' && url.pathname === '/') {
-      res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(await readFile(path.join(PUBLIC_DIR, 'index.html')));
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/gravity') {
-      res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(await readFile(path.join(PUBLIC_DIR, 'gravity.html')));
-      return;
-    }
-    if (req.method === 'POST' && url.pathname === '/api/report/remote') {
-      return await handleReportRemote(req, res);
-    }
-    if (req.method === 'POST' && url.pathname === '/api/report/colocated') {
-      return await handleReportColocated(req, res);
-    }
-    if (url.pathname === '/api/region/latency') {
-      return await handleRegionLatency(req, res);
-    }
-    if (req.method === 'GET' && url.pathname === '/api/status') return await handleStatus(res);
-    if (req.method === 'GET' && url.pathname === '/api/events') {
-      return json(res, 200, { events: events.slice(-40) });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/pipeline') {
-      return await handlePipeline(req, res);
-    }
-    if (req.method === 'POST' && url.pathname === '/api/compute') {
-      return await handleCompute(req, res);
-    }
-    if (req.method === 'GET' && url.pathname === '/api/countdown') {
-      return await handleCountdown(req, res, url);
-    }
-    if (req.method === 'POST' && url.pathname === '/api/counter') {
-      return await handleCounter(req, res);
-    }
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not found' }));
+    const handler = routes.get(`${req.method} ${url.pathname}`);
+    if (handler) return await handler(req, res, url);
+    if (await serveStatic(req, res, url)) return;
+    json(res, 404, { error: 'not found' });
   } catch (error) {
     json(res, 500, { error: errorMessage(error) });
   }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from .protocol import NAME
@@ -12,6 +13,12 @@ from .registry import Registry
 from .state import CounterState
 
 MAX_BODY_BYTES = 5 * 1024 * 1024
+
+# Static /mf-types.ts artifact published beside main.py. Not generated
+# in-repo: the machine's CI would run machinen-bindgen against the booted
+# guest and ship the output with the deploy. Absent file -> 404, and
+# consumers render bindings from the manifest instead.
+TYPES_FILE = Path(__file__).resolve().parent.parent / "mf-types.ts"
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,16 @@ def _make_handler(
                 return
             if self.path == "/mf-manifest.json":
                 self._send(registry.manifest())
+            elif self.path == "/mf-types.ts":
+                if not TYPES_FILE.is_file():
+                    self._not_found()
+                    return
+                body = TYPES_FILE.read_bytes()
+                self.send_response(200)
+                self.send_header("content-type", "application/typescript")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif self.path == "/mf/state":
                 self._send({"ok": True, "state": state.dehydrate()})
             else:

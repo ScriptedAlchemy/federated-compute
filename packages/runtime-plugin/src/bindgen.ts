@@ -85,5 +85,11 @@ export async function fetchBindingsSource(
   if (!res.ok) {
     throw new Error(`bindgen: manifest request failed with ${res.status} for ${machineUrl}`);
   }
-  return generateBindings((await res.json()) as MachineExposeManifest);
+  const manifest = (await res.json()) as MachineExposeManifest;
+  if (manifest.protocol !== 3) {
+    throw new Error(
+      `bindgen: machine at ${machineUrl} speaks guest protocol ${String(manifest.protocol)}, expected 3`,
+    );
+  }
+  return generateBindings(manifest);
 }

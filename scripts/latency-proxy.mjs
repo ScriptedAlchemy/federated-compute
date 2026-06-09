@@ -2,6 +2,7 @@
 // request passing through it. The consumer's "cross-region" entry points at
 // this proxy; co-located services talk to the target directly.
 import http from 'node:http';
+import { PORTS, WAN_PORTS } from './machines.mjs';
 
 export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
   let latency = latencyMs;
@@ -24,7 +25,9 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
       return;
     }
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      // Client gave up during the simulated latency window: skip the upstream.
+      if (req.destroyed || res.destroyed || req.socket?.destroyed) return;
       const upstream = http.request(
         { host: '127.0.0.1', port: targetPort, path: req.url, method: req.method, headers: req.headers },
         (upstreamRes) => {
@@ -33,11 +36,17 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
         },
       );
       upstream.on('error', () => {
+        if (res.headersSent || res.destroyed) return;
         res.writeHead(502, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'region link down' }));
       });
       req.pipe(upstream);
     }, latency);
+    // Aborted/closed before forwarding: drop the pending forward entirely.
+    res.on('close', () => {
+      if (!res.writableEnded) clearTimeout(timer);
+    });
+    req.on('error', () => clearTimeout(timer));
   });
 
   return new Promise((resolve) => {
@@ -49,4 +58,22 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
       });
     });
   });
+}
+
+/**
+ * Start one latency proxy per WAN_PORTS entry — every simulated region link
+ * into the data region. Returns the proxy handles plus the REGION_LINKS
+ * string the host consumes.
+ */
+export async function startWanLinks({ latencyMs = 75 } = {}) {
+  const links = await Promise.all(
+    Object.entries(WAN_PORTS).map(([name, port]) =>
+      startLatencyProxy({ port, targetPort: PORTS[name], latencyMs }),
+    ),
+  );
+  return {
+    links,
+    regionLinks: links.map(({ port }) => `http://127.0.0.1:${port}`).join(','),
+    close: () => Promise.all(links.map((link) => link.close())),
+  };
 }

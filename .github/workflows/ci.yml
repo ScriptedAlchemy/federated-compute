@@ -39,3 +39,6 @@ jobs:
 
       - name: Data gravity demo (move the code to the data)
         run: node scripts/demo-gravity.mjs
+
+      - name: Web demo smoke
+        run: node scripts/demo-web.mjs --smoke

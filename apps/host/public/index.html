@@ -6,41 +6,18 @@
 <title>federated-compute — machine control</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
 <style>
   :root {
-    --bg: #07090d;
-    --panel: #0d1117;
-    --panel-edge: #1b232e;
-    --ink: #c9d4e0;
-    --ink-dim: #5a6878;
     --node: #3fb950;
     --java: #f0883e;
     --python: #58a6ff;
     --hot: #e5534b;
-    --display: 'Chakra Petch', sans-serif;
-    --mono: 'IBM Plex Mono', monospace;
   }
-  * { box-sizing: border-box; margin: 0; }
   body {
-    background: var(--bg);
-    color: var(--ink);
-    font-family: var(--mono);
-    font-size: 13px;
-    line-height: 1.5;
-    min-height: 100vh;
     background-image:
       radial-gradient(ellipse 80% 50% at 50% -10%, rgba(63,185,80,.07), transparent),
       repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.012) 2px 4px);
-  }
-  header {
-    display: flex; align-items: baseline; gap: 16px;
-    padding: 28px 32px 18px;
-    border-bottom: 1px solid var(--panel-edge);
-  }
-  header h1 {
-    font-family: var(--display);
-    font-size: 22px; font-weight: 700; letter-spacing: .04em;
-    text-transform: uppercase;
   }
   header h1 .accent { color: var(--node); }
   header .sub { color: var(--ink-dim); font-size: 12px; }
@@ -51,19 +28,7 @@
     padding: 20px 32px 40px;
     max-width: 1400px;
   }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--panel-edge);
-    border-radius: 6px;
-    padding: 16px 18px;
-  }
-  .panel h2 {
-    font-family: var(--display);
-    font-size: 12px; font-weight: 600;
-    letter-spacing: .14em; text-transform: uppercase;
-    color: var(--ink-dim);
-    margin-bottom: 12px;
-  }
+  .panel { padding: 16px 18px; }
   .wide { grid-column: span 3; }
   .two { grid-column: span 2; }
 
@@ -97,24 +62,9 @@
   .machine dd { text-align: right; }
 
   /* forms */
-  input, textarea, button, select {
-    font-family: var(--mono); font-size: 13px;
-    background: #0a0f15; color: var(--ink);
-    border: 1px solid var(--panel-edge); border-radius: 4px;
-    padding: 7px 10px;
-  }
   textarea { width: 100%; resize: vertical; min-height: 64px; }
   input:focus, textarea:focus { outline: 1px solid var(--node); }
-  button {
-    cursor: pointer;
-    font-family: var(--display); font-weight: 600;
-    letter-spacing: .08em; text-transform: uppercase; font-size: 11px;
-    background: #15202b;
-    transition: background .15s;
-  }
-  button:hover { background: #1d2c3a; }
-  button:active { transform: translateY(1px); }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .row { gap: 8px; margin-top: 8px; }
   .num { width: 72px; }
 
   /* results */
@@ -287,8 +237,8 @@ const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-typ
 const ACCENT = { compute_machine: 'node', java_machine: 'java', python_machine: 'python' };
 const LABEL = { compute_machine: 'node', java_machine: 'jvm', python_machine: 'cpython' };
 
-async function refreshStatus() {
-  const { machines } = await fetch('/api/status').then(r => r.json());
+async function refreshDashboard() {
+  const { machines, events } = await fetch('/api/dashboard').then(r => r.json());
   $('machines').innerHTML = machines.map(m => `
     <div class="machine ${m.attached ? 'warm' : ''}" data-accent="${ACCENT[m.name]}" style="color: var(--${ACCENT[m.name]})">
       <div class="name">${m.name}</div>
@@ -300,10 +250,6 @@ async function refreshStatus() {
         <dt>p50 / p95</dt><dd>${m.metrics ? m.metrics.p50Ms.toFixed(1) + ' / ' + m.metrics.p95Ms.toFixed(1) + ' ms' : '—'}</dd>
       </dl>
     </div>`).join('');
-}
-
-async function refreshLog() {
-  const { events } = await fetch('/api/events').then(r => r.json());
   $('log').innerHTML = events.slice().reverse().map(e => {
     const t = new Date(e.ts).toLocaleTimeString('en-GB');
     return `<div class="line"><span class="t">${t}</span><span class="${e.kind}">${e.detail}</span></div>`;
@@ -322,7 +268,7 @@ $('pipeline-run').onclick = async () => {
     `<span class="python">cpython</span> wordlen  mean ${r.python.meanWordLength.toFixed(2)} · median ${r.python.medianWordLength}\n` +
     `<span class="node">node</span>    shout    ${r.node.shouted}  <span class="ms">${r.node.ms.toFixed(1)}ms</span>\n` +
     `<span class="node">node</span>    reverse  ${r.node.reversed}`;
-  refreshStatus();
+  refreshDashboard();
 };
 
 $('add-run').onclick = async () => {
@@ -357,9 +303,8 @@ $('cd-run').onclick = () => {
   es.onerror = () => es.close();
 };
 
-refreshStatus(); refreshLog();
-setInterval(refreshStatus, 1500);
-setInterval(refreshLog, 1500);
+refreshDashboard();
+setInterval(refreshDashboard, 1500);
 </script>
 </body>
 </html>

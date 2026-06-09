@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import http from 'node:http';
 import { generateBindings } from './bindgen.js';
 import { GuestError } from './errors.js';
@@ -258,13 +259,25 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         const signature = guest.signature(modulePath, fn);
         if (signature?.stream) {
           res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+          // Respect socket backpressure (wait for 'drain' when the buffer is
+          // full) and stop producing as soon as the connection goes away.
+          const closed = new AbortController();
+          res.once('close', () => closed.abort());
+          const write = async (line: string) => {
+            if (!res.write(line)) {
+              await once(res, 'drain', { signal: closed.signal }).catch(() => {});
+            }
+          };
           try {
             for await (const chunk of guest.dispatchStream(modulePath, fn, args ?? [])) {
-              res.write(`${JSON.stringify({ chunk })}\n`);
+              if (closed.signal.aborted) break;
+              await write(`${JSON.stringify({ chunk })}\n`);
             }
-            res.write(`${JSON.stringify({ done: true })}\n`);
+            if (!closed.signal.aborted) await write(`${JSON.stringify({ done: true })}\n`);
           } catch (error) {
-            res.write(`${JSON.stringify({ error: errorBody(error).error })}\n`);
+            if (!closed.signal.aborted) {
+              await write(`${JSON.stringify({ error: errorBody(error).error })}\n`);
+            }
           }
           res.end();
           return;

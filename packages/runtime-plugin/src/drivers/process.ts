@@ -71,13 +71,20 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
     const handle = httpMachineHandle(`http://127.0.0.1:${port}`, { token });
-    await waitForManifest(handle, child, spec.entry);
+    // HTTP handles always carry these; check once so later uses need no `!`.
+    const { health, getState, setState } = handle;
+    if (!health || !getState || !setState) {
+      throw new Error(
+        '[machinen-plugin] processDriver needs a handle with health and state support',
+      );
+    }
+    await waitForManifest(health, child, spec.entry);
     if (restoreState !== undefined) {
-      await handle.setState!(restoreState);
+      await setState(restoreState);
     }
 
     const snapshot = async () => {
-      const state = await handle.getState!();
+      const state = await getState();
       await mkdir(snapshotDir, { recursive: true });
       const bundle: SnapshotBundle = {
         name: spec.remoteName,
@@ -127,7 +134,7 @@ export function getFreePort(): Promise<number> {
 }
 
 async function waitForManifest(
-  handle: MachineHandle,
+  health: NonNullable<MachineHandle['health']>,
   child: ChildProcess,
   entry: string,
 ): Promise<void> {
@@ -138,7 +145,7 @@ async function waitForManifest(
       throw new Error(`[machinen-plugin] guest process for "${entry}" exited early`);
     }
     try {
-      if (await handle.health!()) return;
+      if (await health()) return;
       throw new Error('health probe not ready');
     } catch (error) {
       lastError = error;

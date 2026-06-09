@@ -13,16 +13,23 @@ function runtimeAvailable(cmd: string): boolean {
   return spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status !== null;
 }
 
-/** The Java machine's image is its build artifact; build it via the machine's own build script. */
+/**
+ * The Java machine's image is its build artifact; build it via the machine's
+ * own build script, which also publishes the static dist/mf-types.ts artifact
+ * (building the plugin's bindgen CLI first when its dist is missing).
+ */
 function ensureJavaJar(): string {
   const jar = path.join(APPS, 'remote-java/dist/java-machine.jar');
-  if (!existsSync(jar)) {
+  const types = path.join(APPS, 'remote-java/dist/mf-types.ts');
+  if (!existsSync(jar) || !existsSync(types)) {
     const result = spawnSync('node', ['build.mjs'], {
       cwd: path.join(APPS, 'remote-java'),
       stdio: 'inherit',
     });
     if (result.status !== 0) throw new Error('remote-java build failed');
   }
+  // The booted guest inherits this env and serves the artifact from it.
+  process.env.MACHINEN_TYPES_FILE = types;
   return jar;
 }
 
@@ -31,6 +38,8 @@ interface GuestTarget {
   image: () => string;
   expectName: string;
   sampleCall: { module: string; fn: string; args: unknown[]; expect: unknown };
+  /** /mf-types.ts is a static artifact: published by the build, or 404. */
+  types: { status: 200; contains: string } | { status: 404 };
   available: boolean;
 }
 
@@ -40,6 +49,8 @@ const targets: GuestTarget[] = [
     image: ensureJavaJar,
     expectName: 'java_machine',
     sampleCall: { module: './strings', fn: 'upper', args: ['ok'], expect: 'OK' },
+    // Its build publishes dist/mf-types.ts (see ensureJavaJar).
+    types: { status: 200, contains: 'JavaMachine' },
     available: runtimeAvailable('java'),
   },
   {
@@ -47,6 +58,9 @@ const targets: GuestTarget[] = [
     image: () => path.join(APPS, 'remote-python/main.py'),
     expectName: 'python_machine',
     sampleCall: { module: './data', fn: 'sortNumbers', args: [[3, 1, 2]], expect: [1, 2, 3] },
+    // No static artifact is committed — the endpoint is optional, and 404
+    // means consumers render bindings from the manifest instead.
+    types: { status: 404 },
     available: runtimeAvailable('python3'),
   },
 ];
@@ -113,10 +127,23 @@ for (const target of targets) {
       expect(typeof error.remoteType).toBe('string');
     });
 
+    test('/mf-types.ts follows the static-artifact pattern', { timeout: 30_000 }, async () => {
+      const { port } = await bootOnce(target);
+      const res = await fetch(`http://127.0.0.1:${port}/mf-types.ts`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(target.types.status);
+      if (target.types.status === 200) {
+        expect(await res.text()).toContain(target.types.contains);
+      }
+    });
+
     test('requests without the bearer token are rejected with 401', { timeout: 30_000 }, async () => {
       const { port } = await bootOnce(target);
-      const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`);
-      expect(res.status).toBe(401);
+      const manifest = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`);
+      expect(manifest.status).toBe(401);
+      const types = await fetch(`http://127.0.0.1:${port}/mf-types.ts`);
+      expect(types.status).toBe(401);
     });
 
     test('state capture round-trips (snapshot capability)', { timeout: 30_000 }, async () => {

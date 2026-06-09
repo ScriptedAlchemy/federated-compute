@@ -1,26 +1,21 @@
 // Data gravity, CLI edition: the same report cross-region (N+1 over the WAN)
 // vs co-located (one federated call to analytics_machine next to the db).
 import { createMachines } from '../packages/runtime-plugin/dist/client.js';
-import { startLatencyProxy } from './latency-proxy.mjs';
-import { startMachines } from './machines.mjs';
+import { startWanLinks } from './latency-proxy.mjs';
+import { startMachines, wanEntry } from './machines.mjs';
 
 const token = 'gravity-secret';
 const REGION_LATENCY = Number(process.env.REGION_LATENCY ?? 75);
 
 const { stop } = await startMachines({ token });
 // Both paths into the data region cross the WAN — the difference is HOW OFTEN.
-const wanDb = await startLatencyProxy({ port: 3899, targetPort: 3804, latencyMs: REGION_LATENCY });
-const wanAnalytics = await startLatencyProxy({
-  port: 3898,
-  targetPort: 3805,
-  latencyMs: REGION_LATENCY,
-});
+const wan = await startWanLinks({ latencyMs: REGION_LATENCY });
 
 const machines = createMachines({
   token,
   remotes: {
-    db_machine: 'machinen+http://127.0.0.1:3899',
-    analytics_machine: 'machinen+http://127.0.0.1:3898',
+    db_machine: wanEntry('db_machine'),
+    analytics_machine: wanEntry('analytics_machine'),
   },
 });
 const db = machines.machine('db_machine').db;
@@ -58,7 +53,6 @@ console.log(`top spender either way: ${report.spenders[0].name} ($${report.spend
 console.log(`\n→ ${(remoteMs / coloMs).toFixed(1)}x faster by moving the code to the data`);
 
 await machines.plugin.disposeMachines();
-await wanDb.close();
-await wanAnalytics.close();
+await wan.close();
 stop();
 process.exit(0);

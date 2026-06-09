@@ -85,6 +85,37 @@ describe('guest over HTTP', () => {
     expect(received).toEqual([3, 2, 1, 0]);
   });
 
+  test('long streams survive socket backpressure: every chunk arrives, in order', async () => {
+    const COUNT = 5000;
+    // ~1KB per chunk forces res.write() to return false long before the
+    // stream ends, exercising the 'drain' wait in the NDJSON loop.
+    const guest = createGuestRuntime({
+      name: 'flood_guest',
+      exposes: {
+        './flood': {
+          burst: {
+            handler: async function* (n: number) {
+              for (let i = 0; i < n; i++) yield `${i}:${'x'.repeat(1024)}`;
+            },
+            params: [{ name: 'n', type: 'number' }],
+            returns: 'string',
+            stream: true,
+          },
+        },
+      },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+
+    let next = 0;
+    for await (const chunk of handle.callStream!('./flood', 'burst', [COUNT])) {
+      expect((chunk as string).split(':')[0]).toBe(String(next));
+      next++;
+    }
+    expect(next).toBe(COUNT);
+  });
+
   test('rejects requests without the right bearer token', async () => {
     const server = await startGuest({ token: 'secret' });
 
