@@ -7,8 +7,14 @@ import java.util.Map;
 
 /** Minimal JSON reader/writer — enough for the guest call protocol. */
 public final class Json {
+
+  /** Maximum nesting before parsing fails — bounds recursion so a deeply
+   *  nested payload raises a catchable parse error, not StackOverflowError. */
+  static final int MAX_DEPTH = 256;
+
   private final String s;
   private int i;
+  private int depth;
 
   private Json(String s) {
     this.s = s;
@@ -26,25 +32,46 @@ public final class Json {
     while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
   }
 
+  /** Current char, or a parse error (never a raw index exception) past the end. */
+  private char cur() {
+    if (i >= s.length()) throw new IllegalArgumentException("unexpected end of JSON at " + i);
+    return s.charAt(i);
+  }
+
+  /** Like {@link #cur()}, but consumes the char. */
+  private char take() {
+    char c = cur();
+    i++;
+    return c;
+  }
+
   private Object value() {
     ws();
-    char c = s.charAt(i);
-    return switch (c) {
-      case '{' -> object();
-      case '[' -> array();
-      case '"' -> string();
-      case 't' -> literal("true", Boolean.TRUE);
-      case 'f' -> literal("false", Boolean.FALSE);
-      case 'n' -> literal("null", null);
-      default -> number();
-    };
+    char c = cur();
+    boolean nested = c == '{' || c == '[';
+    if (nested && ++depth > MAX_DEPTH) {
+      throw new IllegalArgumentException("JSON nested deeper than " + MAX_DEPTH + " levels");
+    }
+    try {
+      return switch (c) {
+        case '{' -> object();
+        case '[' -> array();
+        case '"' -> string();
+        case 't' -> literal("true", Boolean.TRUE);
+        case 'f' -> literal("false", Boolean.FALSE);
+        case 'n' -> literal("null", null);
+        default -> number();
+      };
+    } finally {
+      if (nested) depth--;
+    }
   }
 
   private Map<String, Object> object() {
     Map<String, Object> map = new LinkedHashMap<>();
     i++; // {
     ws();
-    if (s.charAt(i) == '}') {
+    if (cur() == '}') {
       i++;
       return map;
     }
@@ -55,7 +82,7 @@ public final class Json {
       expect(':');
       map.put(key, value());
       ws();
-      if (s.charAt(i) == ',') {
+      if (cur() == ',') {
         i++;
         continue;
       }
@@ -68,14 +95,14 @@ public final class Json {
     List<Object> list = new ArrayList<>();
     i++; // [
     ws();
-    if (s.charAt(i) == ']') {
+    if (cur() == ']') {
       i++;
       return list;
     }
     while (true) {
       list.add(value());
       ws();
-      if (s.charAt(i) == ',') {
+      if (cur() == ',') {
         i++;
         continue;
       }
@@ -88,10 +115,10 @@ public final class Json {
     expect('"');
     StringBuilder sb = new StringBuilder();
     while (true) {
-      char c = s.charAt(i++);
+      char c = take();
       if (c == '"') return sb.toString();
       if (c == '\\') {
-        char esc = s.charAt(i++);
+        char esc = take();
         switch (esc) {
           case '"' -> sb.append('"');
           case '\\' -> sb.append('\\');
@@ -102,6 +129,9 @@ public final class Json {
           case 'r' -> sb.append('\r');
           case 't' -> sb.append('\t');
           case 'u' -> {
+            if (i + 4 > s.length()) {
+              throw new IllegalArgumentException("unexpected end of JSON in \\u escape at " + i);
+            }
             sb.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
             i += 4;
           }
@@ -117,6 +147,7 @@ public final class Json {
     int start = i;
     while (i < s.length() && "-+.eE0123456789".indexOf(s.charAt(i)) >= 0) i++;
     String raw = s.substring(start, i);
+    if (raw.isEmpty()) throw new IllegalArgumentException("unexpected character at " + start);
     if (raw.contains(".") || raw.contains("e") || raw.contains("E")) {
       return Double.parseDouble(raw);
     }
@@ -130,8 +161,9 @@ public final class Json {
   }
 
   private void expect(char c) {
-    if (s.charAt(i) != c) {
-      throw new IllegalArgumentException("expected '" + c + "' at " + i + ", got '" + s.charAt(i) + "'");
+    char got = cur();
+    if (got != c) {
+      throw new IllegalArgumentException("expected '" + c + "' at " + i + ", got '" + got + "'");
     }
     i++;
   }

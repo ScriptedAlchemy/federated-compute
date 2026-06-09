@@ -60,7 +60,11 @@ run("jar", [
 
 await publishTypesArtifact();
 
-console.log("[build] done");
+if (process.exitCode) {
+  console.error("[build] finished with errors — mf-types generation failed");
+} else {
+  console.log("[build] done");
+}
 
 /**
  * Generates dist/mf-types.ts, the static artifact GuestServer serves at

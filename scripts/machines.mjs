@@ -66,14 +66,22 @@ export const MACHINES = Object.entries(PORTS).map(([name, port]) => ({
   env: ENV[name],
 }));
 
-async function waitForManifest(port, token, name) {
+async function waitForManifest(port, token, name, child) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`machine ${name} exited (code ${child.exitCode}) before becoming ready`);
+    }
     try {
-      const health = await fetch(`http://127.0.0.1:${port}/mf/health`);
+      // Per-probe timeout: a stalled socket must not defeat the deadline
+      // (or the exit-code check above).
+      const health = await fetch(`http://127.0.0.1:${port}/mf/health`, {
+        signal: AbortSignal.timeout(2_000),
+      });
       if (health.ok) {
         const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`, {
           headers: token ? { authorization: `Bearer ${token}` } : {},
+          signal: AbortSignal.timeout(2_000),
         });
         if (res.ok) return await res.json();
       }
@@ -100,8 +108,15 @@ export async function startMachines({ token }) {
     });
     started.push({ ...machine, child });
   }
-  for (const machine of started) {
-    machine.manifest = await waitForManifest(machine.port, token, machine.name);
+  try {
+    for (const machine of started) {
+      machine.manifest = await waitForManifest(machine.port, token, machine.name, machine.child);
+    }
+  } catch (error) {
+    // Partial startup must not orphan children — they'd hold the demo ports
+    // and poison the next run.
+    for (const machine of started) machine.child.kill();
+    throw error;
   }
   return {
     machines: started,

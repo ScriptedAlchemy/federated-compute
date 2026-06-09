@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 
 class CounterState:
+    """Counter shared across ThreadingHTTPServer request threads — guarded."""
+
     def __init__(self) -> None:
         self.count = 0
+        self._lock = threading.Lock()
 
     def increment(self) -> int:
-        self.count += 1
-        return self.count
+        with self._lock:
+            self.count += 1
+            return self.count
 
     def current(self) -> int:
-        return self.count
+        with self._lock:
+            return self.count
 
     def dehydrate(self) -> dict[str, Any]:
-        return {"counter": self.count}
+        with self._lock:
+            return {"counter": self.count}
 
     def rehydrate(self, state: dict[str, Any]) -> None:
-        self.count = int(state.get("counter", 0))
+        with self._lock:
+            self.count = int(state.get("counter", 0))

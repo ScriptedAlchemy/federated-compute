@@ -11,6 +11,8 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import dev.machinen.runtime.Exposes;
 import dev.machinen.state.MachineState;
@@ -21,8 +23,10 @@ public final class GuestServer {
   static final String NAME = "java_machine";
   static final String VERSION = "1.0.0";
   static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
+  static final int DISPATCH_THREADS = 8;
 
   private final HttpServer server;
+  private final ExecutorService dispatcher;
   private final String token;
   private final Exposes exposes;
   private final MachineState state;
@@ -34,6 +38,10 @@ public final class GuestServer {
     this.state = state;
     this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
     this.server.createContext("/", this::route);
+    // A small pool instead of the default single dispatch thread, so one
+    // slow or hostile call can't block /mf/health for everyone else.
+    this.dispatcher = Executors.newFixedThreadPool(DISPATCH_THREADS);
+    this.server.setExecutor(dispatcher);
   }
 
   public void start() {
@@ -43,16 +51,27 @@ public final class GuestServer {
   /** Stops accepting connections and lets in-flight exchanges drain briefly. */
   public void stop() {
     server.stop(1);
+    dispatcher.shutdown();
   }
 
   private void route(HttpExchange ex) throws IOException {
-    switch (ex.getRequestURI().getPath()) {
-      case "/mf-manifest.json" -> handleManifest(ex);
-      case "/mf-types.ts" -> handleTypes(ex);
-      case "/mf/health" -> handleHealth(ex);
-      case "/mf/call" -> handleCall(ex);
-      case "/mf/state" -> handleState(ex);
-      default -> send(ex, 404, "{}");
+    try {
+      switch (ex.getRequestURI().getPath()) {
+        case "/mf-manifest.json" -> handleManifest(ex);
+        case "/mf-types.ts" -> handleTypes(ex);
+        case "/mf/health" -> handleHealth(ex);
+        case "/mf/call" -> handleCall(ex);
+        case "/mf/state" -> handleState(ex);
+        default -> send(ex, 404, "{}");
+      }
+    } catch (Throwable t) {
+      // Catch Throwable, not Exception: a hostile payload must never take
+      // down a dispatch thread (e.g. StackOverflowError is an Error).
+      try {
+        send(ex, 500, Json.write(Map.of("ok", false, "error", errorBody(t))));
+      } catch (IOException secondary) {
+        ex.close(); // response already started — drop the exchange
+      }
     }
   }
 
@@ -118,10 +137,7 @@ public final class GuestServer {
       Object result = exposes.call(module, fn, args);
       send(ex, 200, Json.write(Map.of("ok", true, "result", result)));
     } catch (Exception e) {
-      String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-      send(ex, 200, Json.write(Map.of(
-          "ok", false,
-          "error", Map.of("message", message, "type", e.getClass().getSimpleName()))));
+      send(ex, 200, Json.write(Map.of("ok", false, "error", errorBody(e))));
     }
   }
 
@@ -134,15 +150,33 @@ public final class GuestServer {
     if (ex.getRequestMethod().equals("POST")) {
       String body = readBody(ex);
       if (body == null) return; // 413 already sent
-      @SuppressWarnings("unchecked")
-      Map<String, Object> request = (Map<String, Object>) Json.parse(body);
-      @SuppressWarnings("unchecked")
-      Map<String, Object> snapshot = (Map<String, Object>) request.getOrDefault("state", Map.of());
-      state.rehydrate(snapshot);
-      send(ex, 200, Json.write(Map.of("ok", true)));
+      try {
+        Object parsed = Json.parse(body);
+        if (!(parsed instanceof Map)) {
+          throw new IllegalArgumentException("state body must be a JSON object");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> request = (Map<String, Object>) parsed;
+        Object stateValue = request.getOrDefault("state", Map.of());
+        if (!(stateValue instanceof Map)) {
+          throw new IllegalArgumentException("\"state\" must be a JSON object");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> snapshot = (Map<String, Object>) stateValue;
+        state.rehydrate(snapshot);
+        send(ex, 200, Json.write(Map.of("ok", true)));
+      } catch (Exception e) {
+        send(ex, 200, Json.write(Map.of("ok", false, "error", errorBody(e))));
+      }
       return;
     }
     send(ex, 404, "{}");
+  }
+
+  /** Structured error payload for the {ok:false} envelope. */
+  private static Map<String, Object> errorBody(Throwable t) {
+    String message = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+    return Map.of("message", message, "type", t.getClass().getSimpleName());
   }
 
   private boolean unauthorized(HttpExchange ex) throws IOException {

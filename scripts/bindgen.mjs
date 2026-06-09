@@ -25,7 +25,9 @@ try {
     });
     child.on('exit', resolve);
   });
-  if (code !== 0) process.exit(code ?? 1);
+  // Don't process.exit() here: it would skip the finally and orphan the
+  // machines. Set the exit code and fall through to stop().
+  if (code !== 0) process.exitCode = code ?? 1;
 } finally {
   stop();
 }

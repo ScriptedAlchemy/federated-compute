@@ -240,7 +240,9 @@ packages/runtime-plugin   @federated-compute/machinen-plugin (plugin, hooks, dri
 apps/remote               machine: Node guest (Rsbuild, node target)
 apps/remote-java          machine: Java 21 service (src/dev/machinen/* — server, runtime, modules, state; builds dist/java-machine.jar, zero deps)
 apps/remote-python        machine: Python 3 service (machinen_guest package — protocol, registry, server, modules; stdlib only)
-apps/host                 consumer: attaches to all machines by address only
+apps/machine-db           machine: in-memory database guest for the data gravity demo
+apps/machine-analytics    machine: analytics guest co-located with the db (itself a consumer of db_machine)
+apps/host                 consumer: attaches to all machines by address only; web server (src/server.ts) + dashboard pages (public/index.html, public/gravity.html)
 scripts/                  dev orchestrator (stands in for per-machine deployments)
 docs/guest-protocol.md    the wire protocol any guest language implements
 ```
@@ -259,7 +261,8 @@ pnpm bindgen        # pull typed bindings from the deployed machines
 ```
 
 Requires Node 22+, a JDK 21+ for the Java machine, and Python 3 for the
-Python machine. CI runs the full suite plus both demos.
+Python machine. CI runs the full suite plus all three demos and the web
+demo smoke checks.
 
 ## Status
 

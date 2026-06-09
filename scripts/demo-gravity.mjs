@@ -9,7 +9,14 @@ const REGION_LATENCY = Number(process.env.REGION_LATENCY ?? 75);
 
 const { stop } = await startMachines({ token });
 // Both paths into the data region cross the WAN — the difference is HOW OFTEN.
-const wan = await startWanLinks({ latencyMs: REGION_LATENCY });
+let wan;
+try {
+  wan = await startWanLinks({ latencyMs: REGION_LATENCY });
+} catch (error) {
+  console.error(`[demo-gravity] failed to start WAN links: ${error.message}`);
+  stop();
+  process.exit(1);
+}
 
 const machines = createMachines({
   token,

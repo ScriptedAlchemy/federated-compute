@@ -102,15 +102,31 @@ const counters = {
   python_machine: pyCounter,
 };
 
+/** Request-level failure with a definite HTTP status (vs a generic 500). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of req) {
     bytes += (chunk as Buffer).length;
-    if (bytes > 64 * 1024) throw new Error('request body too large');
+    if (bytes > 64 * 1024) throw new HttpError(413, 'request body too large');
     chunks.push(chunk as Buffer);
   }
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+  if (!chunks.length) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString());
+  } catch {
+    // Deliberately constant message: JSON.parse errors echo request content.
+    throw new HttpError(400, 'invalid JSON body');
+  }
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown) {
@@ -265,7 +281,7 @@ async function handleReportColocated(req: http.IncomingMessage, res: http.Server
 async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerResponse) {
   if (req.method === 'POST') {
     const { ms } = await readBody(req);
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       REGION_LINKS.map(async (link) => {
         const upstream = await fetch(`${link}/__latency`, {
           method: 'POST',
@@ -275,11 +291,21 @@ async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerRe
         if (!upstream.ok) throw new Error(`region link ${link} answered ${upstream.status}`);
         return upstream.json();
       }),
-    ).catch((error) => {
-      json(res, 502, { error: errorMessage(error) });
-      return undefined;
-    });
-    if (results) json(res, 200, results[0]);
+    );
+    const failed = results
+      .map((r, i) => (r.status === 'rejected' ? `${REGION_LINKS[i]}: ${errorMessage(r.reason)}` : null))
+      .filter((msg): msg is string => msg !== null);
+    if (failed.length) {
+      // Partial success means the two proxies may now disagree — say so.
+      const applied = results.length - failed.length;
+      return json(res, 502, {
+        error:
+          `failed to set latency on ${failed.length}/${results.length} region links` +
+          (applied > 0 ? ` (${applied} updated — links may now differ)` : '') +
+          `: ${failed.join('; ')}`,
+      });
+    }
+    json(res, 200, (results[0] as PromiseFulfilledResult<unknown>).value);
     return;
   }
   const upstream = await fetch(`${REGION_LINKS[0]}/__latency`);
@@ -340,6 +366,7 @@ const server = http.createServer(async (req, res) => {
     if (await serveStatic(req, res, url)) return;
     json(res, 404, { error: 'not found' });
   } catch (error) {
+    if (error instanceof HttpError) return json(res, error.status, { error: error.message });
     json(res, 500, { error: errorMessage(error) });
   }
 });

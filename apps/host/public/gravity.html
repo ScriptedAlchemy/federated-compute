@@ -231,7 +231,7 @@
     color: var(--ink-dim);
   }
   .plan-pro { color: var(--db); border-color: rgba(88, 166, 255, .4); }
-  .plan-enterprise { color: var(--local); border-color: rgba(63, 185, 80, .4); }
+  .plan-free { color: var(--ink-dim); border-color: var(--panel-edge); }
   .table-empty { color: var(--ink-faint); font-size: 11.5px; padding: 10px 0; }
 
   /* ---------- lesson ---------- */
@@ -376,7 +376,16 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+// Machines are untrusted third parties: escape every API-derived value
+// before it lands in innerHTML.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const post = async (url, body) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
+  return data;
+};
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let lastRemote = null, lastColo = null;
 
@@ -397,11 +406,19 @@ const slider = $('latency');
 slider.oninput = () => { $('lat-value').textContent = slider.value + 'ms'; };
 slider.onchange = async () => {
   const r = await post('/api/region/latency', { ms: Number(slider.value) });
+  if (r.error || typeof r.ms !== 'number') {
+    $('lat-value').textContent = 'error';
+    $('lat-value').title = r.error ?? 'unexpected response';
+    $('lat-label').textContent = 'link error';
+    return;
+  }
+  $('lat-value').title = '';
   $('lat-label').textContent = '+' + r.ms + 'ms';
 };
 fetch('/api/region/latency').then(r => r.json()).then(r => {
+  if (typeof r.ms !== 'number') return; // region links unavailable — keep defaults
   slider.value = r.ms; $('lat-value').textContent = r.ms + 'ms'; $('lat-label').textContent = '+' + r.ms + 'ms';
-});
+}).catch(() => {});
 
 const link = $('wan-link');
 function setFlow(kind) {
@@ -419,7 +436,7 @@ function renderDots(el, n, cap = 14) {
 
 function renderSpenders(spenders) {
   $('spenders').querySelector('tbody').innerHTML = spenders.map((s, i) =>
-    `<tr><td class="rank">${i + 1}</td><td>${s.name}</td><td><span class="plan plan-${s.plan}">${s.plan}</span></td><td class="amt">$${s.total.toFixed(2)}</td></tr>`).join('');
+    `<tr><td class="rank">${i + 1}</td><td>${esc(s.name)}</td><td><span class="plan plan-${esc(s.plan)}">${esc(s.plan)}</span></td><td class="amt">$${s.total.toFixed(2)}</td></tr>`).join('');
 }
 
 function renderCompare() {
@@ -445,6 +462,11 @@ $('run-remote').onclick = async () => {
   setFlow('flow-wan');
   try {
     const r = await post('/api/report/remote', { limit: 5 });
+    if (r.error) {
+      $('remote-ms').textContent = '—';
+      $('remote-detail').textContent = `error: ${r.error}`;
+      return;
+    }
     lastRemote = r.totalMs;
     $('remote-ms').textContent = '0';
     countUp($('remote-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
@@ -461,6 +483,11 @@ $('run-colo').onclick = async () => {
   setFlow('flow-local');
   try {
     const r = await post('/api/report/colocated', { limit: 5 });
+    if (r.error) {
+      $('colo-ms').textContent = '—';
+      $('colo-detail').textContent = `error: ${r.error}`;
+      return;
+    }
     lastColo = r.totalMs;
     $('colo-ms').textContent = '0';
     countUp($('colo-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');

@@ -252,6 +252,10 @@
     font-size: 13px; padding: 8px 13px; letter-spacing: .14em;
     text-shadow: 0 0 14px rgba(63, 185, 80, .5);
   }
+  .tick.fail {
+    color: var(--hot); border-color: rgba(229, 83, 75, .35);
+    font-size: 12px; padding: 8px 13px; text-shadow: none;
+  }
 
   /* ---------- log ---------- */
   #log {
@@ -383,7 +387,16 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+// Machines are untrusted third parties: escape every API-derived value
+// before it lands in innerHTML.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const post = async (url, body) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
+  return data;
+};
 const ACCENT = { compute_machine: 'node', java_machine: 'java', python_machine: 'python' };
 const LABEL = { compute_machine: 'node', java_machine: 'jvm', python_machine: 'cpython' };
 const SHAPE = { compute_machine: 'hex', java_machine: 'diamond', python_machine: 'circle' };
@@ -417,7 +430,7 @@ function buildCard(name, idx) {
     <div class="mc-head">
       <span class="glyph" data-shape="${SHAPE[name]}" aria-hidden="true">${MONOGRAM[name]}</span>
       <div>
-        <div class="name">${name}</div>
+        <div class="name">${esc(name)}</div>
         <div class="state"><span class="led"></span><span data-f="state">cold · not loaded</span></div>
       </div>
     </div>
@@ -469,17 +482,20 @@ function updateCard(m, idx) {
   renderSpark(card);
 }
 
+let dashSeq = 0;
 async function refreshDashboard() {
+  const seq = ++dashSeq;
   let payload;
   try {
     payload = await fetch('/api/dashboard').then((r) => r.json());
   } catch {
     return; // host restarting — keep polling
   }
+  if (seq !== dashSeq) return; // a newer refresh is in flight — drop this stale response
   payload.machines.forEach(updateCard);
   $('log').innerHTML = payload.events.slice().reverse().map((e) => {
     const t = new Date(e.ts).toLocaleTimeString('en-GB');
-    return `<div class="line" data-k="${e.kind}"><span class="t">${t}</span><span class="kb">${e.kind}</span><span class="msg">${e.detail}</span></div>`;
+    return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
   }).join('');
 }
 
@@ -487,14 +503,14 @@ $('pipeline-run').onclick = async () => {
   $('pipeline-ms').hidden = true;
   $('pipeline-result').innerHTML = '<span class="running">fanning out across three runtimes…</span>';
   const r = await post('/api/pipeline', { text: $('pipeline-input').value });
-  if (r.error) { $('pipeline-result').innerHTML = `<span class="err">error: ${r.error}</span>`; return; }
+  if (r.error) { $('pipeline-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
   $('pipeline-ms').hidden = false;
   $('pipeline-ms').textContent = `total ${r.totalMs.toFixed(1)}ms`;
   const words = Object.entries(r.python.wordCount).map(([w, c]) => `${w}\u00d7${c}`).join(' · ');
   const stage = (acc, name, ms, ops, d) => `
     <article class="stage" data-accent="${acc}" style="--d:${d}">
       <header><span class="sdot"></span><span class="sname">${name}</span><span class="chip">${ms.toFixed(1)}ms</span></header>
-      ${ops.map(([k, v]) => `<div class="op"><span class="opk">${k}</span><span class="opv">${v}</span></div>`).join('')}
+      ${ops.map(([k, v]) => `<div class="op"><span class="opk">${k}</span><span class="opv">${esc(v)}</span></div>`).join('')}
     </article>`;
   $('pipeline-result').innerHTML = `<div class="stages">
     ${stage('java', 'jvm', r.java.ms, [['sha256', r.java.sha256.slice(0, 24) + '…'], ['upper', r.java.upper]], 0)}
@@ -506,31 +522,49 @@ $('pipeline-run').onclick = async () => {
 
 $('add-run').onclick = async () => {
   const r = await post('/api/compute', { op: 'add', a: $('add-a').value, b: $('add-b').value });
+  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
   $('compute-result').textContent = `add → ${r.result}`;
 };
 $('fib-run').onclick = async () => {
   $('compute-result').innerHTML = '<span class="running">fib…</span>';
   const r = await post('/api/compute', { op: 'fib', n: $('fib-n').value });
+  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
   $('compute-result').textContent = `fib(${r.n}) → ${r.result}`;
 };
 
 const counterPrev = {};
 document.querySelectorAll('[data-counter]').forEach((btn) => {
   btn.onclick = async () => {
-    const machine = btn.dataset.counter;
-    const r = await post('/api/counter', { machine });
-    const el = $('c-' + machine);
-    countUp(el, counterPrev[machine] ?? r.value, r.value);
-    counterPrev[machine] = r.value;
+    btn.disabled = true;
+    try {
+      const machine = btn.dataset.counter;
+      const r = await post('/api/counter', { machine });
+      const el = $('c-' + machine);
+      if (r.error) { el.textContent = '!'; el.title = r.error; return; }
+      el.title = '';
+      countUp(el, counterPrev[machine] ?? r.value, r.value);
+      counterPrev[machine] = r.value;
+    } finally {
+      btn.disabled = false;
+    }
   };
 });
 
+let es = null;
 $('cd-run').onclick = () => {
+  es?.close();
   $('ticks').innerHTML = '';
-  const es = new EventSource('/api/countdown?from=' + encodeURIComponent($('cd-from').value));
+  es = new EventSource('/api/countdown?from=' + encodeURIComponent($('cd-from').value));
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.error) { es.close(); return; }
+    if (msg.error) {
+      const el = document.createElement('span');
+      el.className = 'tick fail';
+      el.textContent = `stream error: ${msg.error}`;
+      $('ticks').appendChild(el);
+      es.close();
+      return;
+    }
     const el = document.createElement('span');
     el.className = msg.done ? 'tick done' : 'tick';
     el.textContent = msg.done ? 'stream complete' : msg.tick;

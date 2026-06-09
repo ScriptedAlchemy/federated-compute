@@ -13,7 +13,14 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
         const chunks = [];
         req.on('data', (c) => chunks.push(c));
         req.on('end', () => {
-          const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+          let body;
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid JSON body' }));
+            return;
+          }
           latency = Math.max(0, Math.min(Number(body.ms) || 0, 1000));
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ms: latency }));
@@ -49,7 +56,10 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
     req.on('error', () => clearTimeout(timer));
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // Without this, a failed listen (e.g. EADDRINUSE) throws as an uncaught
+    // 'error' event and crashes the demo with machines left orphaned.
+    server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {
       console.log(`[wan] simulated region link on :${port} -> :${targetPort} (+${latency}ms/request)`);
       resolve({

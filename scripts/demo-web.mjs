@@ -17,7 +17,14 @@ const smoke = process.argv.includes('--smoke');
 const { stop } = await startMachines({ token });
 // Simulated WAN links into the data region: BOTH paths cross it — querying
 // the db directly, and calling the co-located analytics machine.
-const wan = await startWanLinks({ latencyMs: 75 });
+let wan;
+try {
+  wan = await startWanLinks({ latencyMs: 75 });
+} catch (error) {
+  console.error(`[demo-web] failed to start WAN links: ${error.message}`);
+  stop();
+  process.exit(1);
+}
 
 const host = spawn('node', [path.join(ROOT, 'apps/host/dist/server.js')], {
   env: {
