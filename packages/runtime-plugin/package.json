@@ -1,0 +1,30 @@
+{
+  "name": "@federated-compute/machinen-plugin",
+  "version": "0.0.1",
+  "description": "Module Federation runtime plugin that binds remote modules to Machinen-style machines via function proxies.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./guest": {
+      "types": "./dist/guest.d.ts",
+      "default": "./dist/guest.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@module-federation/runtime": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

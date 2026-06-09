@@ -1,0 +1,94 @@
+import { afterAll, describe, expect, test } from 'vitest';
+import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
+import { httpMachineHandle } from '../src/drivers/http.js';
+import { GuestError } from '../src/errors.js';
+
+const servers: GuestServer[] = [];
+afterAll(async () => {
+  await Promise.all(servers.map((s) => s.close()));
+});
+
+async function startGuest(opts: { token?: string } = {}) {
+  const guest = createGuestRuntime({
+    name: 'http_guest',
+    exposes: {
+      './math': {
+        add: {
+          handler: (a: number, b: number) => a + b,
+          params: [
+            { name: 'a', type: 'number' },
+            { name: 'b', type: 'number' },
+          ],
+          returns: 'number',
+        },
+        boom: () => {
+          throw new TypeError('guest exploded');
+        },
+        countdown: {
+          handler: async function* (from: number) {
+            for (let i = from; i >= 0; i--) yield i;
+          },
+          params: [{ name: 'from', type: 'number' }],
+          returns: 'number',
+          stream: true,
+        },
+      },
+    },
+  });
+  const server = await serveGuest(guest, { port: 0, token: opts.token });
+  servers.push(server);
+  return server;
+}
+
+describe('guest over HTTP', () => {
+  test('manifest is protocol v2 with signatures', async () => {
+    const server = await startGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    const manifest = await handle.manifest();
+
+    expect(manifest.protocol).toBe(2);
+    expect(manifest.exposes['./math'].add).toEqual({
+      params: [
+        { name: 'a', type: 'number' },
+        { name: 'b', type: 'number' },
+      ],
+      returns: 'number',
+    });
+    // Plain functions get default signatures.
+    expect(manifest.exposes['./math'].boom.returns).toBe('unknown');
+    expect(manifest.exposes['./math'].countdown.stream).toBe(true);
+  });
+
+  test('calls round-trip and guest errors keep their type', async () => {
+    const server = await startGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+
+    await expect(handle.call('./math', 'add', [2, 3])).resolves.toBe(5);
+
+    const error = await handle.call('./math', 'boom', []).catch((e) => e);
+    expect(error).toBeInstanceOf(GuestError);
+    expect(error.message).toBe('guest exploded');
+    expect(error.remoteType).toBe('TypeError');
+  });
+
+  test('streams results as an async iterable', async () => {
+    const server = await startGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+
+    const received: number[] = [];
+    for await (const chunk of handle.callStream!('./math', 'countdown', [3])) {
+      received.push(chunk as number);
+    }
+    expect(received).toEqual([3, 2, 1, 0]);
+  });
+
+  test('rejects requests without the right bearer token', async () => {
+    const server = await startGuest({ token: 'secret' });
+
+    const unauthorized = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    await expect(unauthorized.manifest()).rejects.toThrow(/401/);
+
+    const authorized = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'secret' });
+    await expect(authorized.call('./math', 'add', [1, 1])).resolves.toBe(2);
+  });
+});

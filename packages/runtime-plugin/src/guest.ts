@@ -1,0 +1,192 @@
+import http from 'node:http';
+import { GuestError } from './errors.js';
+import type { FunctionSignature, MachineExposeManifest } from './types.js';
+
+type AnyFn = (...args: never[]) => unknown;
+
+/** An exposed function: bare, or annotated with its signature. */
+export type ExposedFunction =
+  | AnyFn
+  | ({ handler: AnyFn } & Partial<FunctionSignature>);
+
+/** Functions a machine guest exposes, keyed by MF-style expose path. */
+export interface GuestConfig {
+  name: string;
+  exposes: Record<string, Record<string, ExposedFunction>>;
+}
+
+export interface GuestRuntime {
+  manifest(): MachineExposeManifest;
+  dispatch(modulePath: string, fn: string, args: unknown[]): Promise<unknown>;
+  dispatchStream(modulePath: string, fn: string, args: unknown[]): AsyncIterable<unknown>;
+  signature(modulePath: string, fn: string): FunctionSignature | undefined;
+}
+
+interface NormalizedFn {
+  handler: (...args: unknown[]) => unknown;
+  signature: FunctionSignature;
+}
+
+function normalize(entry: ExposedFunction): NormalizedFn {
+  if (typeof entry === 'function') {
+    return {
+      handler: entry as (...args: unknown[]) => unknown,
+      signature: { params: [], returns: 'unknown' },
+    };
+  }
+  return {
+    handler: entry.handler as (...args: unknown[]) => unknown,
+    signature: {
+      params: entry.params ?? [],
+      returns: entry.returns ?? 'unknown',
+      ...(entry.stream ? { stream: true } : {}),
+    },
+  };
+}
+
+/**
+ * The piece that runs *inside* the machine: a registry of exposed functions
+ * with a typed manifest, mirroring Module Federation's `exposes` config.
+ */
+export function createGuestRuntime(config: GuestConfig): GuestRuntime {
+  const modules = new Map<string, Map<string, NormalizedFn>>();
+  for (const [path, fns] of Object.entries(config.exposes)) {
+    const mod = new Map<string, NormalizedFn>();
+    for (const [name, entry] of Object.entries(fns)) mod.set(name, normalize(entry));
+    modules.set(path, mod);
+  }
+
+  function lookup(modulePath: string, fn: string): NormalizedFn {
+    const mod = modules.get(modulePath);
+    if (!mod) throw new Error(`unknown module "${modulePath}"`);
+    const target = mod.get(fn);
+    if (!target) throw new Error(`module "${modulePath}" has no function "${fn}"`);
+    return target;
+  }
+
+  return {
+    manifest() {
+      const exposes: MachineExposeManifest['exposes'] = {};
+      for (const [path, mod] of modules) {
+        exposes[path] = Object.fromEntries(
+          [...mod].map(([name, { signature }]) => [name, signature]),
+        );
+      }
+      return { name: config.name, protocol: 2, exposes };
+    },
+    async dispatch(modulePath, fn, args) {
+      return await lookup(modulePath, fn).handler(...args);
+    },
+    dispatchStream(modulePath, fn, args) {
+      const target = lookup(modulePath, fn);
+      const result = target.handler(...args);
+      if (result == null || typeof (result as AsyncIterable<unknown>)[Symbol.asyncIterator] !== 'function') {
+        throw new Error(`function "${fn}" is declared stream but did not return an async iterable`);
+      }
+      return result as AsyncIterable<unknown>;
+    },
+    signature(modulePath, fn) {
+      return modules.get(modulePath)?.get(fn)?.signature;
+    },
+  };
+}
+
+export interface GuestServer {
+  port: number;
+  close(): Promise<void>;
+}
+
+export interface ServeGuestOptions {
+  /** Port to listen on; 0 picks a free port. */
+  port: number;
+  /** Loopback by default — machines should not be reachable off-host unless asked. */
+  hostname?: string;
+  /** When set, requests must carry `Authorization: Bearer <token>`. */
+  token?: string;
+}
+
+function errorBody(error: unknown) {
+  const err = error as Error;
+  return {
+    ok: false,
+    error: {
+      message: err?.message ?? String(error),
+      type: err?.name ?? 'Error',
+      ...(err?.stack ? { stack: err.stack } : {}),
+    },
+  };
+}
+
+/**
+ * Serve a guest runtime over HTTP (`GET /mf/manifest`, `POST /mf/call`).
+ * Streaming functions respond as NDJSON. In a real Machinen deployment this
+ * listens inside the VM on a port-forwarded port.
+ */
+export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
+  const hostname = opts.hostname ?? '127.0.0.1';
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized', type: 'AuthError' } }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/mf/manifest') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(guest.manifest()));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/mf/call') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        const { module: modulePath, fn, args } = JSON.parse(Buffer.concat(chunks).toString());
+
+        const signature = guest.signature(modulePath, fn);
+        if (signature?.stream) {
+          res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+          try {
+            for await (const chunk of guest.dispatchStream(modulePath, fn, args ?? [])) {
+              res.write(`${JSON.stringify({ chunk })}\n`);
+            }
+            res.write(`${JSON.stringify({ done: true })}\n`);
+          } catch (error) {
+            res.write(`${JSON.stringify({ error: errorBody(error).error })}\n`);
+          }
+          res.end();
+          return;
+        }
+
+        try {
+          const result = await guest.dispatch(modulePath, fn, args ?? []);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, result }));
+        } catch (error) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(errorBody(error)));
+        }
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(errorBody(error)));
+    }
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(opts.port, hostname, () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : opts.port;
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((res2, rej2) => server.close((err) => (err ? rej2(err) : res2()))),
+      });
+    });
+  });
+}
+
+export { GuestError };
