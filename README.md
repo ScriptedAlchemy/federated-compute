@@ -179,6 +179,60 @@ The consumer's code is import-shaped either way; only the federation entries
 (addresses) differ. With real Machinen, "moving the code" is a snapshot
 restored next to the data — the topology change needs no code change.
 
+## What is this for?
+
+Module Federation solved "many teams, one web app" by making deployed JS
+composable at runtime. Point the same machinery at *processes* instead of
+bundles and a lot of distributed-systems pain becomes a config change:
+
+**Erase the SDK industry.** Every cross-language service today ships client
+libraries: a Java SDK, a Python SDK, a Node SDK, docs for each, version
+matrices for all. Here, a service publishes one typed manifest and every
+consumer imports functions — `await strings.sha256(x)` — with types pulled
+from the machine itself. The contract isn't a wiki page; it's the manifest,
+enforced by a conformance suite any language can run. Internal platform
+teams stop writing clients and start publishing machines.
+
+**Respect data gravity.** The `/gravity` demo in miniature: don't drag
+gigabytes across regions to run a loop — restore the loop next to the data.
+Same trick solves data residency: an EU tenant's processing machine restores
+inside the EU; results cross the border, raw data never does. Air-gapped and
+compliance enclaves work the same way — code goes in, answers come out.
+
+**Kill the cold start.** A JVM that took 40 seconds to warm up, an ML model
+that took minutes to load weights into a GPU — snapshot them *warm*. Scale
+from zero by restoring, not booting. It's serverless where the function
+keeps its heap: caches hot, connections open, JIT already done.
+
+**Fork reality.** A machine mid-task can be forked: run an AI coding agent
+to a decision point, fork it five ways, race five approaches, keep the
+winner. Fork the production-state machine to rehearse a risky migration on
+real state, then throw the copy away. Spin per-PR preview environments from
+one warm staging snapshot instead of rebuilding the world per branch.
+
+**Ship the running process.** Machinen's founding pitch: your agent is
+mid-task and your battery is dying — freeze, move to the desktop, resume.
+The same move debugs production: snapshot the misbehaving machine and
+restore it on a laptop with a debugger attached, heap and all.
+"Works on my machine" becomes a deployment strategy.
+
+**Wrap the unwrappable.** That load-bearing Java 8 service nobody dares
+touch, the Fortran solver, the vendor binary: put a thin guest in front and
+it becomes typed imports with semver negotiation — a strangler-fig migration
+where consumers never feel the strangling. Vendors could ship a machine
+image instead of maintaining SDKs in six languages.
+
+**Operate it like MF.** Everything MF taught the frontend works here:
+dynamic remotes (machines join at runtime), version pinning
+(`?version=^2.0.0` rejects incompatible machines at attach), circuit
+breakers and crash-restart per machine, p50/p95 metrics from the hook
+system. Region failover is changing an address. A canary is registering a
+second machine and shifting traffic between entries.
+
+The demos in this repo are each one of these stories made small: the
+dashboard is the no-SDK story, `/gravity` is the data-gravity story, and
+`demo:snapshot` is the cold-start/fork story.
+
 ## Layout
 
 ```

@@ -174,6 +174,32 @@
     <h2>Report output (identical either way)</h2>
     <table id="spenders"><thead><tr><th>#</th><th>customer</th><th>plan</th><th style="text-align:right">total</th></tr></thead><tbody></tbody></table>
   </section>
+
+  <section class="panel">
+    <h2>The lesson</h2>
+    <p class="lede" style="margin-bottom: 10px">
+      <b>Latency is a property of topology, not of code.</b> Both scenarios run byte-identical
+      business logic — the same 1 + N queries, the same answer. The only difference is <b>where the
+      loop runs</b> relative to the data. Chatty code next to far data is the most common
+      distributed-systems performance bug there is (the N+1 problem, at region scale).
+    </p>
+    <p class="lede" style="margin-bottom: 10px">
+      <b>Federation makes topology a config change.</b> The consumer imports
+      <span style="color: var(--local)">analytics.topSpenders()</span> the same way it imports
+      <span style="color: var(--wan)">db.ordersFor()</span> — typed functions pulled from machine
+      manifests. Moving the computation from "here" to "next to the data" changed an
+      <b>address in an env var</b>, not a line of consumer code. The analytics machine itself is a
+      consumer too: it reaches db_machine through the very same bindings, just resolved to a
+      local address. Machines federating machines.
+    </p>
+    <p class="lede">
+      <b>With Machinen, "moving the code" is literal.</b> Today this demo deploys the analytics
+      service in the data region. With <a href="https://machinen.dev" style="color: var(--db)">Machinen</a>,
+      you'd snapshot the running analytics machine — heap, state, open connections — and restore it
+      next to the database (or fork it into every region you have). Boot once, run where the data
+      lives. The federation entry is the only thing that changes.
+    </p>
+  </section>
 </main>
 
 <script>

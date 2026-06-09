@@ -158,7 +158,36 @@
 
   .counterval { font-family: var(--display); font-size: 18px; font-weight: 700; min-width: 36px; text-align: center; }
   .hint { color: var(--ink-dim); font-size: 11px; margin-top: 8px; }
-  @media (max-width: 1000px) { main, .machines { grid-template-columns: 1fr; } .wide, .two { grid-column: span 1; } }
+  .concept {
+    color: var(--ink-dim); font-size: 11px; margin: -6px 0 12px;
+    border-left: 2px solid var(--panel-edge); padding-left: 8px;
+  }
+  .concept b { color: var(--ink); font-weight: 500; }
+  .concept code { color: var(--node); background: #0a0f15; padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
+
+  /* hero explainer */
+  .hero { grid-column: span 3; display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; }
+  .hero .pitch { font-size: 13px; color: var(--ink-dim); max-width: 64ch; }
+  .hero .pitch b { color: var(--ink); font-weight: 500; }
+  .hero .pitch .nodec { color: var(--node); }
+  .hero code.block {
+    display: block; background: #0a0f15; border: 1px solid var(--panel-edge);
+    border-radius: 4px; padding: 12px 14px; font-size: 12px; line-height: 1.7;
+    white-space: pre; overflow-x: auto;
+  }
+  .hero code.block .cm { color: var(--ink-dim); }
+  .hero code.block .kw { color: var(--java); }
+  .hero code.block .fn { color: var(--python); }
+  .steps { counter-reset: step; display: grid; gap: 10px; }
+  .step { display: flex; gap: 12px; font-size: 12px; color: var(--ink-dim); }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    font-family: var(--display); font-weight: 700; color: var(--node);
+    border: 1px solid var(--panel-edge); border-radius: 4px;
+    width: 24px; height: 24px; display: grid; place-items: center; flex: none;
+  }
+  .step b { color: var(--ink); font-weight: 500; }
+  @media (max-width: 1000px) { main, .machines, .hero { grid-template-columns: 1fr; } .wide, .two { grid-column: span 1; } }
 </style>
 </head>
 <body>
@@ -169,10 +198,41 @@
 </header>
 
 <main>
+  <section class="panel hero">
+    <div>
+      <h2>What you're looking at</h2>
+      <p class="pitch">
+        Three services — <b>Node</b>, a <b>JVM</b>, and <b>CPython</b> — none of which this app has ever
+        seen the source of. Each one is a <b>machine</b>: an independently deployed process that publishes
+        a typed manifest, exactly like a Module Federation remote publishes <b>mf-manifest.json</b>.
+        This app consumes them as <b class="nodec">plain imported functions</b> — no SDKs, no client
+        libraries, no codegen per language. The federation runtime is the multiplexer; HTTP is just
+        the transport. Watch the cards below flip from <b>cold</b> to <b>warm</b>: nothing attaches
+        until the first call needs it.
+      </p>
+      <code class="block" style="margin-top: 14px"><span class="cm">// the entire consumer API — types pulled from the machines themselves</span>
+<span class="kw">import</span> { strings } <span class="kw">from</span> './machines/java_machine';
+<span class="kw">import</span> { stats } <span class="kw">from</span> './machines/python_machine';
+
+<span class="kw">await</span> strings.<span class="fn">sha256</span>(text);   <span class="cm">// runs on the JVM</span>
+<span class="kw">await</span> stats.<span class="fn">mean</span>(numbers);     <span class="cm">// runs on CPython</span></code>
+    </div>
+    <div>
+      <h2>Anatomy of a call</h2>
+      <div class="steps">
+        <div class="step"><span><b>Import.</b> Bindgen pulled typed bindings from each machine's manifest at dev time — the machine analog of MF's <b>@mf-types</b>. The import costs nothing.</span></div>
+        <div class="step"><span><b>First call → attach.</b> The runtime plugin claims the <b>machinen+http://</b> entry, fetches the manifest, negotiates the semver version — the card flips to <b>warm</b>.</span></div>
+        <div class="step"><span><b>Every call → RPC.</b> Arguments cross as JSON, governed by deadlines, retries, and a circuit breaker. The guest runs your function and answers.</span></div>
+        <div class="step"><span><b>Hooks see everything.</b> The activity log below is the plugin's hook system narrating boots, calls, latencies, and failures in real time.</span></div>
+      </div>
+    </div>
+  </section>
+
   <div class="machines" id="machines"></div>
 
   <section class="panel two">
     <h2>Polyglot pipeline — one request, three machines</h2>
+    <p class="concept"><b>Concept: composition without SDKs.</b> One button fans out across three languages. The handler reads like local code — <code>strings.sha256()</code>, <code>data.wordCount()</code>, <code>text.shout()</code> — but each line executes in a different runtime.</p>
     <textarea id="pipeline-input" placeholder="type some text… it will be hashed on the JVM, analyzed by CPython, and transformed by Node">boot once run everywhere</textarea>
     <div class="row">
       <button id="pipeline-run">Run pipeline</button>
@@ -183,7 +243,7 @@
 
   <section class="panel">
     <h2>Machine-owned state</h2>
-    <p class="hint">Each counter lives inside its machine, not in this app.</p>
+    <p class="concept"><b>Concept: state has an address.</b> Each counter lives inside its machine, not in this app. Freeze a machine and its counter travels with it — that's the snapshot demo (<code>pnpm demo:snapshot</code>).</p>
     <div class="row"><button data-counter="compute_machine">node +1</button><span class="counterval" id="c-compute_machine">—</span></div>
     <div class="row"><button data-counter="java_machine">java +1</button><span class="counterval" id="c-java_machine">—</span></div>
     <div class="row"><button data-counter="python_machine">python +1</button><span class="counterval" id="c-python_machine">—</span></div>
@@ -191,6 +251,7 @@
 
   <section class="panel">
     <h2>Compute playground</h2>
+    <p class="concept"><b>Concept: lazy attach.</b> If this card is your first click, you'll pay a one-time attach cost — watch the machine card warm up — then calls settle to transport latency.</p>
     <div class="row">
       <input class="num" id="add-a" type="number" value="20" /> +
       <input class="num" id="add-b" type="number" value="22" />
@@ -205,6 +266,7 @@
 
   <section class="panel">
     <h2>Live stream — machine → host → browser</h2>
+    <p class="concept"><b>Concept: streaming bindings.</b> <code>countdown()</code> is an async iterable that crosses two boundaries: machine → host as NDJSON, host → you as server-sent events.</p>
     <div class="row">
       countdown(<input class="num" id="cd-from" type="number" value="8" />)
       <button id="cd-run">stream</button>
@@ -214,6 +276,7 @@
 
   <section class="panel">
     <h2>Activity — runtime plugin hooks, live</h2>
+    <p class="concept"><b>Concept: observable by construction.</b> Every boot, call, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener.</p>
     <div id="log"></div>
   </section>
 </main>
