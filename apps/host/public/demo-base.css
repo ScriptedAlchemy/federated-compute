@@ -1,59 +1,157 @@
-/* Shared design system for the demo pages. Page-specific accent tokens,
-   backgrounds, paddings, and component styles stay inline in each page. */
+/* Shared design system for the demo pages — mission-control terminal.
+   Pages own their accent tokens, background composition (radials + body::before
+   top strip) and component styles; this file owns the chassis: tokens, panels,
+   typography, controls, the staggered reveal, and accessibility plumbing.
+   body::after is reserved here for the grain/vignette atmosphere layer. */
 :root {
-  --bg: #07090d;
-  --panel: #0d1117;
-  --panel-edge: #1b232e;
-  --ink: #c9d4e0;
-  --ink-dim: #5a6878;
+  --bg: #05070b;
+  --panel: #0c1219;
+  --panel-deep: #0a0f16;
+  --well: #080d13;
+  --panel-edge: #1c2632;
+  --panel-edge-2: #2b3a4b;
+  --ink: #d3dde9;
+  --ink-dim: #74839a;
+  --ink-faint: #415062;
   --display: 'Chakra Petch', sans-serif;
   --mono: 'IBM Plex Mono', monospace;
+  --focus: #58a6ff;
 }
 * { box-sizing: border-box; margin: 0; }
+::selection { background: rgba(88, 166, 255, .25); }
+html { scrollbar-color: #243040 var(--bg); }
 body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--mono);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   min-height: 100vh;
+  overflow-x: hidden;
 }
+/* Atmosphere: film grain + vignette, fixed above content, never interactive. */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  background:
+    radial-gradient(ellipse 120% 90% at 50% 40%, transparent 60%, rgba(0, 0, 0, .42)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+}
+
 header {
-  display: flex; align-items: baseline; gap: 16px;
-  padding: 28px 32px 18px;
+  display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+  padding: 30px 40px 20px;
   border-bottom: 1px solid var(--panel-edge);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .02), transparent);
 }
 header h1 {
   font-family: var(--display);
-  font-size: 22px; font-weight: 700; letter-spacing: .04em;
+  font-size: 24px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase;
 }
+header .sub { color: var(--ink-dim); font-size: 12px; }
+header nav { margin-left: auto; }
+header nav a {
+  color: var(--ink-dim); text-decoration: none; font-size: 12px;
+  border: 1px solid var(--panel-edge); border-radius: 5px;
+  padding: 6px 12px;
+  transition: color .15s, border-color .15s, background .15s;
+}
+header nav a:hover { color: var(--ink); border-color: var(--panel-edge-2); background: rgba(255, 255, 255, .02); }
+
 .panel {
-  background: var(--panel);
+  position: relative;
+  background: linear-gradient(180deg, #0d141d 0%, var(--panel-deep) 100%);
   border: 1px solid var(--panel-edge);
-  border-radius: 6px;
+  border-radius: 8px;
+}
+/* Corner registration ticks — the mission-control signature. */
+.panel::after {
+  content: ''; position: absolute; inset: -1px;
+  pointer-events: none; border-radius: 8px;
+  --tick: var(--ink-faint);
+  background:
+    linear-gradient(var(--tick), var(--tick)) left 0 top 0 / 12px 1px,
+    linear-gradient(var(--tick), var(--tick)) left 0 top 0 / 1px 12px,
+    linear-gradient(var(--tick), var(--tick)) right 0 top 0 / 12px 1px,
+    linear-gradient(var(--tick), var(--tick)) right 0 top 0 / 1px 12px,
+    linear-gradient(var(--tick), var(--tick)) left 0 bottom 0 / 12px 1px,
+    linear-gradient(var(--tick), var(--tick)) left 0 bottom 0 / 1px 12px,
+    linear-gradient(var(--tick), var(--tick)) right 0 bottom 0 / 12px 1px,
+    linear-gradient(var(--tick), var(--tick)) right 0 bottom 0 / 1px 12px;
+  background-repeat: no-repeat;
+  opacity: .7;
 }
 .panel h2 {
+  display: flex; align-items: center; gap: 8px;
   font-family: var(--display);
-  font-size: 12px; font-weight: 600;
-  letter-spacing: .14em; text-transform: uppercase;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase;
   color: var(--ink-dim);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
-/* range inputs are excluded so gravity's slider keeps its native look */
-input:not([type=range]), textarea, button, select {
+.panel h2::before {
+  content: ''; width: 6px; height: 6px; flex: none;
+  background: var(--sec, var(--ink-faint));
+  box-shadow: 0 0 6px var(--sec, transparent);
+}
+
+/* range inputs are excluded so each page can style its own slider */
+input:not([type=range]), textarea, select {
   font-family: var(--mono); font-size: 13px;
-  background: #0a0f15; color: var(--ink);
-  border: 1px solid var(--panel-edge); border-radius: 4px;
+  background: var(--well); color: var(--ink);
+  border: 1px solid var(--panel-edge); border-radius: 5px;
   padding: 7px 10px;
+  transition: border-color .15s;
 }
+input:not([type=range]):hover, textarea:hover { border-color: var(--panel-edge-2); }
 button {
+  font-family: var(--display); font-weight: 600; font-size: 11px;
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink);
+  background: linear-gradient(180deg, #1a2433, #121a26);
+  border: 1px solid #263347; border-radius: 5px;
+  padding: 8px 16px;
   cursor: pointer;
-  font-family: var(--display); font-weight: 600;
-  letter-spacing: .08em; text-transform: uppercase; font-size: 11px;
-  background: #15202b;
-  transition: background .15s;
+  transition: border-color .15s, color .15s, box-shadow .15s, transform .06s;
 }
-button:hover { background: #1d2c3a; }
-button:active { transform: translateY(1px); }
+button:hover {
+  color: #fff; border-color: #3a4d66;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .04), 0 2px 12px -4px rgba(0, 0, 0, .8);
+}
+button:active { transform: translateY(1px) scale(.985); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+
 .row { display: flex; align-items: center; flex-wrap: wrap; }
+
+[hidden] { display: none !important; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-dim);
+  border: 1px solid var(--panel-edge); border-radius: 999px;
+  padding: 1px 9px;
+  background: var(--well);
+  white-space: nowrap;
+}
+
+/* Staggered page-load reveal: give elements .reveal + an inline --d index. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(16px); }
+}
+.reveal {
+  animation: rise .6s cubic-bezier(.2, .7, .2, 1) both;
+  animation-delay: calc(var(--d, 0) * 90ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
