@@ -9,8 +9,14 @@ import { getMachines } from '@federated-compute/machinen-plugin/client';
 import { math, text, counter as nodeCounter } from './generated/compute_machine';
 import { strings, counter as javaCounter } from './generated/java_machine';
 import { stats, data, counter as pyCounter } from './generated/python_machine';
+import { db } from './generated/db_machine';
+import { analytics } from './generated/analytics_machine';
 
 const PORT = Number(process.env.HOST_PORT ?? 3800);
+// All simulated WAN links into the data region (db + analytics paths).
+const REGION_LINKS = (process.env.REGION_LINKS ?? 'http://127.0.0.1:3899,http://127.0.0.1:3898')
+  .split(',')
+  .map((s) => s.trim());
 const MACHINES = ['compute_machine', 'java_machine', 'python_machine'] as const;
 
 interface MachineStatus {
@@ -174,15 +180,102 @@ async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse
   json(res, 200, { value: await counter.increment() });
 }
 
-const INDEX_HTML = path.resolve(import.meta.dirname, '../public/index.html');
+// ---------------------------------------------------------------------------
+// Data gravity: the same report, two topologies.
+// ---------------------------------------------------------------------------
+
+/**
+ * Scenario 1 — the consumer queries the far-region database itself. The host's
+ * db_machine entry points THROUGH the simulated WAN link, so this classic
+ * sequential N+1 pays region latency on every single query.
+ */
+async function handleReportRemote(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { limit = 5 } = await readBody(req);
+  const start = performance.now();
+
+  const users = await db.listUsers();
+  let queries = 1;
+  const totals: { name: string; plan: string; total: number }[] = [];
+  for (const user of users) {
+    const orders = await db.ordersFor(user.id);
+    queries++;
+    totals.push({
+      name: user.name,
+      plan: user.plan,
+      total: Math.round(orders.reduce((sum, o) => sum + o.amount, 0) * 100) / 100,
+    });
+  }
+  totals.sort((a, b) => b.total - a.total);
+
+  json(res, 200, {
+    scenario: 'cross-region',
+    spenders: totals.slice(0, Math.max(1, Math.min(Number(limit) || 5, 10))),
+    wanCalls: queries,
+    dbQueries: queries,
+    totalMs: performance.now() - start,
+  });
+}
+
+/**
+ * Scenario 2 — the code went to the data: one federated call to
+ * analytics_machine (co-located with db_machine), which runs the same N+1
+ * over same-region hops and returns the finished report.
+ */
+async function handleReportColocated(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { limit = 5 } = await readBody(req);
+  const start = performance.now();
+  const report = await analytics.topSpenders(Number(limit) || 5);
+  json(res, 200, {
+    scenario: 'colocated',
+    spenders: report.spenders,
+    wanCalls: 1,
+    dbQueries: report.queries,
+    machineMs: report.dbMs,
+    totalMs: performance.now() - start,
+  });
+}
+
+async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerResponse) {
+  if (req.method === 'POST') {
+    const { ms } = await readBody(req);
+    const results = await Promise.all(
+      REGION_LINKS.map((link) =>
+        fetch(`${link}/__latency`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ms }),
+        }).then((r) => r.json()),
+      ),
+    );
+    return json(res, 200, results[0]);
+  }
+  const upstream = await fetch(`${REGION_LINKS[0]}/__latency`);
+  json(res, 200, await upstream.json());
+}
+
+const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
   try {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(await readFile(INDEX_HTML));
+      res.end(await readFile(path.join(PUBLIC_DIR, 'index.html')));
       return;
+    }
+    if (req.method === 'GET' && url.pathname === '/gravity') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(await readFile(path.join(PUBLIC_DIR, 'gravity.html')));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/report/remote') {
+      return await handleReportRemote(req, res);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/report/colocated') {
+      return await handleReportColocated(req, res);
+    }
+    if (url.pathname === '/api/region/latency') {
+      return await handleRegionLatency(req, res);
     }
     if (req.method === 'GET' && url.pathname === '/api/status') return await handleStatus(res);
     if (req.method === 'GET' && url.pathname === '/api/events') {

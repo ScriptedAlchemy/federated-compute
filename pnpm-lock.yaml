@@ -24,6 +24,18 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  apps/machine-analytics:
+    dependencies:
+      '@federated-compute/machinen-plugin':
+        specifier: workspace:*
+        version: link:../../packages/runtime-plugin
+
+  apps/machine-db:
+    dependencies:
+      '@federated-compute/machinen-plugin':
+        specifier: workspace:*
+        version: link:../../packages/runtime-plugin
+
   apps/remote:
     dependencies:
       '@federated-compute/machinen-plugin':

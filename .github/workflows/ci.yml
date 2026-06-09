@@ -36,3 +36,6 @@ jobs:
 
       - name: Snapshot demo (boot once, run everywhere)
         run: node scripts/demo-snapshot.mjs
+
+      - name: Data gravity demo (move the code to the data)
+        run: node scripts/demo-gravity.mjs

@@ -23,6 +23,18 @@ export const MACHINES = [
     port: 3803,
     command: ['python3', path.join(ROOT, 'apps/remote-python/main.py')],
   },
+  {
+    name: 'db_machine',
+    port: 3804,
+    command: ['node', path.join(ROOT, 'apps/machine-db/src/index.mjs')],
+  },
+  {
+    name: 'analytics_machine',
+    port: 3805,
+    command: ['node', path.join(ROOT, 'apps/machine-analytics/src/index.mjs')],
+    // Co-located with db_machine: its db entry is the LOCAL address, no WAN.
+    env: { MACHINEN_REMOTE_DB_MACHINE: 'machinen+http://127.0.0.1:3804' },
+  },
 ];
 
 async function waitForManifest(port, token, name) {
@@ -53,6 +65,7 @@ export async function startMachines({ token }) {
         ...process.env,
         PORT: String(machine.port),
         ...(token ? { MACHINEN_TOKEN: token } : {}),
+        ...(machine.env ?? {}),
       },
       stdio: ['ignore', 'inherit', 'inherit'],
     });

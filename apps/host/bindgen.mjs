@@ -13,6 +13,9 @@ const machines = {
   compute_machine: process.env.MACHINEN_REMOTE_COMPUTE_MACHINE ?? 'machinen+http://127.0.0.1:3801',
   java_machine: process.env.MACHINEN_REMOTE_JAVA_MACHINE ?? 'machinen+http://127.0.0.1:3802',
   python_machine: process.env.MACHINEN_REMOTE_PYTHON_MACHINE ?? 'machinen+http://127.0.0.1:3803',
+  db_machine: process.env.MACHINEN_REMOTE_DB_MACHINE ?? 'machinen+http://127.0.0.1:3804',
+  analytics_machine:
+    process.env.MACHINEN_REMOTE_ANALYTICS_MACHINE ?? 'machinen+http://127.0.0.1:3805',
 };
 
 await mkdir(OUT_DIR, { recursive: true });

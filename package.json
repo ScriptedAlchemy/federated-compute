@@ -8,6 +8,7 @@
     "demo": "node scripts/demo.mjs",
     "demo:snapshot": "node scripts/demo-snapshot.mjs",
     "demo:web": "node scripts/demo-web.mjs",
+    "demo:gravity": "node scripts/demo-gravity.mjs",
     "bindgen": "node scripts/bindgen.mjs"
   },
   "packageManager": "pnpm@10.34.1"

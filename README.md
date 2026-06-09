@@ -161,6 +161,24 @@ proving state lives inside each machine, a countdown streamed machine ->
 host (NDJSON) -> browser (SSE), and a live activity log fed by the runtime
 plugin's hooks.
 
+## Data gravity (move the code to the data)
+
+The second page (http://localhost:3800/gravity, or `pnpm demo:gravity` for
+the CLI) demonstrates why machine mobility matters. A database machine lives
+in a far region behind a simulated WAN link (adjustable latency). A "top
+spenders" report needs 1 + N queries:
+
+- **Cross-region**: the consumer runs the N+1 itself — every query crosses
+  the WAN. 25 queries x 75ms ≈ 2 seconds.
+- **Co-located**: one federated call to `analytics_machine` — the code that
+  moved to the data region — which runs the same N+1 over same-region hops
+  and is itself a machine consuming `db_machine` through federation bindings
+  (machine-to-machine federation). 1 crossing ≈ 200ms, ~10-20x faster.
+
+The consumer's code is import-shaped either way; only the federation entries
+(addresses) differ. With real Machinen, "moving the code" is a snapshot
+restored next to the data — the topology change needs no code change.
+
 ## Layout
 
 ```
@@ -181,7 +199,8 @@ pnpm test           # unit tests + cross-language conformance suite
 pnpm -r build       # plugin, node apps, and the Java machine's jar
 pnpm demo           # boots all machines as separate services, runs the host
 pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
-pnpm demo:web       # interactive dashboard at http://localhost:3800
+pnpm demo:web       # interactive dashboard at http://localhost:3800 (+ /gravity)
+pnpm demo:gravity   # data gravity comparison, CLI edition
 pnpm bindgen        # pull typed bindings from the deployed machines
 ```
 

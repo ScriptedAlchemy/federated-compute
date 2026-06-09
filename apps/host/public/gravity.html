@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — data gravity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #07090d;
+    --panel: #0d1117;
+    --panel-edge: #1b232e;
+    --ink: #c9d4e0;
+    --ink-dim: #5a6878;
+    --wan: #e5534b;
+    --local: #3fb950;
+    --db: #58a6ff;
+    --display: 'Chakra Petch', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(88,166,255,.07), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.012) 2px 4px);
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px;
+    padding: 28px 32px 18px;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+  header h1 { font-family: var(--display); font-size: 22px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  header h1 .accent { color: var(--db); }
+  header nav { margin-left: auto; }
+  header nav a { color: var(--ink-dim); text-decoration: none; font-size: 12px; }
+  header nav a:hover { color: var(--ink); }
+  main { max-width: 1100px; padding: 20px 32px 60px; display: grid; gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 18px 20px; }
+  .panel h2 { font-family: var(--display); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 12px; }
+  .lede { color: var(--ink-dim); font-size: 12.5px; max-width: 78ch; }
+  .lede b { color: var(--ink); font-weight: 500; }
+
+  /* topology */
+  .topo { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0; align-items: center; margin-top: 14px; }
+  .region {
+    border: 1px dashed var(--panel-edge); border-radius: 6px; padding: 12px 14px;
+  }
+  .region .rname { font-family: var(--display); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 8px; }
+  .box {
+    display: inline-block; border: 1px solid var(--panel-edge); border-radius: 4px;
+    padding: 4px 10px; margin: 2px 4px 2px 0; font-size: 12px;
+  }
+  .box.db { border-color: var(--db); color: var(--db); }
+  .box.an { border-color: var(--local); color: var(--local); }
+  .link { text-align: center; padding: 0 14px; color: var(--wan); font-size: 11px; letter-spacing: .1em; }
+  .link .wire { border-top: 2px dashed var(--wan); margin: 6px 0; animation: crawl 1.2s linear infinite; }
+  @keyframes crawl { from { border-top-style: dashed; } }
+
+  input[type=range] { accent-color: var(--wan); width: 220px; vertical-align: middle; }
+  button {
+    cursor: pointer; font-family: var(--display); font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; font-size: 11px;
+    background: #15202b; color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 4px; padding: 8px 14px;
+    transition: background .15s;
+  }
+  button:hover { background: #1d2c3a; }
+  button:active { transform: translateY(1px); }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+  .scenarios { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .scenario { border-top: 3px solid var(--wan); }
+  .scenario.colo { border-top-color: var(--local); }
+  .scenario h3 { font-family: var(--display); font-size: 14px; margin-bottom: 4px; }
+  .scenario .desc { color: var(--ink-dim); font-size: 11.5px; margin-bottom: 12px; min-height: 48px; }
+  .stat { font-family: var(--display); font-size: 26px; font-weight: 700; }
+  .stat.wan { color: var(--wan); }
+  .stat.local { color: var(--local); }
+  .substat { color: var(--ink-dim); font-size: 11px; margin-bottom: 10px; }
+
+  .bars { display: grid; gap: 8px; margin-top: 6px; }
+  .barrow { display: grid; grid-template-columns: 110px 1fr 80px; gap: 10px; align-items: center; font-size: 11px; }
+  .bartrack { background: #0a0f15; border-radius: 3px; height: 14px; overflow: hidden; }
+  .barfill { height: 100%; border-radius: 3px; width: 0%; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+  .barfill.wan { background: var(--wan); }
+  .barfill.local { background: var(--local); }
+  .speedup { font-family: var(--display); font-size: 15px; color: var(--local); margin-top: 10px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th { text-align: left; color: var(--ink-dim); font-weight: 400; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; padding: 4px 8px 6px 0; }
+  td { padding: 3px 8px 3px 0; border-top: 1px solid #131b25; }
+  td.amt { text-align: right; font-weight: 600; }
+  .plan-pro { color: var(--db); }
+  @media (max-width: 900px) { .scenarios, .topo { grid-template-columns: 1fr; } .link { padding: 10px 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>data <span class="accent">gravity</span></h1>
+  <span style="color: var(--ink-dim); font-size: 12px">move the code to the data, not the data to the code</span>
+  <nav><a href="/">← machine control</a></nav>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>The setup</h2>
+    <p class="lede">
+      The database machine lives in <b>eu-west</b>. The consumer (this app) runs in <b>us-east</b>.
+      A "top spenders" report needs <b>1 + N queries</b> (list users, then orders per user).
+      Same report, two topologies: query the database <b>across the WAN</b> per query — or make
+      <b>one federated call</b> to an analytics machine deployed next to the database, which runs the
+      same queries over same-region hops. The consumer's code style is identical either way:
+      <b>imported functions</b>. Only the federation entries (addresses) differ.
+    </p>
+    <div class="topo">
+      <div class="region">
+        <div class="rname">us-east — consumer</div>
+        <span class="box">host app</span>
+      </div>
+      <div class="link">
+        simulated WAN<br/>
+        <div class="wire"></div>
+        <span id="lat-label">+75ms</span> / request
+      </div>
+      <div class="region">
+        <div class="rname">eu-west — data region</div>
+        <span class="box db">db_machine</span>
+        <span class="box an">analytics_machine</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top: 14px">
+      <span style="color: var(--ink-dim); font-size: 11.5px">region latency</span>
+      <input type="range" id="latency" min="0" max="300" step="25" value="75" />
+      <span id="lat-value">75ms</span>
+    </div>
+  </section>
+
+  <div class="scenarios">
+    <section class="panel scenario">
+      <h3>1 · Query across regions</h3>
+      <p class="desc">The host runs the N+1 itself through its db bindings. Every query is a WAN round-trip: <span style="color:var(--wan)">1 + N crossings</span>.</p>
+      <button id="run-remote">Run report (cross-region)</button>
+      <div style="margin-top: 12px">
+        <span class="stat wan" id="remote-ms">—</span>
+        <div class="substat" id="remote-detail"></div>
+      </div>
+    </section>
+
+    <section class="panel scenario colo">
+      <h3>2 · The code goes to the data</h3>
+      <p class="desc">One federated call to <span style="color:var(--local)">analytics_machine.topSpenders()</span> — co-located with the database, it runs the same N+1 locally: <span style="color:var(--local)">1 crossing</span>.</p>
+      <button id="run-colo">Run report (co-located)</button>
+      <div style="margin-top: 12px">
+        <span class="stat local" id="colo-ms">—</span>
+        <div class="substat" id="colo-detail"></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Comparison</h2>
+    <div class="bars">
+      <div class="barrow"><span style="color:var(--wan)">cross-region</span><div class="bartrack"><div class="barfill wan" id="bar-remote"></div></div><span id="bar-remote-ms">—</span></div>
+      <div class="barrow"><span style="color:var(--local)">co-located</span><div class="bartrack"><div class="barfill local" id="bar-colo"></div></div><span id="bar-colo-ms">—</span></div>
+    </div>
+    <div class="speedup" id="speedup"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Report output (identical either way)</h2>
+    <table id="spenders"><thead><tr><th>#</th><th>customer</th><th>plan</th><th style="text-align:right">total</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+let lastRemote = null, lastColo = null;
+
+const slider = $('latency');
+slider.oninput = () => { $('lat-value').textContent = slider.value + 'ms'; };
+slider.onchange = async () => {
+  const r = await post('/api/region/latency', { ms: Number(slider.value) });
+  $('lat-label').textContent = '+' + r.ms + 'ms';
+};
+fetch('/api/region/latency').then(r => r.json()).then(r => {
+  slider.value = r.ms; $('lat-value').textContent = r.ms + 'ms'; $('lat-label').textContent = '+' + r.ms + 'ms';
+});
+
+function renderSpenders(spenders) {
+  $('spenders').querySelector('tbody').innerHTML = spenders.map((s, i) =>
+    `<tr><td>${i + 1}</td><td>${s.name}</td><td class="plan-${s.plan}">${s.plan}</td><td class="amt">$${s.total.toFixed(2)}</td></tr>`).join('');
+}
+
+function renderCompare() {
+  const max = Math.max(lastRemote ?? 0, lastColo ?? 0, 1);
+  if (lastRemote != null) {
+    $('bar-remote').style.width = (lastRemote / max * 100) + '%';
+    $('bar-remote-ms').textContent = lastRemote.toFixed(0) + 'ms';
+  }
+  if (lastColo != null) {
+    $('bar-colo').style.width = (lastColo / max * 100) + '%';
+    $('bar-colo-ms').textContent = lastColo.toFixed(0) + 'ms';
+  }
+  if (lastRemote != null && lastColo != null && lastColo > 0) {
+    $('speedup').textContent = '→ ' + (lastRemote / lastColo).toFixed(1) + '× faster by moving the code to the data';
+  }
+}
+
+$('run-remote').onclick = async () => {
+  $('remote-ms').textContent = '…';
+  const r = await post('/api/report/remote', { limit: 5 });
+  lastRemote = r.totalMs;
+  $('remote-ms').textContent = r.totalMs.toFixed(0) + 'ms';
+  $('remote-detail').textContent = `${r.dbQueries} queries · ${r.wanCalls} WAN crossings`;
+  renderSpenders(r.spenders); renderCompare();
+};
+
+$('run-colo').onclick = async () => {
+  $('colo-ms').textContent = '…';
+  const r = await post('/api/report/colocated', { limit: 5 });
+  lastColo = r.totalMs;
+  $('colo-ms').textContent = r.totalMs.toFixed(0) + 'ms';
+  $('colo-detail').textContent = `${r.dbQueries} queries inside the data region (${r.machineMs.toFixed(0)}ms) · ${r.wanCalls} WAN crossing`;
+  renderSpenders(r.spenders); renderCompare();
+};
+</script>
+</body>
+</html>
