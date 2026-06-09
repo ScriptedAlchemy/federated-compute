@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'vitest';
-import { generateBindings } from '../src/bindgen.js';
+import http from 'node:http';
+import { afterAll, describe, expect, test } from 'vitest';
+import { fetchBindingsSource, generateBindings } from '../src/bindgen.js';
+import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
 import type { MachineExposeManifest } from '../src/types.js';
 
 const manifest: MachineExposeManifest = {
@@ -60,5 +62,50 @@ describe('generateBindings', () => {
     expect(src).toContain("'./compute', { version: '^1.0.0', streams: ['countdown'] }");
     expect(src).toContain("'./strings', { version: '^1.0.0' }");
     expect(src).not.toContain("'./strings', { version: '^1.0.0', streams");
+  });
+});
+
+describe('fetchBindingsSource (host-side, network only)', () => {
+  const servers: GuestServer[] = [];
+  const rawServers: http.Server[] = [];
+  afterAll(async () => {
+    await Promise.all(servers.map((s) => s.close()));
+    for (const s of rawServers) s.close();
+  });
+
+  test('prefers the machine-published /mf-types.ts artifact', async () => {
+    const guest = createGuestRuntime({
+      name: 'types_machine',
+      version: '1.0.0',
+      exposes: { './math': { add: { handler: (a: number, b: number) => a + b, returns: 'number' } } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+
+    const source = await fetchBindingsSource(`http://127.0.0.1:${server.port}`);
+    expect(source).toContain('export interface TypesMachineMath {');
+  });
+
+  test('falls back to rendering from the manifest when the machine serves no types', async () => {
+    // A machine that only publishes its manifest (e.g. the Java/Python guests).
+    const server = http.createServer((req, res) => {
+      if (req.url === '/mf-manifest.json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(manifest));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    rawServers.push(server);
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () =>
+        resolve((server.address() as { port: number }).port),
+      ),
+    );
+
+    const source = await fetchBindingsSource(`http://127.0.0.1:${port}`);
+    expect(source).toContain('export interface JavaMachineStrings {');
+    expect(source).toContain("machineModule<JavaMachineStrings>('java_machine', './strings'");
   });
 });

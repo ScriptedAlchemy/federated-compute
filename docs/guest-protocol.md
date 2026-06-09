@@ -70,6 +70,17 @@ host-side property access (`machine.math.add`) and generated binding exports
 consistent across languages; guest runtimes reject invalid names at
 construction time.
 
+## `GET /mf-types.ts` (optional, recommended)
+
+Type distribution, MF's `@mf-types` analog: the machine publishes its own
+ready-to-import TypeScript bindings next to its manifest. Consumers' bindgen
+(`machinen-bindgen`, `fetchBindingsSource`) downloads this artifact from the
+deployed machine's URL — never from its source tree. Machines that don't
+serve it (any language without TS codegen) are still fully supported: their
+manifest carries complete signatures and consumers render bindings from it.
+Generate the artifact in the machine's own build/CI if you want to publish it
+statically.
+
 ## `GET /mf/state` and `POST /mf/state` (optional capability)
 
 Machines that can capture warm state advertise `"state"` in

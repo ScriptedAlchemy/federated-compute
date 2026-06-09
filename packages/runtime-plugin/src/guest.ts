@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { generateBindings } from './bindgen.js';
 import { GuestError } from './errors.js';
 import type { FunctionSignature, MachineExposeManifest } from './types.js';
 
@@ -190,6 +191,13 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
       if (req.method === 'GET' && req.url === '/mf-manifest.json') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(guest.manifest()));
+        return;
+      }
+      // The machine distributes its own bindings (MF's @mf-types analog):
+      // consumers' bindgen downloads this, never reading this repo's source.
+      if (req.method === 'GET' && req.url === '/mf-types.ts') {
+        res.writeHead(200, { 'content-type': 'application/typescript' });
+        res.end(generateBindings(guest.manifest()));
         return;
       }
       if (req.url === '/mf/state') {

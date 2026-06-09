@@ -9,8 +9,7 @@
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { generateBindings } from './bindgen.js';
-import type { MachineExposeManifest } from './types.js';
+import { fetchBindingsSource } from './bindgen.js';
 
 function parseArgs(argv: string[]): { url?: string; out?: string; token?: string } {
   const args: Record<string, string> = {};
@@ -29,17 +28,10 @@ async function main() {
     process.exit(2);
   }
 
-  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await fetch(`${url.replace(/\/$/, '')}/mf-manifest.json`, { headers });
-  if (!res.ok) {
-    console.error(`machinen-bindgen: manifest request failed with ${res.status} for ${url}`);
-    process.exit(1);
-  }
-  const manifest = (await res.json()) as MachineExposeManifest;
-
+  const source = await fetchBindingsSource(url, { token });
   await mkdir(path.dirname(out), { recursive: true });
-  await writeFile(out, generateBindings(manifest));
-  console.log(`machinen-bindgen: ${manifest.name}@${manifest.version} -> ${out}`);
+  await writeFile(out, source);
+  console.log(`machinen-bindgen: ${url} -> ${out}`);
 }
 
 main().catch((error) => {

@@ -101,6 +101,16 @@ describe('guest over HTTP', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
   });
+
+  test('guest serves its own generated bindings at /mf-types.ts (the @mf-types analog)', async () => {
+    const server = await startGuest();
+    const res = await fetch(`http://127.0.0.1:${server.port}/mf-types.ts`);
+    expect(res.status).toBe(200);
+    const source = await res.text();
+    expect(source).toContain('export interface HttpGuestMath {');
+    expect(source).toContain('add(a: number, b: number): Promise<number>;');
+    expect(source).toContain("machineModule<HttpGuestMath>('http_guest', './math'");
+  });
 });
 
 describe('guest state capture (snapshot simulation)', () => {

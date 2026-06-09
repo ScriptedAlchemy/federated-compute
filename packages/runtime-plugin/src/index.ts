@@ -15,7 +15,7 @@ export {
   type CircuitBreakerConfig,
   type MachineMetrics,
 } from './policy.js';
-export { generateBindings } from './bindgen.js';
+export { fetchBindingsSource, generateBindings } from './bindgen.js';
 export {
   configureMachines,
   createMachines,

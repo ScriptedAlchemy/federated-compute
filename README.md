@@ -75,7 +75,7 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
 | runtime `loadEntry` plugin hook | claims machine entries, synthesizes virtual containers of function proxies |
 | `registerRemotes` / dynamic remotes | machines join at runtime through the same API |
 | `preloadRemote` | `plugin.warm()` pre-attaches and validates machines before traffic |
-| DTS type distribution | `machinen-bindgen --url <machine> --out types.ts` pulls types from deployed machines |
+| DTS type distribution (`@mf-types`) | machines publish `GET /mf-types.ts`; host bindgen pulls from deployed URLs only |
 | retry plugin / `errorLoadRemote` | call policy: deadlines, transport-only retries, circuit breaker, crash restart |
 
 ## How it works
@@ -91,10 +91,15 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
   body caps, graceful shutdown. Any language qualifies: `apps/remote` (Node),
   `apps/remote-java` (Java 21, zero deps), `apps/remote-python` (Python 3,
   stdlib only).
-- **Bindgen**: `pnpm bindgen` (or the `machinen-bindgen` CLI against any
-  deployed machine URL) generates ready-to-import typed modules
-  (`apps/host/src/generated/`) — interfaces plus lazy bindings bound to the
-  default client, so user code never touches `loadRemote`.
+- **Bindgen is containment-preserving**, like MF's `@mf-types` flow: each
+  machine distributes its own types — the guest serves `GET /mf-types.ts`
+  generated from its own manifest (or a machine's CI publishes it statically),
+  and machines without TS codegen are covered because the manifest itself
+  carries full signatures. The host's `pnpm --filter host bindgen` pulls
+  bindings purely over the network from the deployed machine URLs in its own
+  config (`MACHINEN_REMOTE_*`) — it never reads another repo's source or
+  disk. Generated modules land in `apps/host/src/generated/` as
+  ready-to-import lazy bindings, so user code never touches `loadRemote`.
 - **Observability**: `plugin.metrics()` reports per-machine calls, errors,
   crashes, retries, timeouts, circuit opens, and p50/p95 latency — all fed by
   the hook system, so external telemetry can tap the same hooks.

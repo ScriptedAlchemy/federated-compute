@@ -38,10 +38,12 @@ export function generateBindings(manifest: MachineExposeManifest): string {
 
   const moduleMap: string[] = [];
   const bindings: string[] = [];
-  for (const [exposePath, fns] of Object.entries(manifest.exposes)) {
+  // Sorted for determinism: guest languages don't all preserve map order.
+  const sortedExposes = Object.entries(manifest.exposes).sort(([a], [b]) => a.localeCompare(b));
+  for (const [exposePath, fns] of sortedExposes) {
     const interfaceName = machineName + pascalCase(exposePath);
     lines.push(`export interface ${interfaceName} {`);
-    for (const [fn, sig] of Object.entries(fns)) {
+    for (const [fn, sig] of Object.entries(fns).sort(([a], [b]) => a.localeCompare(b))) {
       lines.push(renderFunction(fn, sig));
     }
     lines.push('}', '');
@@ -58,4 +60,30 @@ export function generateBindings(manifest: MachineExposeManifest): string {
   lines.push(`export interface ${machineName}Modules {`, ...moduleMap, '}', '');
   lines.push(...bindings, '');
   return lines.join('\n');
+}
+
+/**
+ * Host-side type distribution, MF-style: a machine publishes its own types
+ * next to its manifest. Prefer the machine's `/mf-types.ts` artifact; fall
+ * back to rendering from its manifest (which carries full signatures) when
+ * the machine doesn't serve one. Network only — the host never reads another
+ * repo's disk.
+ */
+export async function fetchBindingsSource(
+  machineUrl: string,
+  opts: { token?: string } = {},
+): Promise<string> {
+  const base = machineUrl.replace(/\/$/, '');
+  const headers: Record<string, string> = opts.token
+    ? { authorization: `Bearer ${opts.token}` }
+    : {};
+
+  const published = await fetch(`${base}/mf-types.ts`, { headers });
+  if (published.ok) return await published.text();
+
+  const res = await fetch(`${base}/mf-manifest.json`, { headers });
+  if (!res.ok) {
+    throw new Error(`bindgen: manifest request failed with ${res.status} for ${machineUrl}`);
+  }
+  return generateBindings((await res.json()) as MachineExposeManifest);
 }
