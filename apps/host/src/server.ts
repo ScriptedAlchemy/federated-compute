@@ -1,0 +1,217 @@
+// Interactive demo backend: the browser calls this API, and each handler is
+// plain binding usage — machines attach lazily on the first call that needs
+// them. The hook system feeds a live activity log so the UI can show
+// federation working in real time.
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { getMachines } from '@federated-compute/machinen-plugin/client';
+import { math, text, counter as nodeCounter } from './generated/compute_machine';
+import { strings, counter as javaCounter } from './generated/java_machine';
+import { stats, data, counter as pyCounter } from './generated/python_machine';
+
+const PORT = Number(process.env.HOST_PORT ?? 3800);
+const MACHINES = ['compute_machine', 'java_machine', 'python_machine'] as const;
+
+interface MachineStatus {
+  attached: boolean;
+  runtime?: string;
+  version?: string;
+  attachedAt?: number;
+}
+
+interface ActivityEvent {
+  ts: number;
+  kind: 'ready' | 'call' | 'error' | 'crash' | 'circuit';
+  detail: string;
+}
+
+const machineStatus = new Map<string, MachineStatus>(
+  MACHINES.map((name) => [name, { attached: false }]),
+);
+const events: ActivityEvent[] = [];
+
+function logEvent(kind: ActivityEvent['kind'], detail: string) {
+  events.push({ ts: Date.now(), kind, detail });
+  if (events.length > 200) events.splice(0, events.length - 200);
+}
+
+const plugin = getMachines().plugin;
+plugin.machineHooks.onMachineReady.on(async ({ spec, handle }) => {
+  const manifest = await handle.manifest();
+  machineStatus.set(spec.remoteName, {
+    attached: true,
+    runtime: manifest.metaData?.runtime,
+    version: manifest.version,
+    attachedAt: Date.now(),
+  });
+  logEvent('ready', `${spec.remoteName} attached (${manifest.metaData?.runtime})`);
+});
+plugin.machineHooks.afterCall.on(({ spec, module, fn, durationMs }) => {
+  logEvent('call', `${spec.remoteName} ${module}#${fn} ${durationMs.toFixed(1)}ms`);
+});
+plugin.machineHooks.onMachineError.on(({ spec, module, fn, error }) => {
+  logEvent('error', `${spec.remoteName} ${module}#${fn} failed: ${(error as Error).message}`);
+});
+plugin.machineHooks.onMachineCrash.on(({ spec }) => {
+  machineStatus.set(spec.remoteName, { attached: false });
+  logEvent('crash', `${spec.remoteName} became unreachable`);
+});
+plugin.machineHooks.onCircuitOpen.on(({ spec }) => {
+  logEvent('circuit', `${spec.remoteName} circuit open — failing fast`);
+});
+
+const counters = {
+  compute_machine: nodeCounter,
+  java_machine: javaCounter,
+  python_machine: pyCounter,
+};
+
+async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += (chunk as Buffer).length;
+    if (bytes > 64 * 1024) throw new Error('request body too large');
+    chunks.push(chunk as Buffer);
+  }
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+}
+
+function json(res: http.ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+async function handleStatus(res: http.ServerResponse) {
+  const metrics = getMachines().metrics();
+  json(res, 200, {
+    machines: MACHINES.map((name) => ({
+      name,
+      ...machineStatus.get(name),
+      metrics: metrics[name] ?? null,
+    })),
+  });
+}
+
+/**
+ * The "real-world scenario": one user action fanning out across three
+ * machines in three languages, composed like local function calls.
+ */
+async function handlePipeline(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { text: input } = await readBody(req);
+  if (typeof input !== 'string' || !input.trim()) {
+    return json(res, 400, { error: 'expected { text: string }' });
+  }
+
+  const totalStart = performance.now();
+
+  const javaStart = performance.now();
+  const [digest, upper] = await Promise.all([strings.sha256(input), strings.upper(input)]);
+  const javaMs = performance.now() - javaStart;
+
+  const pyStart = performance.now();
+  const wordCount = await data.wordCount(input);
+  const lengths = Object.keys(wordCount).map((w) => w.length);
+  const [meanLen, medianLen] = lengths.length
+    ? await Promise.all([stats.mean(lengths), stats.median(lengths)])
+    : [0, 0];
+  const pyMs = performance.now() - pyStart;
+
+  const nodeStart = performance.now();
+  const [shouted, reversed] = await Promise.all([text.shout(input), text.reverse(input)]);
+  const nodeMs = performance.now() - nodeStart;
+
+  json(res, 200, {
+    java: { sha256: digest, upper, ms: javaMs },
+    python: { wordCount, meanWordLength: meanLen, medianWordLength: medianLen, ms: pyMs },
+    node: { shouted, reversed, ms: nodeMs },
+    totalMs: performance.now() - totalStart,
+  });
+}
+
+async function handleCompute(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = await readBody(req);
+  if (body.op === 'add') {
+    return json(res, 200, { result: await math.add(Number(body.a), Number(body.b)) });
+  }
+  if (body.op === 'fib') {
+    const n = Math.min(Math.max(Number(body.n) || 0, 0), 35);
+    return json(res, 200, { result: await math.fib(n), n });
+  }
+  json(res, 400, { error: 'expected op: add | fib' });
+}
+
+/** Stream crossing two boundaries: machine -> host (NDJSON) -> browser (SSE). */
+async function handleCountdown(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+  const from = Math.min(Math.max(Number(url.searchParams.get('from')) || 5, 1), 30);
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  let closed = false;
+  req.on('close', () => {
+    closed = true;
+  });
+  try {
+    for await (const tick of math.countdown(from)) {
+      if (closed) return;
+      res.write(`data: ${JSON.stringify({ tick })}\n\n`);
+      await new Promise((r) => setTimeout(r, 250)); // pace it for the eye
+    }
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+  } catch (error) {
+    res.write(`data: ${JSON.stringify({ error: (error as Error).message })}\n\n`);
+  }
+  res.end();
+}
+
+async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { machine } = await readBody(req);
+  const counter = counters[machine as keyof typeof counters];
+  if (!counter) return json(res, 400, { error: `unknown machine "${machine}"` });
+  json(res, 200, { value: await counter.increment() });
+}
+
+const INDEX_HTML = path.resolve(import.meta.dirname, '../public/index.html');
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  try {
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(await readFile(INDEX_HTML));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/status') return await handleStatus(res);
+    if (req.method === 'GET' && url.pathname === '/api/events') {
+      return json(res, 200, { events: events.slice(-40) });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/pipeline') {
+      return await handlePipeline(req, res);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/compute') {
+      return await handleCompute(req, res);
+    }
+    if (req.method === 'GET' && url.pathname === '/api/countdown') {
+      return await handleCountdown(req, res, url);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/counter') {
+      return await handleCounter(req, res);
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  } catch (error) {
+    json(res, 500, { error: (error as Error).message });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`[host] web demo on http://localhost:${PORT}`);
+  console.log('[host] machines attach on demand — watch the dashboard');
+});
+
+process.on('SIGTERM', () => {
+  server.close(() => process.exit(0));
+});

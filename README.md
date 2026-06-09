@@ -150,6 +150,17 @@ Guests opt in via the protocol's `state` capability (`GET/POST /mf/state`) —
 the process driver's stand-in for a VM memory dump until `@machinen/runtime`
 is public, where the same `MachineDriver` interface snapshots whole microVMs.
 
+## Interactive demo
+
+`pnpm demo:web` serves a dashboard (http://localhost:3800) backed by a host
+API whose handlers are plain binding calls — the real-world shape: browser ->
+host backend -> machines loaded on demand. It shows machines flipping from
+cold to warm on first use, a polyglot pipeline (one request fanning out to
+JVM hashing, CPython analysis, and Node transforms), per-machine counters
+proving state lives inside each machine, a countdown streamed machine ->
+host (NDJSON) -> browser (SSE), and a live activity log fed by the runtime
+plugin's hooks.
+
 ## Layout
 
 ```
@@ -170,6 +181,7 @@ pnpm test           # unit tests + cross-language conformance suite
 pnpm -r build       # plugin, node apps, and the Java machine's jar
 pnpm demo           # boots all machines as separate services, runs the host
 pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
+pnpm demo:web       # interactive dashboard at http://localhost:3800
 pnpm bindgen        # pull typed bindings from the deployed machines
 ```
 
