@@ -104,5 +104,15 @@ for (const target of targets) {
       const res = await fetch(`http://127.0.0.1:${port}/mf/manifest`);
       expect(res.status).toBe(401);
     });
+
+    test('state capture round-trips (snapshot capability)', { timeout: 30_000 }, async () => {
+      const { handle } = await bootOnce(target);
+      const before = await handle.call('./counter', 'increment', []);
+      const state = (await handle.getState!()) as { counter: number };
+      expect(state.counter).toBeGreaterThanOrEqual(Number(before));
+
+      await handle.setState!({ counter: 41 });
+      await expect(handle.call('./counter', 'increment', [])).resolves.toBe(42);
+    });
   });
 }

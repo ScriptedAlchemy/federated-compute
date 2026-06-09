@@ -4,6 +4,16 @@ function fib(n: number): number {
   return n <= 1 ? n : fib(n - 1) + fib(n - 2);
 }
 
+// Warm state that survives snapshot/restore.
+let counter = 0;
+
+export const state = {
+  dehydrate: () => ({ counter }),
+  rehydrate: (saved: unknown) => {
+    counter = (saved as { counter?: number })?.counter ?? 0;
+  },
+};
+
 /**
  * The machine's "exposes" map — the moral equivalent of Module Federation's
  * `exposes` build config, except these run inside the machine and the host
@@ -44,6 +54,10 @@ export const exposes: Record<string, Record<string, ExposedFunction>> = {
       params: [{ name: 's', type: 'string' }],
       returns: 'string',
     },
+  },
+  './counter': {
+    increment: { handler: () => ++counter, params: [], returns: 'number' },
+    current: { handler: () => counter, params: [], returns: 'number' },
   },
   './system': {
     whereAmI: {

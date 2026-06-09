@@ -33,3 +33,6 @@ jobs:
 
       - name: End-to-end demo (3 machines + host)
         run: node scripts/demo.mjs
+
+      - name: Snapshot demo (boot once, run everywhere)
+        run: node scripts/demo-snapshot.mjs

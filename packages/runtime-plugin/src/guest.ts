@@ -16,6 +16,15 @@ export interface GuestConfig {
   version?: string;
   metaData?: Record<string, unknown>;
   exposes: Record<string, Record<string, ExposedFunction>>;
+  /**
+   * Optional state capture for snapshot/restore: dehydrate returns the
+   * machine's warm state, rehydrate resumes from it. The process-driver
+   * stand-in for a VM memory dump.
+   */
+  state?: {
+    dehydrate(): unknown;
+    rehydrate(state: unknown): void;
+  };
 }
 
 export interface GuestRuntime {
@@ -23,6 +32,8 @@ export interface GuestRuntime {
   dispatch(modulePath: string, fn: string, args: unknown[]): Promise<unknown>;
   dispatchStream(modulePath: string, fn: string, args: unknown[]): AsyncIterable<unknown>;
   signature(modulePath: string, fn: string): FunctionSignature | undefined;
+  /** Present only when the guest config declares state support. */
+  state?: GuestConfig['state'];
 }
 
 interface NormalizedFn {
@@ -104,7 +115,7 @@ export function createGuestRuntime(config: GuestConfig): GuestRuntime {
         version: config.version ?? '0.0.0',
         metaData: {
           runtime: `node ${process.version}`,
-          features: hasStreams ? ['stream'] : [],
+          features: [...(hasStreams ? ['stream'] : []), ...(config.state ? ['state'] : [])],
           ...config.metaData,
         },
         exposes,
@@ -124,6 +135,7 @@ export function createGuestRuntime(config: GuestConfig): GuestRuntime {
     signature(modulePath, fn) {
       return modules.get(modulePath)?.get(fn)?.signature;
     },
+    state: config.state,
   };
 }
 
@@ -179,6 +191,31 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(guest.manifest()));
         return;
+      }
+      if (req.url === '/mf/state') {
+        if (!guest.state) {
+          res.writeHead(501, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              ok: false,
+              error: { message: 'state capture not supported by this machine', type: 'StateError' },
+            }),
+          );
+          return;
+        }
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, state: guest.state.dehydrate() }));
+          return;
+        }
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          guest.state.rehydrate(JSON.parse(Buffer.concat(chunks).toString()).state);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
       }
       if (req.method === 'POST' && req.url === '/mf/call') {
         const chunks: Buffer[] = [];

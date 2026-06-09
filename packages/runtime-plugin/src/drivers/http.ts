@@ -50,6 +50,23 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
       }
     },
 
+    async getState() {
+      const res = await fetch(`${base}/mf/state`, { headers });
+      if (!res.ok) {
+        throw new MachineTransportError(`state capture failed: ${res.status} (machine may not support state)`);
+      }
+      return ((await res.json()) as { state: unknown }).state;
+    },
+
+    async setState(state) {
+      const res = await fetch(`${base}/mf/state`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ state }),
+      });
+      if (!res.ok) throw new MachineTransportError(`state restore failed: ${res.status}`);
+    },
+
     async call(modulePath, fn, args, opts) {
       const res = await post({ module: modulePath, fn, args }, opts?.signal);
       const body = (await res.json()) as

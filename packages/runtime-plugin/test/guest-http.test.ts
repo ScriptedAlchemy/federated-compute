@@ -103,6 +103,60 @@ describe('guest over HTTP', () => {
   });
 });
 
+describe('guest state capture (snapshot simulation)', () => {
+  async function startStatefulGuest() {
+    let counter = 0;
+    const guest = createGuestRuntime({
+      name: 'stateful_guest',
+      exposes: {
+        './counter': {
+          increment: () => ++counter,
+          current: () => counter,
+        },
+      },
+      state: {
+        dehydrate: () => ({ counter }),
+        rehydrate: (state) => {
+          counter = (state as { counter: number }).counter;
+        },
+      },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    return server;
+  }
+
+  test('manifest advertises the state feature', async () => {
+    const server = await startStatefulGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    const manifest = await handle.manifest();
+    expect(manifest.metaData?.features).toContain('state');
+  });
+
+  test('state round-trips: dehydrate on one guest, rehydrate on another', async () => {
+    const a = await startStatefulGuest();
+    const handleA = httpMachineHandle(`http://127.0.0.1:${a.port}`);
+    await handleA.call('./counter', 'increment', []);
+    await handleA.call('./counter', 'increment', []);
+
+    const state = await handleA.getState!();
+    expect(state).toEqual({ counter: 2 });
+
+    const b = await startStatefulGuest();
+    const handleB = httpMachineHandle(`http://127.0.0.1:${b.port}`);
+    await handleB.setState!(state);
+    await expect(handleB.call('./counter', 'current', [])).resolves.toBe(2);
+    // The donor keeps running independently (fork semantics).
+    await expect(handleA.call('./counter', 'increment', [])).resolves.toBe(3);
+  });
+
+  test('guests without state support reject state requests', async () => {
+    const server = await startGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    await expect(handle.getState!()).rejects.toThrow(/state/i);
+  });
+});
+
 describe('guest runtime naming validation', () => {
   test('throws for an expose path that is not a JS identifier', () => {
     expect(() =>

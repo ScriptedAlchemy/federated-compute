@@ -70,6 +70,24 @@ host-side property access (`machine.math.add`) and generated binding exports
 consistent across languages; guest runtimes reject invalid names at
 construction time.
 
+## `GET /mf/state` and `POST /mf/state` (optional capability)
+
+Machines that can capture warm state advertise `"state"` in
+`metaData.features` and implement:
+
+- `GET /mf/state` → `{ "ok": true, "state": <opaque JSON> }` — dehydrate the
+  machine's application state.
+- `POST /mf/state` with `{ "state": <opaque JSON> }` → rehydrate; the machine
+  resumes from that state.
+
+Machines without the capability respond `501`. This powers the process
+driver's snapshot/restore simulation of Machinen's "boot once, run
+everywhere": `handle.snapshot()` writes a `.snap` bundle (state + image
+reference, like Machinen bundles remembering their rootfs tarball), and
+booting an entry whose image is a `.snap` restores instead of cold-booting.
+A real `@machinen/runtime` driver snapshots the entire microVM (memory, open
+files, timers) and does not need these endpoints.
+
 ## `POST /mf/call`
 
 Request body (guests should cap bodies, 5 MB reference; respond `413` beyond):

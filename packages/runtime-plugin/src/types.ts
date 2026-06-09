@@ -59,6 +59,13 @@ export interface MachineHandle {
   callStream?(modulePath: string, fn: string, args: unknown[]): AsyncIterable<unknown>;
   /** Liveness probe; defaults to manifest reachability when absent. */
   health?(): Promise<boolean>;
+  /**
+   * Capture/restore the machine's application state — the process-driver
+   * simulation of a VM memory dump. A real Machinen driver snapshots the
+   * whole VM and does not need these.
+   */
+  getState?(): Promise<unknown>;
+  setState?(state: unknown): Promise<void>;
   /** Freeze the machine's state. Returns a driver-specific descriptor. */
   snapshot?(): Promise<unknown>;
   /** Clone the running machine. Returns a driver-specific descriptor. */

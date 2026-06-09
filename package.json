@@ -6,6 +6,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "demo": "node scripts/demo.mjs",
+    "demo:snapshot": "node scripts/demo-snapshot.mjs",
     "bindgen": "node scripts/bindgen.mjs"
   },
   "packageManager": "pnpm@10.34.1"

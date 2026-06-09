@@ -128,6 +128,23 @@ tap-and-emit shape:
 Snapshot/fork mirror Machinen's signature operations and delegate to the
 driver's handle, so a real microVM driver gets them for free.
 
+## Boot once, run everywhere
+
+Two scenarios, both through federation (`pnpm demo:snapshot`):
+
+1. **Cold boot**: entries point at images (`machinen://app.py`); loading the
+   remote boots the machine from scratch.
+2. **Unfreeze**: a warm machine is frozen with `plugin.snapshotMachine(name)`
+   into a `.snap` bundle (state + image reference, like Machinen bundles
+   remembering their rootfs tarball). A different host points its entry at the
+   snapshot (`machinen://machine.snap`) — **loading the remote restores the
+   machine**, which continues exactly where it left off (the demo proves it
+   with counters that survive the move across all three languages).
+
+Guests opt in via the protocol's `state` capability (`GET/POST /mf/state`) —
+the process driver's stand-in for a VM memory dump until `@machinen/runtime`
+is public, where the same `MachineDriver` interface snapshots whole microVMs.
+
 ## Layout
 
 ```

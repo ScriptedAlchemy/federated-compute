@@ -21,6 +21,26 @@ def sig(returns, *params):
     return {"params": [{"name": n, "type": t} for n, t in params], "returns": returns}
 
 
+class CounterState:
+    """Warm state that survives snapshot/restore."""
+
+    def __init__(self):
+        self.count = 0
+
+    def increment(self):
+        self.count += 1
+        return self.count
+
+    def dehydrate(self):
+        return {"counter": self.count}
+
+    def rehydrate(self, state):
+        self.count = int(state.get("counter", 0))
+
+
+STATE = CounterState()
+
+
 # MF-style exposes: module path -> function name -> (implementation, signature).
 EXPOSES = {
     "./stats": {
@@ -34,6 +54,10 @@ EXPOSES = {
             sig("Record<string, number>", ("text", "string")),
         ),
         "sortNumbers": (lambda values: sorted(values), sig("number[]", ("values", "number[]"))),
+    },
+    "./counter": {
+        "increment": (lambda: STATE.increment(), sig("number")),
+        "current": (lambda: STATE.count, sig("number")),
     },
     "./python": {
         "info": (
@@ -56,7 +80,7 @@ def manifest():
         "version": VERSION,
         "metaData": {
             "runtime": f"{sys.implementation.name} {sys.version.split()[0]}",
-            "features": [],
+            "features": ["state"],
         },
         "exposes": {
             path: {fn: signature for fn, (_, signature) in fns.items()}
@@ -106,6 +130,8 @@ class GuestHandler(BaseHTTPRequestHandler):
             return
         if self.path in ("/mf-manifest.json", "/mf/manifest"):
             self._send(manifest())
+        elif self.path == "/mf/state":
+            self._send({"ok": True, "state": STATE.dehydrate()})
         else:
             self.send_response(404)
             self.end_headers()
@@ -113,13 +139,17 @@ class GuestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self._unauthorized():
             return
-        if self.path != "/mf/call":
+        if self.path not in ("/mf/call", "/mf/state"):
             self.send_response(404)
             self.end_headers()
             return
         try:
             length = int(self.headers.get("content-length", "0"))
             request = json.loads(self.rfile.read(length))
+            if self.path == "/mf/state":
+                STATE.rehydrate(request.get("state") or {})
+                self._send({"ok": True})
+                return
             result = dispatch(request["module"], request["fn"], request.get("args") or [])
             self._send({"ok": True, "result": result})
         except Exception as error:  # noqa: BLE001 - guest boundary

@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -24,6 +25,9 @@ public class Main {
   static final String VERSION = "1.0.0";
   static final String TOKEN = System.getenv("MACHINEN_TOKEN");
 
+  /** Warm state that survives snapshot/restore. */
+  static final AtomicLong COUNTER = new AtomicLong(0);
+
   /** MF-style exposes: module path -> function name -> implementation. */
   static final Map<String, Map<String, Function<List<Object>, Object>>> EXPOSES = Map.of(
       "./strings", Map.of(
@@ -31,6 +35,9 @@ public class Main {
           "sha256", args -> sha256((String) args.get(0))),
       "./compute", Map.of(
           "primesBelow", args -> primesBelow(((Number) args.get(0)).intValue())),
+      "./counter", Map.of(
+          "increment", args -> COUNTER.incrementAndGet(),
+          "current", args -> COUNTER.get()),
       "./jvm", Map.of(
           "info", args -> Map.of(
               "pid", ProcessHandle.current().pid(),
@@ -45,6 +52,9 @@ public class Main {
           "sha256", sig("string", param("s", "string"))),
       "./compute", Map.of(
           "primesBelow", sig("number[]", param("n", "number"))),
+      "./counter", Map.of(
+          "increment", sig("number"),
+          "current", sig("number")),
       "./jvm", Map.of(
           "info", sig("{ pid: number; javaVersion: string; vendor: string; hint: string }")));
 
@@ -64,12 +74,32 @@ public class Main {
     server.createContext("/mf/manifest", Main::handleManifest);
     server.createContext("/mf/health", Main::handleHealth);
     server.createContext("/mf/call", Main::handleCall);
+    server.createContext("/mf/state", Main::handleState);
     server.start();
     System.out.println("[remote-java] machine guest listening on 127.0.0.1:" + port);
   }
 
   static void handleHealth(HttpExchange ex) throws IOException {
     send(ex, 200, Json.write(Map.of("ok", true, "name", NAME)));
+  }
+
+  static void handleState(HttpExchange ex) throws IOException {
+    if (unauthorized(ex)) return;
+    if (ex.getRequestMethod().equals("GET")) {
+      send(ex, 200, Json.write(Map.of("ok", true, "state", Map.of("counter", COUNTER.get()))));
+      return;
+    }
+    if (ex.getRequestMethod().equals("POST")) {
+      String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> request = (Map<String, Object>) Json.parse(body);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> state = (Map<String, Object>) request.getOrDefault("state", Map.of());
+      COUNTER.set(((Number) state.getOrDefault("counter", 0L)).longValue());
+      send(ex, 200, Json.write(Map.of("ok", true)));
+      return;
+    }
+    send(ex, 404, "{}");
   }
 
   static boolean unauthorized(HttpExchange ex) throws IOException {
@@ -96,7 +126,7 @@ public class Main {
         "version", VERSION,
         "metaData", Map.of(
             "runtime", "OpenJDK " + System.getProperty("java.version"),
-            "features", List.of()),
+            "features", List.of("state")),
         "exposes", exposes)));
   }
 
