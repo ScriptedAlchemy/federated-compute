@@ -1,5 +1,20 @@
 import { stripExposePrefix, type FunctionSignature, type MachineExposeManifest } from './types.js';
 
+// Reserved words (incl. strict-mode and future-reserved) are syntactically
+// valid per the identifier regexes but cannot be export/binding names.
+const JS_RESERVED_WORDS = new Set([
+  'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+  'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
+  'finally', 'for', 'function', 'if', 'implements', 'import', 'in',
+  'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private',
+  'protected', 'public', 'return', 'static', 'super', 'switch', 'this',
+  'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+]);
+
+export function isJsReservedWord(word: string): boolean {
+  return JS_RESERVED_WORDS.has(word);
+}
+
 function pascalCase(input: string): string {
   return input
     .split(/[^a-zA-Z0-9]+/)
@@ -15,7 +30,10 @@ function renderFunction(name: string, sig: FunctionSignature): string {
 }
 
 function identifier(exposePath: string): string {
-  return stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
+  const id = stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
+  // Foreign manifests may not have gone through guest-side validation, so a
+  // reserved word ('./delete' -> delete) must still emit a legal export name.
+  return isJsReservedWord(id) ? `${id}_` : id;
 }
 
 /**

@@ -59,7 +59,7 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
 
   async function bootProcess(spec: MachineSpec, image: string, restoreState?: unknown) {
     const port = Number(spec.params.get('port')) || (await getFreePort());
-    const token = spec.params.get('token') ?? undefined;
+    const token = spec.auth?.token;
 
     const [cmd, ...cmdArgs] = resolveBootCommand(image, opts.commands);
     const child: ChildProcess = spawn(cmd, cmdArgs, {
@@ -70,6 +70,19 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
       },
       stdio: ['ignore', 'inherit', 'inherit'],
     });
+    // A missing binary (ENOENT) emits 'error' instead of exiting; with no
+    // listener that is an uncaught exception that takes the host down.
+    const spawnFailure = new Promise<never>((_, reject) => {
+      child.once('error', (error) => {
+        reject(
+          new Error(
+            `[machinen-plugin] failed to spawn guest process for "${spec.entry}": ${error.message}`,
+          ),
+        );
+      });
+    });
+    spawnFailure.catch(() => {}); // raced below; never let it go unhandled
+
     const handle = httpMachineHandle(`http://127.0.0.1:${port}`, { token });
     // HTTP handles always carry these; check once so later uses need no `!`.
     const { health, getState, setState } = handle;
@@ -78,9 +91,14 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
         '[machinen-plugin] processDriver needs a handle with health and state support',
       );
     }
-    await waitForManifest(health, child, spec.entry);
+    await Promise.race([waitForManifest(health, child, spec.entry), spawnFailure]);
     if (restoreState !== undefined) {
-      await setState(restoreState);
+      try {
+        await setState(restoreState);
+      } catch (error) {
+        child.kill();
+        throw error;
+      }
     }
 
     const snapshot = async () => {

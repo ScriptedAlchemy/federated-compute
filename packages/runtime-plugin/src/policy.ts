@@ -27,16 +27,26 @@ export const DEFAULT_POLICY: Required<Omit<CallPolicy, 'circuitBreaker'>> & {
   circuitBreaker: { threshold: 5, resetMs: 10_000 },
 };
 
-export async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+/**
+ * Race `work` against a deadline. When `controller` is given, the deadline
+ * also aborts it so the in-flight attempt is cancelled instead of orphaned.
+ */
+export async function withTimeout<T>(
+  work: Promise<T>,
+  ms: number,
+  label: string,
+  controller?: AbortController,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new MachineTimeoutError(`${label} timed out after ${ms}ms`)),
-          ms,
-        );
+        timer = setTimeout(() => {
+          const error = new MachineTimeoutError(`${label} timed out after ${ms}ms`);
+          controller?.abort(error);
+          reject(error);
+        }, ms);
         timer.unref?.();
       }),
     ]);

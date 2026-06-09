@@ -1,14 +1,21 @@
+import http from 'node:http';
 import { afterAll, describe, expect, test } from 'vitest';
-import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
+import { createGuestRuntime, serveGuest, type GuestServer, type ServeGuestOptions } from '../src/guest.js';
 import { httpMachineHandle } from '../src/drivers/http.js';
-import { GuestError } from '../src/errors.js';
+import {
+  GuestError,
+  isTransportFailure,
+  MachineAuthError,
+  MachineRequestError,
+  MachineTransportError,
+} from '../src/errors.js';
 
 const servers: GuestServer[] = [];
 afterAll(async () => {
   await Promise.all(servers.map((s) => s.close()));
 });
 
-async function startGuest(opts: { token?: string } = {}) {
+async function startGuest(opts: Partial<ServeGuestOptions> = {}) {
   const guest = createGuestRuntime({
     name: 'http_guest',
     exposes: {
@@ -35,7 +42,7 @@ async function startGuest(opts: { token?: string } = {}) {
       },
     },
   });
-  const server = await serveGuest(guest, { port: 0, token: opts.token });
+  const server = await serveGuest(guest, { ...opts, port: 0 });
   servers.push(server);
   return server;
 }
@@ -120,10 +127,66 @@ describe('guest over HTTP', () => {
     const server = await startGuest({ token: 'secret' });
 
     const unauthorized = httpMachineHandle(`http://127.0.0.1:${server.port}`);
-    await expect(unauthorized.manifest()).rejects.toThrow(/401/);
+    const error = await unauthorized.manifest().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MachineAuthError);
+    expect((error as Error).message).toMatch(/401/);
+    expect(isTransportFailure(error)).toBe(false); // never retried or restarted
 
     const authorized = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'secret' });
     await expect(authorized.call('./math', 'add', [1, 1])).resolves.toBe(2);
+  });
+
+  test('a guest answering 413 surfaces a non-retriable request error', async () => {
+    const server = await startGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+
+    // Push past the guest's 5 MB body cap so it deliberately answers 413.
+    const oversized = 'x'.repeat(6 * 1024 * 1024);
+    const error = (await handle
+      .call('./math', 'add', [oversized, 1])
+      .catch((e: unknown) => e)) as MachineRequestError;
+    expect(error).toBeInstanceOf(MachineRequestError);
+    expect(error.status).toBe(413);
+    expect(isTransportFailure(error)).toBe(false);
+  });
+
+  test('a stream that ends without the done marker is a transport failure', async () => {
+    // A server that drops the connection mid-stream, before {"done": true}.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write('{"chunk":1}\n{"chunk":2}\n');
+      res.end(); // no done marker
+    });
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port)),
+    );
+    servers.push({ port, close: () => new Promise((r) => server.close(() => r())) });
+
+    const handle = httpMachineHandle(`http://127.0.0.1:${port}`);
+    const consume = async () => {
+      const received: unknown[] = [];
+      for await (const chunk of handle.callStream!('./math', 'countdown', [2])) {
+        received.push(chunk);
+      }
+      return received;
+    };
+    const error = await consume().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MachineTransportError);
+    expect((error as Error).message).toMatch(/done marker/);
+  });
+
+  test('guest stacks stay private unless exposeStacks is opted into', async () => {
+    const closed = await startGuest();
+    const closedHandle = httpMachineHandle(`http://127.0.0.1:${closed.port}`);
+    const hidden = (await closedHandle.call('./math', 'boom', []).catch((e: unknown) => e)) as GuestError;
+    expect(hidden).toBeInstanceOf(GuestError);
+    expect(hidden.remoteStack).toBeUndefined();
+
+    const open = await startGuest({ exposeStacks: true });
+    const openHandle = httpMachineHandle(`http://127.0.0.1:${open.port}`);
+    const shown = (await openHandle.call('./math', 'boom', []).catch((e: unknown) => e)) as GuestError;
+    expect(shown).toBeInstanceOf(GuestError);
+    expect(shown.remoteStack).toContain('TypeError: guest exploded');
   });
 
   test('health endpoint responds without auth (liveness probes)', async () => {
@@ -224,6 +287,24 @@ describe('guest runtime naming validation', () => {
         exposes: { './math': { 'do-thing': () => 0 } },
       }),
     ).toThrow(/do-thing.*JS identifier/s);
+  });
+
+  test('throws for an expose path that is a JS reserved word', () => {
+    expect(() =>
+      createGuestRuntime({
+        name: 'bad_guest',
+        exposes: { './delete': { it: () => 0 } },
+      }),
+    ).toThrow(/non-reserved JS identifier/);
+  });
+
+  test('throws for a function name that is a JS reserved word', () => {
+    expect(() =>
+      createGuestRuntime({
+        name: 'bad_guest',
+        exposes: { './math': { class: () => 0 } },
+      }),
+    ).toThrow(/"class".*non-reserved/s);
   });
 
   test('accepts valid expose paths and function names', () => {

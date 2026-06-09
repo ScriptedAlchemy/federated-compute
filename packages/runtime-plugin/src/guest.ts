@@ -1,6 +1,7 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import http from 'node:http';
-import { generateBindings } from './bindgen.js';
+import { generateBindings, isJsReservedWord } from './bindgen.js';
 import { GuestError } from './errors.js';
 import type { FunctionSignature, MachineExposeManifest } from './types.js';
 
@@ -72,17 +73,17 @@ const FUNCTION_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 export function createGuestRuntime(config: GuestConfig): GuestRuntime {
   const modules = new Map<string, Map<string, NormalizedFn>>();
   for (const [path, fns] of Object.entries(config.exposes)) {
-    if (!EXPOSE_PATH_RE.test(path)) {
+    if (!EXPOSE_PATH_RE.test(path) || isJsReservedWord(path.slice(2))) {
       throw new Error(
-        `invalid expose path "${path}": expose paths must be './' followed by a valid JS identifier ` +
+        `invalid expose path "${path}": expose paths must be './' followed by a valid, non-reserved JS identifier ` +
           `(e.g. './math') — the './' prefix is required — so generated bindings and property access stay consistent`,
       );
     }
     const mod = new Map<string, NormalizedFn>();
     for (const [name, entry] of Object.entries(fns)) {
-      if (!FUNCTION_NAME_RE.test(name)) {
+      if (!FUNCTION_NAME_RE.test(name) || isJsReservedWord(name)) {
         throw new Error(
-          `invalid function name "${name}" in expose "${path}": function names must be valid JS identifiers ` +
+          `invalid function name "${name}" in expose "${path}": function names must be valid, non-reserved JS identifiers ` +
             `so generated bindings and property access stay consistent`,
         );
       }
@@ -153,18 +154,30 @@ export interface ServeGuestOptions {
   hostname?: string;
   /** When set, requests must carry `Authorization: Bearer <token>`. */
   token?: string;
+  /**
+   * Include guest stack traces in error envelopes. Default false: stacks
+   * reveal file paths and internals, so sending them is a deliberate choice.
+   */
+  exposeStacks?: boolean;
 }
 
-function errorBody(error: unknown) {
+function errorBody(error: unknown, exposeStacks: boolean) {
   const err = error as Error;
   return {
     ok: false,
     error: {
       message: err?.message ?? String(error),
       type: err?.name ?? 'Error',
-      ...(err?.stack ? { stack: err.stack } : {}),
+      ...(exposeStacks && err?.stack ? { stack: err.stack } : {}),
     },
   };
+}
+
+/** Constant-time bearer-token check (hashing first equalizes lengths). */
+function authorized(header: string | undefined, token: string): boolean {
+  const expected = createHash('sha256').update(`Bearer ${token}`).digest();
+  const presented = createHash('sha256').update(header ?? '').digest();
+  return timingSafeEqual(expected, presented);
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -179,10 +192,15 @@ async function readJsonBody(
   for await (const chunk of req) {
     bytes += (chunk as Buffer).length;
     if (bytes > MAX_BODY_BYTES) {
-      res.writeHead(413, { 'content-type': 'application/json' });
+      // connection: close — the request will never complete, so the socket
+      // cannot be reused; without it the connection lingers half-open.
+      res.writeHead(413, { 'content-type': 'application/json', connection: 'close' });
       res.end(
         JSON.stringify({ ok: false, error: { message: 'payload too large', type: 'PayloadError' } }),
       );
+      // Drain the rest of the upload so the client can read the 413 instead
+      // of stalling on a back-pressured socket.
+      req.resume();
       return undefined;
     }
     chunks.push(chunk as Buffer);
@@ -197,6 +215,7 @@ async function readJsonBody(
  */
 export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
   const hostname = opts.hostname ?? '127.0.0.1';
+  const exposeStacks = opts.exposeStacks ?? false;
   const guestName = guest.manifest().name;
 
   const server = http.createServer(async (req, res) => {
@@ -206,7 +225,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         res.end(JSON.stringify({ ok: true, name: guestName }));
         return;
       }
-      if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
+      if (opts.token && !authorized(req.headers.authorization, opts.token)) {
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized', type: 'AuthError' } }));
         return;
@@ -276,7 +295,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
             if (!closed.signal.aborted) await write(`${JSON.stringify({ done: true })}\n`);
           } catch (error) {
             if (!closed.signal.aborted) {
-              await write(`${JSON.stringify({ error: errorBody(error).error })}\n`);
+              await write(`${JSON.stringify({ error: errorBody(error, exposeStacks).error })}\n`);
             }
           }
           res.end();
@@ -289,7 +308,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
           res.end(JSON.stringify({ ok: true, result }));
         } catch (error) {
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(errorBody(error)));
+          res.end(JSON.stringify(errorBody(error, exposeStacks)));
         }
         return;
       }
@@ -297,7 +316,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
       res.end();
     } catch (error) {
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(errorBody(error)));
+      res.end(JSON.stringify(errorBody(error, exposeStacks)));
     }
   });
 

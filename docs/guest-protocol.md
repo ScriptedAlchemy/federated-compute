@@ -15,7 +15,13 @@ If the machine was deployed with a token (`MACHINEN_TOKEN` env var by
 convention), every request except `/mf/health` must carry
 `Authorization: Bearer <token>`. Unauthenticated requests get `401`. Guests
 must bind loopback by default; only deliberate deployment exposes them
-further.
+further. Guests should compare tokens in constant time (the reference guest
+hashes both sides and uses `timingSafeEqual`).
+
+On the host side the token travels out-of-band: `parseMachineEntry` strips
+`?token=` into `spec.auth` so cache keys, hook payloads, and error messages
+never carry credentials. Hosts surface a guest's `401` as `MachineAuthError`
+— never retried and never treated as a machine crash.
 
 ## `GET /mf/health`
 
@@ -125,11 +131,24 @@ Request body (guests should cap bodies, 5 MB reference; respond `413` beyond):
 { "ok": false, "error": { "message": "...", "type": "TypeError", "stack": "..." } }
 ```
 
-`type` is the guest-side error class; `stack` is optional. The host surfaces
-these as `GuestError` (with `remoteType` / `remoteStack`) — never retried.
+`type` is the guest-side error class; `stack` is optional and off by default
+in the reference guest — stacks reveal file paths and internals, so serving
+them is opt-in (`ServeGuestOptions.exposeStacks`). The host surfaces these as
+`GuestError` (with `remoteType` / `remoteStack`) — never retried.
 Transport failures (`MachineTransportError`, including `MachineTimeoutError`)
 are subject to the host's call policy: deadline, retries with backoff, circuit
 breaker, crash hooks, and optional automatic restart.
+
+### Status classification
+
+A 4xx status is a deliberate answer from a live guest, not a transport
+failure. Hosts must not retry, restart, or crash-account it:
+
+- `401` → `MachineAuthError` (bad/missing bearer token).
+- Other 4xx (e.g. `413` payload too large) → `MachineRequestError` carrying
+  the status.
+- Only 5xx and network-level errors (connection refused/reset, timeouts) are
+  transport failures and flow through the retry/breaker/restart policy.
 
 ### Streaming response (`application/x-ndjson`)
 
@@ -144,6 +163,26 @@ One JSON object per line:
 
 A guest-side failure mid-stream emits `{"error": {"message": "...", "type": "..."}}`
 and ends the stream.
+
+The terminator is mandatory: every stream must end with a `done` or `error`
+line. Hosts treat a body that ends without one as a truncated response —
+a `MachineTransportError` — since a cut connection is otherwise
+indistinguishable from a complete stream.
+
+### Call policy for streams
+
+Streams share the per-machine circuit breaker with unary calls, with reduced
+scope:
+
+- An **open circuit fails the stream fast at start** (`MachineCircuitOpenError`),
+  before the machine is contacted.
+- A transport failure at any point (start or mid-stream, including a missing
+  `done` marker) **counts toward the circuit breaker** and triggers the same
+  crash bookkeeping (`onMachineCrash`, machine eviction) as unary calls.
+- There is **no mid-stream retry, deadline, or automatic restart**: chunks
+  already yielded cannot be un-consumed, so replaying a stream is not safe for
+  the host to decide. The error propagates to the consumer, who re-invokes if
+  the operation is idempotent. (`restartOnCrash` applies only to unary calls.)
 
 ## Operational requirements
 

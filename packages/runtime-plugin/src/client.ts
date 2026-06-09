@@ -126,7 +126,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     }
     const spec = parseMachineEntry(name, base);
     const token = options.token ?? process.env.MACHINEN_TOKEN;
-    if (token && !spec.params.has('token')) spec.params.set('token', token);
+    if (token && !spec.auth?.token) spec.auth = { token };
     // Priority: explicit ?version= on the entry > client options.versions > module pin.
     const version = options.versions?.[name] ?? opts?.version;
     if (version && !spec.params.has('version')) spec.params.set('version', version);

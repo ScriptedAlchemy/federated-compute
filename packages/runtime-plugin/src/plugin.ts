@@ -48,9 +48,26 @@ export type MachinenPlugin = ModuleFederationRuntimePlugin & {
 };
 
 interface BootedMachine {
+  /** The raw entry string this machine is cached under (may carry auth). */
+  key: string;
+  /** Boot generation for the key; guards crash() against evicting a newer boot. */
+  generation: number;
   spec: MachineSpec;
   handle: MachineHandle;
   manifest: MachineExposeManifest;
+}
+
+function validateManifest(spec: MachineSpec, manifest: MachineExposeManifest): void {
+  if (manifest?.protocol !== 3) {
+    throw new Error(
+      `[machinen-plugin] machine "${spec.remoteName}" speaks guest protocol ${String(manifest?.protocol)}, expected 3`,
+    );
+  }
+  if (!manifest.exposes || typeof manifest.exposes !== 'object') {
+    throw new Error(
+      `[machinen-plugin] machine "${spec.remoteName}" manifest has no "exposes" map`,
+    );
+  }
 }
 
 function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void {
@@ -81,6 +98,8 @@ function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void 
 export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
   const machineHooks = createMachineHooks();
   const machines = new Map<string, Promise<BootedMachine>>();
+  /** Latest boot generation per entry key; crash() only evicts its own generation. */
+  const generations = new Map<string, number>();
   const breakers = new Map<string, CircuitBreaker>();
   const recorders = new Map<string, MetricsRecorder>();
   /** Known machine remotes (captured from init/registerRemotes) for warm(). */
@@ -121,36 +140,59 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     const cached = machines.get(entry);
     if (cached) return cached;
 
-    const booting = withTimeout(
-      (async () => {
-        const spec = parseMachineEntry(remoteName, entry);
-        await machineHooks.beforeMachineBoot.emit({ spec });
-        const handle = await options.driver.boot(spec);
+    const generation = (generations.get(entry) ?? 0) + 1;
+    generations.set(entry, generation);
+
+    const boot = (async (): Promise<BootedMachine> => {
+      const spec = parseMachineEntry(remoteName, entry);
+      await machineHooks.beforeMachineBoot.emit({ spec });
+      const handle = await options.driver.boot(spec);
+      try {
         const manifest = await handle.manifest();
+        validateManifest(spec, manifest);
         checkVersion(spec, manifest);
         await machineHooks.onMachineReady.emit({ spec, handle, manifest });
-        return { spec, handle, manifest };
-      })(),
-      bootTimeoutMs,
-      `boot of machine "${remoteName}"`,
-    );
-    booting.catch(() => machines.delete(entry));
+        return { key: entry, generation, spec, handle, manifest };
+      } catch (error) {
+        void handle.dispose?.().catch(() => {});
+        throw error;
+      }
+    })();
+
+    const booting = withTimeout(boot, bootTimeoutMs, `boot of machine "${remoteName}"`);
+    booting.catch(() => {
+      if (machines.get(entry) === booting) machines.delete(entry);
+      // A boot that lost the timeout race may still complete later; nobody
+      // will ever use that handle, so dispose it instead of orphaning it.
+      void boot.then((machine) => machine.handle.dispose?.()).catch(() => {});
+    });
     machines.set(entry, booting);
     return booting;
   }
 
   async function crash(machine: BootedMachine, error: unknown): Promise<void> {
-    machines.delete(machine.spec.entry);
+    // Only evict the cache entry while it still belongs to this boot: a
+    // concurrent failure may have crashed and rebooted this key already, and
+    // deleting blindly would orphan the live rebooted machine.
+    if (generations.get(machine.key) === machine.generation) {
+      machines.delete(machine.key);
+    }
+    // The dead/wedged handle is never reused — release its resources.
+    void machine.handle.dispose?.().catch(() => {});
     recorder(machine.spec.remoteName).record('crashes');
     await machineHooks.onMachineCrash.emit({ spec: machine.spec, error });
   }
 
   function bindUnary(remoteName: string, entry: string, modulePath: string, fn: string) {
     const callOnce = async (machine: BootedMachine, args: unknown[]): Promise<unknown> => {
+      // One controller per attempt: when the deadline trips, the in-flight
+      // request is aborted instead of left running against the machine.
+      const attempt = new AbortController();
       return withTimeout(
-        machine.handle.call(modulePath, fn, args),
+        machine.handle.call(modulePath, fn, args, { signal: attempt.signal }),
         policy.timeoutMs,
         `${modulePath}#${fn} on "${remoteName}"`,
+        attempt,
       );
     };
 
@@ -226,6 +268,15 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
   function bindStream(remoteName: string, entry: string, modulePath: string, fn: string) {
     return (...args: unknown[]): AsyncIterable<unknown> => {
       return (async function* () {
+        // Streams share the unary circuit breaker: an open circuit fails the
+        // stream fast at start, and stream transport failures feed back into
+        // it. There is no mid-stream retry or restart — consumers re-invoke.
+        const gate = breaker(entry);
+        if ((gate?.gate() ?? 'closed') === 'open') {
+          throw new MachineCircuitOpenError(
+            `[machinen-plugin] circuit for machine "${remoteName}" is open; failing fast`,
+          );
+        }
         const machine = await ensureMachine(remoteName, entry);
         if (!machine.handle.callStream) {
           throw new Error(
@@ -234,14 +285,23 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         }
         const ctx: CallContext = { spec: machine.spec, module: modulePath, fn, args };
         await machineHooks.beforeCall.emit(ctx);
-        recorder(remoteName).record('calls');
+        const rec = recorder(remoteName);
+        rec.record('calls');
         try {
           yield* machine.handle.callStream(modulePath, fn, ctx.args);
+          if (gate?.onSuccess()) {
+            await machineHooks.onCircuitClose.emit({ spec: machine.spec });
+          }
         } catch (error) {
           if (isTransportFailure(error)) {
+            if ((error as Error).name === 'MachineTimeoutError') rec.record('timeouts');
+            if (gate?.onTransportFailure()) {
+              rec.record('circuitOpens');
+              await machineHooks.onCircuitOpen.emit({ spec: machine.spec });
+            }
             await crash(machine, error);
           } else {
-            recorder(remoteName).record('errors');
+            rec.record('errors');
             await machineHooks.onMachineError.emit({ ...ctx, error });
           }
           throw error;
@@ -259,12 +319,14 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         `[machinen-plugin] machine "${machine.spec.remoteName}" does not expose "${key}" (available: ${available})`,
       );
     }
-    const { remoteName, entry } = machine.spec;
+    // Bindings capture the raw cache key (not the redacted spec.entry) so a
+    // post-crash reboot re-parses the original entry, auth included.
+    const { remoteName } = machine.spec;
     const moduleExports: Record<string, unknown> = { __esModule: true };
     for (const [fn, signature] of Object.entries(signatures)) {
       moduleExports[fn] = signature.stream
-        ? bindStream(remoteName, entry, key, fn)
-        : bindUnary(remoteName, entry, key, fn);
+        ? bindStream(remoteName, machine.key, key, fn)
+        : bindUnary(remoteName, machine.key, key, fn);
     }
     return moduleExports;
   }
@@ -339,11 +401,16 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     async disposeMachines() {
       const booted = await Promise.allSettled(machines.values());
       machines.clear();
-      for (const result of booted) {
-        if (result.status === 'fulfilled') {
-          await result.value.handle.dispose?.();
-        }
-      }
+      generations.clear();
+      breakers.clear();
+      recorders.clear();
+      knownRemotes.clear();
+      // allSettled: one throwing dispose must not abandon the rest.
+      await Promise.allSettled(
+        booted
+          .filter((r): r is PromiseFulfilledResult<BootedMachine> => r.status === 'fulfilled')
+          .map((r) => r.value.handle.dispose?.()),
+      );
     },
 
     // Custom remote loading strategy: claim machinen entries and return a
@@ -354,10 +421,14 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       };
       if (!remoteInfo?.entry || !isMachineEntry(remoteInfo.entry)) return undefined;
 
-      const machine = await ensureMachine(remoteInfo.name, remoteInfo.entry);
+      // Boot (or attach) now so load-time failures surface here, but have
+      // get() re-resolve through the cache: after a crash + reboot, modules
+      // must build from the current machine's manifest, not a stale capture.
+      await ensureMachine(remoteInfo.name, remoteInfo.entry);
       const container = {
         init: async () => undefined,
         get: async (exposePath: string) => {
+          const machine = await ensureMachine(remoteInfo.name, remoteInfo.entry);
           const moduleExports = buildModule(machine, exposePath);
           return () => moduleExports;
         },

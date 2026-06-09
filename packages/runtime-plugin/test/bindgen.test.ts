@@ -63,6 +63,19 @@ describe('generateBindings', () => {
     expect(src).toContain("'./strings', { version: '^1.0.0' }");
     expect(src).not.toContain("'./strings', { version: '^1.0.0', streams");
   });
+
+  test('reserved-word expose paths from foreign manifests still emit legal export names', () => {
+    // Foreign guests may not run our validation; bindgen must not emit
+    // `export const delete = ...`.
+    const src = generateBindings({
+      name: 'edge_machine',
+      protocol: 3,
+      version: '1.0.0',
+      exposes: { './delete': { it: { params: [], returns: 'boolean' } } },
+    });
+    expect(src).toContain('export const delete_ = machineModule<EdgeMachineDelete>');
+    expect(src).not.toMatch(/export const delete =/);
+  });
 });
 
 describe('fetchBindingsSource (host-side, network only)', () => {

@@ -1,4 +1,9 @@
-import { GuestError, MachineTransportError } from '../errors.js';
+import {
+  GuestError,
+  MachineAuthError,
+  MachineRequestError,
+  MachineTransportError,
+} from '../errors.js';
 import type { MachineDriver, MachineExposeManifest, MachineHandle } from '../types.js';
 
 interface ErrorEnvelope {
@@ -12,6 +17,19 @@ function guestError(envelope: ErrorEnvelope): GuestError {
     remoteType: envelope.type,
     remoteStack: envelope.stack,
   });
+}
+
+/**
+ * Classify a non-2xx guest response. 4xx are deliberate answers from a live
+ * guest (401 auth, 413 too large...) — never transport failures, so they are
+ * not retried and never trigger restarts. Only 5xx means "machine is gone".
+ */
+function statusError(what: string, status: number): Error {
+  if (status === 401) return new MachineAuthError(`${what} rejected: 401 unauthorized`);
+  if (status >= 400 && status < 500) {
+    return new MachineRequestError(`${what} rejected by the guest: ${status}`, status);
+  }
+  return new MachineTransportError(`${what} failed: ${status}`);
 }
 
 /**
@@ -30,14 +48,14 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
       body: JSON.stringify(body),
       signal,
     });
-    if (!res.ok) throw new MachineTransportError(`call request failed: ${res.status}`);
+    if (!res.ok) throw statusError('call request', res.status);
     return res;
   }
 
   return {
     async manifest(): Promise<MachineExposeManifest> {
       const res = await fetch(`${base}/mf-manifest.json`, { headers });
-      if (!res.ok) throw new MachineTransportError(`manifest request failed: ${res.status}`);
+      if (!res.ok) throw statusError('manifest request', res.status);
       return (await res.json()) as MachineExposeManifest;
     },
 
@@ -76,8 +94,8 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
       return body.result;
     },
 
-    async *callStream(modulePath, fn, args) {
-      const res = await post({ module: modulePath, fn, args });
+    async *callStream(modulePath, fn, args, opts) {
+      const res = await post({ module: modulePath, fn, args }, opts?.signal);
       if (!res.body) throw new MachineTransportError('stream response had no body');
 
       const decoder = new TextDecoder();
@@ -100,6 +118,11 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
           yield event.chunk;
         }
       }
+      // A complete stream always ends with the done (or error) marker; a body
+      // that just stops means the connection was cut mid-stream.
+      throw new MachineTransportError(
+        `stream of ${modulePath}#${fn} ended without a done marker (truncated response)`,
+      );
     },
   };
 }
@@ -118,7 +141,7 @@ export function httpAttachDriver(): MachineDriver {
           `[machinen-plugin] httpAttachDriver expects a machinen+http(s):// entry, got "${spec.entry}"`,
         );
       }
-      return httpMachineHandle(spec.url, { token: spec.params.get('token') ?? undefined });
+      return httpMachineHandle(spec.url, { token: spec.auth?.token });
     },
   };
 }

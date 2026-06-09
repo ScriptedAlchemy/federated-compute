@@ -30,6 +30,30 @@ export class MachineTimeoutError extends MachineTransportError {
 }
 
 /**
+ * The guest answered a request deliberately with a 4xx status (e.g. 413
+ * payload too large). NOT a transport failure: the machine is alive and
+ * said no, so retrying or rebooting cannot help.
+ */
+export class MachineRequestError extends Error {
+  /** The HTTP status the guest answered with. */
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'MachineRequestError';
+    this.status = status;
+  }
+}
+
+/** The guest rejected the request's credentials (401). Never retried. */
+export class MachineAuthError extends MachineRequestError {
+  constructor(message: string) {
+    super(message, 401);
+    this.name = 'MachineAuthError';
+  }
+}
+
+/**
  * The machine's circuit is open: recent calls kept failing at the transport
  * level, so calls fail fast without hitting the machine. Deliberately NOT a
  * transport error — it must not feed back into the breaker or trigger

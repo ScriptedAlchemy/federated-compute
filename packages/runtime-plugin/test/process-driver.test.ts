@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { resolveBootCommand } from '../src/drivers/process.js';
+import { processDriver, resolveBootCommand } from '../src/drivers/process.js';
+import { parseMachineEntry } from '../src/types.js';
 
 describe('resolveBootCommand', () => {
   test('node images run with the current node executable', () => {
@@ -31,5 +32,18 @@ describe('resolveBootCommand', () => {
       'ruby',
       '/images/guest.rb',
     ]);
+  });
+});
+
+describe('processDriver boot failures', () => {
+  test('a missing guest binary rejects cleanly instead of crashing the host', async () => {
+    const driver = processDriver({
+      commands: { '.ghost': (image) => ['no-such-binary-anywhere-9f1c', image] },
+    });
+    const spec = parseMachineEntry('ghost', 'machinen://guest.ghost');
+
+    // Without a child 'error' listener this is an uncaught ENOENT that takes
+    // the whole host process down; it must surface through the boot promise.
+    await expect(driver.boot(spec)).rejects.toThrow(/failed to spawn guest process/);
   });
 });

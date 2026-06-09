@@ -2,7 +2,9 @@ export { machinenPlugin, type MachinenPlugin, type MachinenPluginOptions } from 
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
 export {
   GuestError,
+  MachineAuthError,
   MachineCircuitOpenError,
+  MachineRequestError,
   MachineTimeoutError,
   MachineTransportError,
   MachineVersionError,
@@ -15,7 +17,7 @@ export {
   type CircuitBreakerConfig,
   type MachineMetrics,
 } from './policy.js';
-export { fetchBindingsSource, generateBindings } from './bindgen.js';
+export { fetchBindingsSource, generateBindings, isJsReservedWord } from './bindgen.js';
 export {
   configureMachines,
   createMachines,
@@ -33,8 +35,10 @@ export {
   isMachineEntry,
   normalizeExpose,
   parseMachineEntry,
+  redactEntry,
   stripExposePrefix,
   type CallContext,
+  type CallOptions,
   type FunctionSignature,
   type MachineDriver,
   type MachineExposeManifest,
