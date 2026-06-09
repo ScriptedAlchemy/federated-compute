@@ -1,6 +1,17 @@
 import type { ModuleFederationRuntimePlugin } from '@module-federation/runtime';
-import { isTransportFailure } from './errors.js';
+import semverSatisfies from 'semver/functions/satisfies.js';
+import semverValid from 'semver/functions/valid.js';
+import { isTransportFailure, MachineCircuitOpenError, MachineVersionError } from './errors.js';
 import { createMachineHooks, type MachineHooks } from './hooks.js';
+import {
+  CircuitBreaker,
+  DEFAULT_POLICY,
+  MetricsRecorder,
+  sleep,
+  withTimeout,
+  type CallPolicy,
+  type MachineMetrics,
+} from './policy.js';
 import {
   isMachineEntry,
   parseMachineEntry,
@@ -13,12 +24,20 @@ import {
 
 export interface MachinenPluginOptions {
   driver: MachineDriver;
-  /** Reboot the machine and retry once when a call hits a transport failure. */
+  /** Reboot the machine and retry once when a call exhausts transport retries. */
   restartOnCrash?: boolean;
+  /** Timeout for boot + manifest fetch. Default 30s. */
+  bootTimeoutMs?: number;
+  /** Per-call resilience policy (timeout, retries, circuit breaker). */
+  calls?: CallPolicy;
 }
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
   machineHooks: MachineHooks;
+  /** Pre-boot/attach all known machines (the preloadRemote analog). */
+  warm(remoteNames?: string[]): Promise<void>;
+  /** Per-machine call statistics. */
+  metrics(): Record<string, MachineMetrics>;
   /** Snapshot a booted machine by remote name (driver permitting). */
   snapshotMachine(remoteName: string): Promise<unknown>;
   /** Fork a booted machine by remote name (driver permitting). */
@@ -37,30 +56,87 @@ function normalizeExpose(path: string): string {
   return path.startsWith('.') ? path : `./${path}`;
 }
 
+function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void {
+  const required = spec.params.get('version');
+  if (!required) return;
+  const actual = manifest.version;
+  if (!actual || !semverValid(actual)) {
+    throw new MachineVersionError(
+      `[machinen-plugin] entry for "${spec.remoteName}" requires version "${required}" but the machine manifest has no valid version (got "${actual}")`,
+    );
+  }
+  if (!semverSatisfies(actual, required)) {
+    throw new MachineVersionError(
+      `[machinen-plugin] machine "${spec.remoteName}" version mismatch: required "${required}", machine reports "${actual}"`,
+    );
+  }
+}
+
 /**
  * Module Federation runtime plugin that resolves `machinen://` (boot from
  * image) and `machinen+http://` (attach to a deployed machine) remotes to
  * machines instead of JS bundles. `loadRemote('machine/module')` yields an
- * object of async function bindings; each invocation is forwarded into the
- * machine through the driver. Federation is the multiplexer and transport —
- * the host never touches a machine's internals.
+ * object of typed async function bindings; each invocation is forwarded into
+ * the machine through the driver with deadline/retry/circuit-breaker policy.
+ * Federation is the multiplexer and transport — the host never touches a
+ * machine's internals.
  */
 export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
   const machineHooks = createMachineHooks();
   const machines = new Map<string, Promise<BootedMachine>>();
+  const breakers = new Map<string, CircuitBreaker>();
+  const recorders = new Map<string, MetricsRecorder>();
+  /** Known machine remotes (captured from init/registerRemotes) for warm(). */
+  const knownRemotes = new Map<string, string>();
+
+  const policy = { ...DEFAULT_POLICY, ...options.calls };
+  const bootTimeoutMs = options.bootTimeoutMs ?? 30_000;
+
+  function recorder(remoteName: string): MetricsRecorder {
+    let rec = recorders.get(remoteName);
+    if (!rec) {
+      rec = new MetricsRecorder();
+      recorders.set(remoteName, rec);
+    }
+    return rec;
+  }
+
+  function breaker(entry: string): CircuitBreaker | undefined {
+    if (policy.circuitBreaker === false) return undefined;
+    let b = breakers.get(entry);
+    if (!b) {
+      b = new CircuitBreaker(policy.circuitBreaker);
+      breakers.set(entry, b);
+    }
+    return b;
+  }
+
+  function rememberRemotes(remotes: { name?: string; entry?: string }[] | undefined): void {
+    for (const remote of remotes ?? []) {
+      if (remote.name && remote.entry && isMachineEntry(remote.entry)) {
+        knownRemotes.set(remote.name, remote.entry);
+      }
+    }
+  }
 
   function ensureMachine(remoteName: string, entry: string): Promise<BootedMachine> {
+    knownRemotes.set(remoteName, entry);
     const cached = machines.get(entry);
     if (cached) return cached;
 
-    const booting = (async () => {
-      const spec = parseMachineEntry(remoteName, entry);
-      await machineHooks.beforeMachineBoot.emit({ spec });
-      const handle = await options.driver.boot(spec);
-      const manifest = await handle.manifest();
-      await machineHooks.onMachineReady.emit({ spec, handle });
-      return { spec, handle, manifest };
-    })();
+    const booting = withTimeout(
+      (async () => {
+        const spec = parseMachineEntry(remoteName, entry);
+        await machineHooks.beforeMachineBoot.emit({ spec });
+        const handle = await options.driver.boot(spec);
+        const manifest = await handle.manifest();
+        checkVersion(spec, manifest);
+        await machineHooks.onMachineReady.emit({ spec, handle });
+        return { spec, handle, manifest };
+      })(),
+      bootTimeoutMs,
+      `boot of machine "${remoteName}"`,
+    );
     booting.catch(() => machines.delete(entry));
     machines.set(entry, booting);
     return booting;
@@ -68,39 +144,85 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
 
   async function crash(machine: BootedMachine, error: unknown): Promise<void> {
     machines.delete(machine.spec.entry);
+    recorder(machine.spec.remoteName).record('crashes');
     await machineHooks.onMachineCrash.emit({ spec: machine.spec, error });
   }
 
   function bindUnary(remoteName: string, entry: string, modulePath: string, fn: string) {
-    const invoke = async (machine: BootedMachine, args: unknown[]): Promise<unknown> => {
-      const ctx: CallContext = { spec: machine.spec, module: modulePath, fn, args };
+    const callOnce = async (machine: BootedMachine, args: unknown[]): Promise<unknown> => {
+      return withTimeout(
+        machine.handle.call(modulePath, fn, args),
+        policy.timeoutMs,
+        `${modulePath}#${fn} on "${remoteName}"`,
+      );
+    };
+
+    return async (...callArgs: unknown[]): Promise<unknown> => {
+      const gate = breaker(entry);
+      const state = gate?.gate() ?? 'closed';
+      if (state === 'open') {
+        throw new MachineCircuitOpenError(
+          `[machinen-plugin] circuit for machine "${remoteName}" is open; failing fast`,
+        );
+      }
+
+      const machine = await ensureMachine(remoteName, entry);
+      const ctx: CallContext = { spec: machine.spec, module: modulePath, fn, args: callArgs };
       await machineHooks.beforeCall.emit(ctx);
+      const rec = recorder(remoteName);
+      rec.record('calls');
       const start = performance.now();
-      try {
-        const result = await machine.handle.call(modulePath, fn, ctx.args);
+
+      let lastError: unknown;
+      for (let attempt = 0; attempt <= policy.retries; attempt++) {
+        if (attempt > 0) {
+          rec.record('retries');
+          await sleep(policy.backoffMs * 2 ** (attempt - 1));
+        }
+        try {
+          const result = await callOnce(machine, ctx.args);
+          if (gate?.onSuccess()) {
+            await machineHooks.onCircuitClose.emit({ spec: machine.spec });
+          }
+          rec.recordDuration(performance.now() - start);
+          await machineHooks.afterCall.emit({
+            ...ctx,
+            result,
+            durationMs: performance.now() - start,
+          });
+          return result;
+        } catch (error) {
+          if (!isTransportFailure(error)) {
+            rec.record('errors');
+            await machineHooks.onMachineError.emit({ ...ctx, error });
+            throw error;
+          }
+          lastError = error;
+          if ((error as Error).name === 'MachineTimeoutError') rec.record('timeouts');
+          if (gate?.onTransportFailure()) {
+            rec.record('circuitOpens');
+            await machineHooks.onCircuitOpen.emit({ spec: machine.spec });
+          }
+        }
+      }
+
+      // Transport retries exhausted: the machine is gone.
+      await crash(machine, lastError);
+      if (options.restartOnCrash) {
+        const rebooted = await ensureMachine(remoteName, entry);
+        const result = await callOnce(rebooted, ctx.args);
+        if (gate?.onSuccess()) {
+          await machineHooks.onCircuitClose.emit({ spec: rebooted.spec });
+        }
+        rec.recordDuration(performance.now() - start);
         await machineHooks.afterCall.emit({
           ...ctx,
           result,
           durationMs: performance.now() - start,
         });
         return result;
-      } catch (error) {
-        if (isTransportFailure(error)) {
-          await crash(machine, error);
-          if (options.restartOnCrash) {
-            const rebooted = await ensureMachine(remoteName, entry);
-            return invoke(rebooted, ctx.args);
-          }
-          throw error;
-        }
-        await machineHooks.onMachineError.emit({ ...ctx, error });
-        throw error;
       }
-    };
-
-    return async (...args: unknown[]): Promise<unknown> => {
-      const machine = await ensureMachine(remoteName, entry);
-      return invoke(machine, args);
+      throw lastError;
     };
   }
 
@@ -115,12 +237,14 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         }
         const ctx: CallContext = { spec: machine.spec, module: modulePath, fn, args };
         await machineHooks.beforeCall.emit(ctx);
+        recorder(remoteName).record('calls');
         try {
           yield* machine.handle.callStream(modulePath, fn, ctx.args);
         } catch (error) {
           if (isTransportFailure(error)) {
             await crash(machine, error);
           } else {
+            recorder(remoteName).record('errors');
             await machineHooks.onMachineError.emit({ ...ctx, error });
           }
           throw error;
@@ -159,6 +283,29 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
   return {
     name: 'machinen-plugin',
     machineHooks,
+
+    // Capture machine remotes declared at init so warm() can pre-boot them.
+    beforeInit(args) {
+      rememberRemotes(args.userOptions?.remotes as { name?: string; entry?: string }[]);
+      return args;
+    },
+
+    async warm(remoteNames) {
+      const names = remoteNames ?? [...knownRemotes.keys()];
+      await Promise.all(
+        names.map((name) => {
+          const entry = knownRemotes.get(name);
+          if (!entry) {
+            throw new Error(`[machinen-plugin] cannot warm unknown machine "${name}"`);
+          }
+          return ensureMachine(name, entry);
+        }),
+      );
+    },
+
+    metrics() {
+      return Object.fromEntries([...recorders].map(([name, rec]) => [name, rec.snapshot()]));
+    },
 
     async snapshotMachine(remoteName) {
       const machine = await findMachine(remoteName);

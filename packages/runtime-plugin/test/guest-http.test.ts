@@ -41,12 +41,15 @@ async function startGuest(opts: { token?: string } = {}) {
 }
 
 describe('guest over HTTP', () => {
-  test('manifest is protocol v2 with signatures', async () => {
+  test('manifest is protocol v3 with version, metaData, and signatures', async () => {
     const server = await startGuest();
     const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
     const manifest = await handle.manifest();
 
-    expect(manifest.protocol).toBe(2);
+    expect(manifest.protocol).toBe(3);
+    expect(manifest.version).toBe('0.0.0');
+    expect(manifest.metaData?.runtime).toContain('node');
+    expect(manifest.metaData?.features).toContain('stream');
     expect(manifest.exposes['./math'].add).toEqual({
       params: [
         { name: 'a', type: 'number' },
@@ -90,5 +93,12 @@ describe('guest over HTTP', () => {
 
     const authorized = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'secret' });
     await expect(authorized.call('./math', 'add', [1, 1])).resolves.toBe(2);
+  });
+
+  test('health endpoint responds without auth (liveness probes)', async () => {
+    const server = await startGuest({ token: 'secret' });
+    const res = await fetch(`http://127.0.0.1:${server.port}/mf/health`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
   });
 });

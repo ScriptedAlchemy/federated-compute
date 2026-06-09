@@ -21,6 +21,7 @@ import java.util.function.Function;
 public class Main {
 
   static final String NAME = "java_machine";
+  static final String VERSION = "1.0.0";
   static final String TOKEN = System.getenv("MACHINEN_TOKEN");
 
   /** MF-style exposes: module path -> function name -> implementation. */
@@ -59,10 +60,16 @@ public class Main {
   public static void main(String[] args) throws IOException {
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "3802"));
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+    server.createContext("/mf-manifest.json", Main::handleManifest);
     server.createContext("/mf/manifest", Main::handleManifest);
+    server.createContext("/mf/health", Main::handleHealth);
     server.createContext("/mf/call", Main::handleCall);
     server.start();
     System.out.println("[remote-java] machine guest listening on 127.0.0.1:" + port);
+  }
+
+  static void handleHealth(HttpExchange ex) throws IOException {
+    send(ex, 200, Json.write(Map.of("ok", true, "name", NAME)));
   }
 
   static boolean unauthorized(HttpExchange ex) throws IOException {
@@ -83,7 +90,14 @@ public class Main {
     }
     Map<String, Object> exposes = new LinkedHashMap<>();
     SIGNATURES.forEach((path, fns) -> exposes.put(path, fns));
-    send(ex, 200, Json.write(Map.of("name", NAME, "protocol", 2, "exposes", exposes)));
+    send(ex, 200, Json.write(Map.of(
+        "name", NAME,
+        "protocol", 3,
+        "version", VERSION,
+        "metaData", Map.of(
+            "runtime", "OpenJDK " + System.getProperty("java.version"),
+            "features", List.of()),
+        "exposes", exposes)));
   }
 
   static void handleCall(HttpExchange ex) throws IOException {

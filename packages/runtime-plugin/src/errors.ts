@@ -21,6 +21,35 @@ export class MachineTransportError extends Error {
   }
 }
 
+/** A call exceeded the configured deadline. Counts as a transport failure. */
+export class MachineTimeoutError extends MachineTransportError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineTimeoutError';
+  }
+}
+
+/**
+ * The machine's circuit is open: recent calls kept failing at the transport
+ * level, so calls fail fast without hitting the machine. Deliberately NOT a
+ * transport error — it must not feed back into the breaker or trigger
+ * restarts.
+ */
+export class MachineCircuitOpenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineCircuitOpenError';
+  }
+}
+
+/** The machine's manifest version does not satisfy the entry's required range. */
+export class MachineVersionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineVersionError';
+  }
+}
+
 /** Heuristic: connection-level failures that mean "the machine is gone". */
 export function isTransportFailure(error: unknown): boolean {
   if (error instanceof MachineTransportError) return true;

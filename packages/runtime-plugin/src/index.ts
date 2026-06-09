@@ -1,6 +1,20 @@
 export { machinenPlugin, type MachinenPlugin, type MachinenPluginOptions } from './plugin.js';
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
-export { GuestError, MachineTransportError, isTransportFailure } from './errors.js';
+export {
+  GuestError,
+  MachineCircuitOpenError,
+  MachineTimeoutError,
+  MachineTransportError,
+  MachineVersionError,
+  isTransportFailure,
+} from './errors.js';
+export {
+  CircuitBreaker,
+  MetricsRecorder,
+  type CallPolicy,
+  type CircuitBreakerConfig,
+  type MachineMetrics,
+} from './policy.js';
 export { generateBindings } from './bindgen.js';
 export {
   isMachineEntry,

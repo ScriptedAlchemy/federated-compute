@@ -188,7 +188,8 @@ describe('machinenPlugin', () => {
           return {
             manifest: async () => ({
               name: remote.name,
-              protocol: 2 as const,
+              protocol: 3 as const,
+              version: '1.0.0',
               exposes: { './math': { add: { params: [], returns: 'number' } } },
             }),
             call: async (_m: string, _f: string, args: unknown[]) => {
@@ -228,7 +229,8 @@ describe('machinenPlugin', () => {
         boot: async () => ({
           manifest: async () => ({
             name: remote.name,
-            protocol: 2 as const,
+            protocol: 3 as const,
+            version: '1.0.0',
             exposes: { './math': { add: { params: [], returns: 'number' } } },
           }),
           call: async () => 0,

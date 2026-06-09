@@ -14,16 +14,25 @@ host never references machine source — federation entries are the multiplexer
 and the transport.
 
 ```ts
+const plugin = machinenPlugin({
+  driver: httpAttachDriver(),
+  restartOnCrash: true,
+  calls: { timeoutMs: 10_000, retries: 2, circuitBreaker: { threshold: 5, resetMs: 10_000 } },
+});
+
 const host = createInstance({
   name: 'host',
   remotes: [
-    // attach to an independently deployed machine — just an address
-    { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?token=...' },
+    // attach to an independently deployed machine — address + required version
+    { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?version=^1.0.0&token=...' },
     // or boot one from an image (driver owns the transport)
-    { name: 'compute_machine', entry: 'machinen://images/compute.tar.gz' },
+    { name: 'compute_machine', entry: 'machinen://images/compute.tar.gz?version=^1.0.0' },
   ],
-  plugins: [machinenPlugin({ driver: httpAttachDriver(), restartOnCrash: true })],
+  plugins: [plugin],
 });
+
+host.registerRemotes([...]); // machines can join dynamically, standard MF API
+await plugin.warm();         // preloadRemote analog: attach + validate before traffic
 
 // Types come from the machine's manifest via bindgen — not hand-written.
 const math = await host.loadRemote<ComputeMachineModules['./math']>('compute_machine/math');
@@ -31,20 +40,38 @@ await math.add(20, 22);                       // unary call into the machine
 for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under the hood)
 ```
 
+## How it follows Module Federation
+
+| MF concept | Machine analog |
+| --- | --- |
+| `mf-manifest.json` | `GET /mf-manifest.json` — typed manifest with `version`, `metaData`, `exposes` |
+| `requiredVersion` negotiation | entry `?version=^1.0.0` validated against the machine manifest (semver) |
+| runtime `loadEntry` plugin hook | claims machine entries, synthesizes virtual containers of function proxies |
+| `registerRemotes` / dynamic remotes | machines join at runtime through the same API |
+| `preloadRemote` | `plugin.warm()` pre-attaches and validates machines before traffic |
+| DTS type distribution | `machinen-bindgen --url <machine> --out types.ts` pulls types from deployed machines |
+| retry plugin / `errorLoadRemote` | call policy: deadlines, transport-only retries, circuit breaker, crash restart |
+
 ## How it works
 
 - The plugin implements the MF runtime's [`loadEntry` hook](https://module-federation.io/guide/runtime/runtime-plugins) —
   the documented extension point for new remote loading strategies. Machine
   entries never resolve to JS; the plugin resolves the machine, fetches its
-  typed manifest, and synthesizes a container of function proxies.
-- Machines speak the [guest protocol](docs/guest-protocol.md): two endpoints
-  (`GET /mf/manifest`, `POST /mf/call`), typed signatures, bearer-token auth,
-  NDJSON streaming, structured error envelopes. Any language qualifies:
-  `apps/remote` (Node), `apps/remote-java` (Java 21, zero deps),
-  `apps/remote-python` (Python 3, stdlib only).
-- **Bindgen**: `pnpm bindgen` fetches manifests and generates host-side
-  TypeScript interfaces (`apps/host/src/generated/`), so `loadRemote<T>` types
-  come from the machines themselves.
+  typed manifest, negotiates versions, and synthesizes a container of function
+  proxies governed by the call policy.
+- Machines speak the [guest protocol v3](docs/guest-protocol.md):
+  `GET /mf-manifest.json`, `GET /mf/health`, `POST /mf/call` — typed
+  signatures, bearer-token auth, NDJSON streaming, structured error envelopes,
+  body caps, graceful shutdown. Any language qualifies: `apps/remote` (Node),
+  `apps/remote-java` (Java 21, zero deps), `apps/remote-python` (Python 3,
+  stdlib only).
+- **Bindgen**: `pnpm bindgen` (or the `machinen-bindgen` CLI against any
+  deployed machine URL) generates host-side TypeScript interfaces
+  (`apps/host/src/generated/`), so `loadRemote<T>` types come from the
+  machines themselves.
+- **Observability**: `plugin.metrics()` reports per-machine calls, errors,
+  crashes, retries, timeouts, circuit opens, and p50/p95 latency — all fed by
+  the hook system, so external telemetry can tap the same hooks.
 - Machine access is a `MachineDriver`:
   - `httpAttachDriver()` — attach to a deployed machine (`machinen+http://...`),
     the containment-preserving default.
@@ -67,7 +94,8 @@ tap-and-emit shape:
 | `beforeMachineBoot` / `onMachineReady` | machine lifecycle |
 | `beforeCall` / `afterCall` | around every call; `beforeCall` may rewrite args |
 | `onMachineError` | the guest threw (surfaced as `GuestError` with remote type/stack) |
-| `onMachineCrash` | machine unreachable; with `restartOnCrash` the plugin reboots + retries once |
+| `onMachineCrash` | machine unreachable after retries; with `restartOnCrash` the plugin reboots + retries once |
+| `onCircuitOpen` / `onCircuitClose` | circuit breaker state changes |
 | `beforeSnapshot` / `onSnapshotted` | around `plugin.snapshotMachine(name)` |
 | `beforeFork` / `onForked` | around `plugin.forkMachine(name)` |
 

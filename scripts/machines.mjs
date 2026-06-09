@@ -29,10 +29,13 @@ async function waitForManifest(port, token, name) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/mf/manifest`, {
-        headers: token ? { authorization: `Bearer ${token}` } : {},
-      });
-      if (res.ok) return await res.json();
+      const health = await fetch(`http://127.0.0.1:${port}/mf/health`);
+      if (health.ok) {
+        const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`, {
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) return await res.json();
+      }
     } catch {
       // not up yet
     }

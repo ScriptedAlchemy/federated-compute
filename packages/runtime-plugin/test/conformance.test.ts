@@ -75,18 +75,26 @@ function bootOnce(target: GuestTarget): Promise<{ handle: MachineHandle; port: n
 
 for (const target of targets) {
   describe.skipIf(!target.available)(`guest protocol conformance: ${target.label}`, () => {
-    test('manifest is protocol v2 with typed signatures', { timeout: 30_000 }, async () => {
+    test('manifest is protocol v3 with version and typed signatures', { timeout: 30_000 }, async () => {
       const { handle } = await bootOnce(target);
       const manifest = await handle.manifest();
 
       expect(manifest.name).toBe(target.expectName);
-      expect(manifest.protocol).toBe(2);
+      expect(manifest.protocol).toBe(3);
+      expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(typeof manifest.metaData?.runtime).toBe('string');
       for (const fns of Object.values(manifest.exposes)) {
         for (const sig of Object.values(fns)) {
           expect(Array.isArray(sig.params)).toBe(true);
           expect(typeof sig.returns).toBe('string');
         }
       }
+    });
+
+    test('health endpoint responds without auth', { timeout: 30_000 }, async () => {
+      const { port } = await bootOnce(target);
+      const res = await fetch(`http://127.0.0.1:${port}/mf/health`);
+      expect(res.status).toBe(200);
     });
 
     test('calls round-trip with JSON values', { timeout: 30_000 }, async () => {

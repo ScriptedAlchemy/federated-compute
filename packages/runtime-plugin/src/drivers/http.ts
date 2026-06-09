@@ -23,11 +23,12 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
 
-  async function post(body: unknown): Promise<Response> {
+  async function post(body: unknown, signal?: AbortSignal): Promise<Response> {
     const res = await fetch(`${base}/mf/call`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal,
     });
     if (!res.ok) throw new MachineTransportError(`call request failed: ${res.status}`);
     return res;
@@ -35,13 +36,22 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
 
   return {
     async manifest(): Promise<MachineExposeManifest> {
-      const res = await fetch(`${base}/mf/manifest`, { headers });
+      const res = await fetch(`${base}/mf-manifest.json`, { headers });
       if (!res.ok) throw new MachineTransportError(`manifest request failed: ${res.status}`);
       return (await res.json()) as MachineExposeManifest;
     },
 
-    async call(modulePath, fn, args) {
-      const res = await post({ module: modulePath, fn, args });
+    async health() {
+      try {
+        const res = await fetch(`${base}/mf/health`, { headers });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+
+    async call(modulePath, fn, args, opts) {
+      const res = await post({ module: modulePath, fn, args }, opts?.signal);
       const body = (await res.json()) as
         | { ok: true; result: unknown }
         | { ok: false; error: ErrorEnvelope };

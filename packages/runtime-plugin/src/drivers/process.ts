@@ -85,13 +85,15 @@ async function waitForManifest(
   child: ChildProcess,
   entry: string,
 ): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 30_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`[machinen-plugin] guest process for "${entry}" exited early`);
     }
     try {
+      // Prefer the health probe; fall back to the manifest for older guests.
+      if (handle.health && (await handle.health())) return;
       await handle.manifest();
       return;
     } catch (error) {

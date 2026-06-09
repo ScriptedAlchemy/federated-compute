@@ -34,6 +34,10 @@ export interface MachineHooks {
   onMachineError: AsyncSeriesHook<CallContext & { error: unknown }>;
   /** The machine became unreachable (process died, connection refused...). */
   onMachineCrash: AsyncSeriesHook<{ spec: MachineSpec; error: unknown }>;
+  /** The circuit breaker opened: calls to this machine now fail fast. */
+  onCircuitOpen: AsyncSeriesHook<{ spec: MachineSpec }>;
+  /** A half-open probe succeeded: calls flow again. */
+  onCircuitClose: AsyncSeriesHook<{ spec: MachineSpec }>;
   beforeSnapshot: AsyncSeriesHook<{ spec: MachineSpec }>;
   onSnapshotted: AsyncSeriesHook<{ spec: MachineSpec; snapshot: unknown }>;
   beforeFork: AsyncSeriesHook<{ spec: MachineSpec }>;
@@ -48,6 +52,8 @@ export function createMachineHooks(): MachineHooks {
     afterCall: new AsyncSeriesHook(),
     onMachineError: new AsyncSeriesHook(),
     onMachineCrash: new AsyncSeriesHook(),
+    onCircuitOpen: new AsyncSeriesHook(),
+    onCircuitClose: new AsyncSeriesHook(),
     beforeSnapshot: new AsyncSeriesHook(),
     onSnapshotted: new AsyncSeriesHook(),
     beforeFork: new AsyncSeriesHook(),

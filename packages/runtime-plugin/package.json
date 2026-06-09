@@ -1,10 +1,30 @@
 {
   "name": "@federated-compute/machinen-plugin",
-  "version": "0.0.1",
-  "description": "Module Federation runtime plugin that binds remote modules to Machinen-style machines via function proxies.",
+  "version": "0.1.0",
+  "description": "Module Federation runtime plugin that binds remote modules to Machinen-style machines via typed function proxies.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ScriptedAlchemy/federated-compute.git",
+    "directory": "packages/runtime-plugin"
+  },
+  "keywords": [
+    "module-federation",
+    "machinen",
+    "rpc",
+    "bindgen",
+    "microvm",
+    "runtime-plugin"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "machinen-bindgen": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -20,10 +40,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@module-federation/runtime": "^2.5.1"
+    "@module-federation/runtime": "^2.5.1",
+    "semver": "^7.8.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
+    "@types/semver": "^7.7.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }

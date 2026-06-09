@@ -24,19 +24,41 @@ export interface FunctionSignature {
   stream?: boolean;
 }
 
-/** Protocol v2 manifest: expose paths -> function name -> signature. */
+/** Machine runtime/build metadata — the analog of mf-manifest.json's metaData. */
+export interface MachineMetaData {
+  /** e.g. "node v22.22.3", "OpenJDK 21.0.11", "cpython 3.12.3" */
+  runtime?: string;
+  /** Capability flags, e.g. ["stream"]. */
+  features?: string[];
+  [key: string]: unknown;
+}
+
+/**
+ * Protocol v3 manifest: the machine analog of `mf-manifest.json`.
+ * Served at `/mf-manifest.json` (with `/mf/manifest` as an alias).
+ */
 export interface MachineExposeManifest {
   name: string;
-  protocol: 2;
+  protocol: 3;
+  /** Semver version of the machine's API surface; negotiated against entry `?version=` ranges. */
+  version: string;
+  metaData?: MachineMetaData;
   exposes: Record<string, Record<string, FunctionSignature>>;
+}
+
+export interface CallOptions {
+  /** Cancels the underlying request when supported by the transport. */
+  signal?: AbortSignal;
 }
 
 /** A booted (or attached) machine the plugin can talk to. */
 export interface MachineHandle {
   manifest(): Promise<MachineExposeManifest>;
-  call(modulePath: string, fn: string, args: unknown[]): Promise<unknown>;
+  call(modulePath: string, fn: string, args: unknown[], opts?: CallOptions): Promise<unknown>;
   /** Required to bind functions declared with `stream: true`. */
   callStream?(modulePath: string, fn: string, args: unknown[]): AsyncIterable<unknown>;
+  /** Liveness probe; defaults to manifest reachability when absent. */
+  health?(): Promise<boolean>;
   /** Freeze the machine's state. Returns a driver-specific descriptor. */
   snapshot?(): Promise<unknown>;
   /** Clone the running machine. Returns a driver-specific descriptor. */

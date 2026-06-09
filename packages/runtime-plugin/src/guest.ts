@@ -12,6 +12,9 @@ export type ExposedFunction =
 /** Functions a machine guest exposes, keyed by MF-style expose path. */
 export interface GuestConfig {
   name: string;
+  /** Semver version of this machine's API surface. Default "0.0.0". */
+  version?: string;
+  metaData?: Record<string, unknown>;
   exposes: Record<string, Record<string, ExposedFunction>>;
 }
 
@@ -64,6 +67,10 @@ export function createGuestRuntime(config: GuestConfig): GuestRuntime {
     return target;
   }
 
+  const hasStreams = [...modules.values()].some((mod) =>
+    [...mod.values()].some(({ signature }) => signature.stream),
+  );
+
   return {
     manifest() {
       const exposes: MachineExposeManifest['exposes'] = {};
@@ -72,7 +79,17 @@ export function createGuestRuntime(config: GuestConfig): GuestRuntime {
           [...mod].map(([name, { signature }]) => [name, signature]),
         );
       }
-      return { name: config.name, protocol: 2, exposes };
+      return {
+        name: config.name,
+        protocol: 3,
+        version: config.version ?? '0.0.0',
+        metaData: {
+          runtime: `node ${process.version}`,
+          features: hasStreams ? ['stream'] : [],
+          ...config.metaData,
+        },
+        exposes,
+      };
     },
     async dispatch(modulePath, fn, args) {
       return await lookup(modulePath, fn).handler(...args);
@@ -117,29 +134,47 @@ function errorBody(error: unknown) {
   };
 }
 
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+
 /**
- * Serve a guest runtime over HTTP (`GET /mf/manifest`, `POST /mf/call`).
- * Streaming functions respond as NDJSON. In a real Machinen deployment this
- * listens inside the VM on a port-forwarded port.
+ * Serve a guest runtime over HTTP (`GET /mf-manifest.json`, `GET /mf/health`,
+ * `POST /mf/call`). Streaming functions respond as NDJSON. In a real Machinen
+ * deployment this listens inside the VM on a port-forwarded port.
  */
 export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
   const hostname = opts.hostname ?? '127.0.0.1';
 
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === 'GET' && req.url === '/mf/health') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, name: guest.manifest().name }));
+        return;
+      }
       if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized', type: 'AuthError' } }));
         return;
       }
-      if (req.method === 'GET' && req.url === '/mf/manifest') {
+      if (req.method === 'GET' && (req.url === '/mf-manifest.json' || req.url === '/mf/manifest')) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(guest.manifest()));
         return;
       }
       if (req.method === 'POST' && req.url === '/mf/call') {
         const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
+        let bytes = 0;
+        for await (const chunk of req) {
+          bytes += (chunk as Buffer).length;
+          if (bytes > MAX_BODY_BYTES) {
+            res.writeHead(413, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({ ok: false, error: { message: 'payload too large', type: 'PayloadError' } }),
+            );
+            return;
+          }
+          chunks.push(chunk as Buffer);
+        }
         const { module: modulePath, fn, args } = JSON.parse(Buffer.concat(chunks).toString());
 
         const signature = guest.signature(modulePath, fn);

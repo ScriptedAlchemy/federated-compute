@@ -4,7 +4,8 @@ import type { MachineExposeManifest } from '../src/types.js';
 
 const manifest: MachineExposeManifest = {
   name: 'java_machine',
-  protocol: 2,
+  protocol: 3,
+  version: '1.0.0',
   exposes: {
     './strings': {
       upper: { params: [{ name: 's', type: 'string' }], returns: 'string' },

@@ -13,6 +13,7 @@ from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NAME = "python_machine"
+VERSION = "1.0.0"
 TOKEN = os.environ.get("MACHINEN_TOKEN") or None
 
 
@@ -51,7 +52,12 @@ EXPOSES = {
 def manifest():
     return {
         "name": NAME,
-        "protocol": 2,
+        "protocol": 3,
+        "version": VERSION,
+        "metaData": {
+            "runtime": f"{sys.implementation.name} {sys.version.split()[0]}",
+            "features": [],
+        },
         "exposes": {
             path: {fn: signature for fn, (_, signature) in fns.items()}
             for path, fns in EXPOSES.items()
@@ -93,9 +99,12 @@ class GuestHandler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        if self.path == "/mf/health":
+            self._send({"ok": True, "name": NAME})
+            return
         if self._unauthorized():
             return
-        if self.path == "/mf/manifest":
+        if self.path in ("/mf-manifest.json", "/mf/manifest"):
             self._send(manifest())
         else:
             self.send_response(404)
