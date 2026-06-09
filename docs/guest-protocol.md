@@ -15,8 +15,10 @@ If the machine was deployed with a token (`MACHINEN_TOKEN` env var by
 convention), every request except `/mf/health` must carry
 `Authorization: Bearer <token>`. Unauthenticated requests get `401`. Guests
 must bind loopback by default; only deliberate deployment exposes them
-further. Guests should compare tokens in constant time (the reference guest
-hashes both sides and uses `timingSafeEqual`).
+further. Guests must compare tokens in constant time: hash both sides and
+compare digests (Node reference guest: `timingSafeEqual` over SHA-256; Java:
+`MessageDigest.isEqual` over SHA-256; Python: `hmac.compare_digest` over
+SHA-256).
 
 On the host side the token travels out-of-band: `parseMachineEntry` strips
 `?token=` into `spec.auth` so cache keys, hook payloads, and error messages
@@ -103,7 +105,9 @@ Machines that can capture warm state advertise `"state"` in
 - `GET /mf/state` → `{ "ok": true, "state": <opaque JSON> }` — dehydrate the
   machine's application state.
 - `POST /mf/state` with `{ "state": <opaque JSON> }` → rehydrate; the machine
-  resumes from that state.
+  resumes from that state. Malformed bodies follow the same rules as
+  `POST /mf/call` (see "Malformed and oversized requests"); rehydration
+  failures answer `200` with the `{ "ok": false }` error envelope.
 
 Machines without the capability respond `501`. This powers the process
 driver's snapshot/restore simulation of Machinen's "boot once, run
@@ -120,6 +124,32 @@ Request body (guests should cap bodies, 5 MB reference; respond `413` beyond):
 ```json
 { "module": "./strings", "fn": "upper", "args": ["hi"] }
 ```
+
+### Malformed and oversized requests
+
+A body that does not parse as JSON — or parses to anything other than a JSON
+object — gets HTTP `400` with the canonical envelope:
+
+```json
+{ "ok": false, "error": { "message": "malformed request body", "type": "ParseError" } }
+```
+
+The message is deliberately constant: guests must never echo any part of the
+body back. Parser resource limits surface the same way (the Java reference
+guest rejects nesting beyond 256 levels as a `400` parse error). The
+connection stays usable — guests must answer, not drop the socket, and
+`/mf/health` must stay live regardless of what `/mf/call` is fed.
+
+Bodies past the size cap get `413` with
+`{ "ok": false, "error": { "message": "payload too large", "type": "PayloadError" } }`;
+the guest drains the remaining upload so the client can read the response,
+and closes the connection (`Connection: close`) since a half-read request
+socket cannot be reused. Hosts surface both as non-retriable
+`MachineRequestError`s (see "Status classification").
+
+Within a well-formed object body, wrong field values (unknown module, missing
+function, bad argument types) are guest-side dispatch errors: HTTP `200` with
+the `{ "ok": false }` error envelope below.
 
 ### Unary response (HTTP 200, `application/json`)
 
@@ -193,5 +223,10 @@ scope:
 ## Conformance
 
 `packages/runtime-plugin/test/conformance.test.ts` runs this spec against the
-Java and Python guests (booted as real processes); the Node guest is covered by
-`test/guest-http.test.ts`. New guest languages should pass the same suite.
+Java and Python guests (booted as real processes), including the malformed-
+and oversized-request rules above; the Node guest is covered by
+`test/guest-http.test.ts`. Streaming — NDJSON framing and the mandatory
+`done`/`error` terminator — is exercised against the Node guest, the only
+reference guest that streams today; any guest that adds `stream: true`
+exposes must terminate every stream the same way. New guest languages should
+pass the same suite.

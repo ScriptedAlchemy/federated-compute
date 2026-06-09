@@ -123,6 +123,99 @@ describe('guest over HTTP', () => {
     expect(next).toBe(COUNT);
   });
 
+  test('malformed bodies get the canonical 400 ParseError envelope, no echo, connection live', async () => {
+    // State support so /mf/state parses bodies instead of answering 501.
+    const guest = createGuestRuntime({
+      name: 'stateful_guest',
+      state: { dehydrate: () => ({}), rehydrate: () => {} },
+      exposes: { './math': { add: (a: number, b: number) => a + b } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const probe = '<script>alert(1)</script>{{{not json';
+    for (const endpoint of ['/mf/call', '/mf/state']) {
+      const res = await fetch(`http://127.0.0.1:${server.port}${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: probe,
+      });
+      expect(res.status).toBe(400);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({
+        ok: false,
+        error: { message: 'malformed request body', type: 'ParseError' },
+      });
+      expect(text).not.toContain('alert'); // never reflect the body
+    }
+    // The guest survives and still answers normal calls.
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    await expect(handle.call('./math', 'add', [1, 2])).resolves.toBe(3);
+  });
+
+  test('non-object JSON bodies (including null) are 400s, not hangs', async () => {
+    // Regression: `JSON.parse("null")` is falsy — the old `if (!body) return`
+    // path wrote no response at all and left the connection hanging.
+    const server = await startGuest();
+    for (const body of ['null', '42', '"text"', '[1,2]']) {
+      const res = await fetch(`http://127.0.0.1:${server.port}/mf/call`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(2_000),
+      });
+      expect(res.status).toBe(400);
+      const envelope = (await res.json()) as { error: { type: string } };
+      expect(envelope.error.type).toBe('ParseError');
+    }
+  });
+
+  test('a wrong (not just missing) bearer token is a MachineAuthError', async () => {
+    const server = await startGuest({ token: 'right-token' });
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'wrong' });
+    const error = await handle.call('./math', 'add', [1, 1]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MachineAuthError);
+    expect(isTransportFailure(error)).toBe(false);
+  });
+
+  test('a guest {"error"} line mid-stream surfaces as GuestError after earlier chunks', async () => {
+    const guest = createGuestRuntime({
+      name: 'mid_error_guest',
+      exposes: {
+        './s': {
+          boomAfter: {
+            handler: async function* () {
+              yield 1;
+              yield 2;
+              throw new TypeError('mid-stream failure');
+            },
+            stream: true,
+          },
+        },
+      },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+
+    const received: unknown[] = [];
+    const error = await (async () => {
+      try {
+        for await (const chunk of handle.callStream!('./s', 'boomAfter', [])) {
+          received.push(chunk);
+        }
+        return undefined;
+      } catch (e) {
+        return e;
+      }
+    })();
+
+    expect(received).toEqual([1, 2]);
+    expect(error).toBeInstanceOf(GuestError);
+    expect((error as GuestError).message).toBe('mid-stream failure');
+    expect((error as GuestError).remoteType).toBe('TypeError');
+    expect(isTransportFailure(error)).toBe(false); // not retried, no crash bookkeeping
+  });
+
   test('rejects requests without the right bearer token', async () => {
     const server = await startGuest({ token: 'secret' });
 

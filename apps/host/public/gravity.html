@@ -426,7 +426,9 @@ function setFlow(kind) {
   if (kind) link.classList.add('busy', kind);
 }
 
-function renderDots(el, n, cap = 14) {
+function renderDots(el, count, cap = 14) {
+  // API-derived: force a number so the interpolations below cannot carry markup.
+  const n = Number(count) || 0;
   const shown = Math.min(n, cap);
   el.innerHTML =
     Array.from({ length: shown }, (_, i) => `<i style="--i:${i}"></i>`).join('') +

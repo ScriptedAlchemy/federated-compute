@@ -182,7 +182,22 @@ function authorized(header: string | undefined, token: string): boolean {
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
-/** Read a JSON request body, answering 413 and returning undefined past the cap. */
+/**
+ * Canonical malformed-request answer (shared by all reference guests): HTTP
+ * 400 with a constant envelope. The message is deliberately fixed — echoing
+ * any part of the body would reflect attacker-controlled content.
+ */
+function sendParseError(res: http.ServerResponse): void {
+  res.writeHead(400, { 'content-type': 'application/json' });
+  res.end(
+    JSON.stringify({ ok: false, error: { message: 'malformed request body', type: 'ParseError' } }),
+  );
+}
+
+/**
+ * Read a JSON-object request body. Answers 413 past the cap and 400 for
+ * bodies that don't parse to a JSON object, returning undefined either way.
+ */
 async function readJsonBody(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -205,7 +220,18 @@ async function readJsonBody(
     }
     chunks.push(chunk as Buffer);
   }
-  return JSON.parse(Buffer.concat(chunks).toString());
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString());
+  } catch {
+    sendParseError(res);
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    sendParseError(res);
+    return undefined;
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /**

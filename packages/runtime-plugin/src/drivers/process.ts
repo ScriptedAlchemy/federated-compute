@@ -45,6 +45,30 @@ export interface ProcessDriverOptions {
   commands?: BootCommandMap;
   /** Where handle.snapshot() writes bundles. Default: .machinen/snapshots */
   snapshotDir?: string;
+  /** Extra environment variables for the guest, merged over the allowlist. */
+  env?: Record<string, string>;
+}
+
+// Guests get an allowlisted environment, not the host's full env: the host
+// process may carry cloud credentials, CI secrets, etc. that a guest has no
+// business reading. MACHINEN_* vars pass through as the protocol's own
+// configuration convention.
+const HOST_ENV_ALLOWLIST = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TEMP', 'TMP',
+  'LANG', 'LC_ALL', 'TZ', 'JAVA_HOME', 'PYTHONHOME', 'PYTHONPATH',
+  'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC', 'PATHEXT',
+];
+
+/** Build the allowlisted environment a spawned guest receives. */
+export function buildGuestEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of HOST_ENV_ALLOWLIST) {
+    if (base[key] !== undefined) env[key] = base[key];
+  }
+  for (const [key, value] of Object.entries(base)) {
+    if (key.startsWith('MACHINEN_') && value !== undefined) env[key] = value;
+  }
+  return env;
 }
 
 /**
@@ -64,7 +88,8 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
     const [cmd, ...cmdArgs] = resolveBootCommand(image, opts.commands);
     const child: ChildProcess = spawn(cmd, cmdArgs, {
       env: {
-        ...process.env,
+        ...buildGuestEnv(),
+        ...(opts.env ?? {}),
         PORT: String(port),
         ...(token ? { MACHINEN_TOKEN: token } : {}),
       },

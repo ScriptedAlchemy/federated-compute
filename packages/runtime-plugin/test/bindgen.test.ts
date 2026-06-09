@@ -76,6 +76,21 @@ describe('generateBindings', () => {
     expect(src).toContain('export const delete_ = machineModule<EdgeMachineDelete>');
     expect(src).not.toMatch(/export const delete =/);
   });
+
+  test('digit-leading machine names and expose paths still emit legal TS names', () => {
+    // pascalCase('3com-machine') keeps the leading digit — invalid as an
+    // interface name; the export identifier for './3d' has the same problem.
+    const src = generateBindings({
+      name: '3com-machine',
+      protocol: 3,
+      version: '1.0.0',
+      exposes: { './3d': { render: { params: [], returns: 'string' } } },
+    });
+    expect(src).toContain('export interface M3comMachine3d {');
+    expect(src).toContain('export interface M3comMachineModules {');
+    expect(src).toContain('export const _3d = machineModule<M3comMachine3d>');
+    expect(src).not.toMatch(/export (interface|const) 3/);
+  });
 });
 
 describe('fetchBindingsSource (host-side, network only)', () => {

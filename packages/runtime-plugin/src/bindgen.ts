@@ -32,8 +32,16 @@ function renderFunction(name: string, sig: FunctionSignature): string {
 function identifier(exposePath: string): string {
   const id = stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
   // Foreign manifests may not have gone through guest-side validation, so a
-  // reserved word ('./delete' -> delete) must still emit a legal export name.
+  // reserved word ('./delete' -> delete) or leading digit ('./3d' -> 3d)
+  // must still emit a legal export name.
+  if (/^\d/.test(id)) return `_${id}`;
   return isJsReservedWord(id) ? `${id}_` : id;
+}
+
+/** Machine names come from manifests of arbitrary guests — make them valid type names. */
+function typeName(machineName: string): string {
+  const cased = pascalCase(machineName);
+  return !cased || /^\d/.test(cased) ? `M${cased}` : cased;
 }
 
 /**
@@ -44,7 +52,7 @@ function identifier(exposePath: string): string {
  *   await strings.upper('hi');   // a call into the machine
  */
 export function generateBindings(manifest: MachineExposeManifest): string {
-  const machineName = pascalCase(manifest.name);
+  const machineName = typeName(manifest.name);
   const major = manifest.version?.split('.')[0] ?? '0';
   const versionRange = `^${major}.0.0`;
   const lines: string[] = [

@@ -8,6 +8,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -124,9 +126,9 @@ public final class GuestServer {
     }
     String body = readBody(ex);
     if (body == null) return; // 413 already sent
+    Map<String, Object> request = parseObjectBody(ex, body);
+    if (request == null) return; // 400 already sent
     try {
-      @SuppressWarnings("unchecked")
-      Map<String, Object> request = (Map<String, Object>) Json.parse(body);
       String module = (String) request.get("module");
       String fn = (String) request.get("fn");
       @SuppressWarnings("unchecked")
@@ -150,13 +152,9 @@ public final class GuestServer {
     if (ex.getRequestMethod().equals("POST")) {
       String body = readBody(ex);
       if (body == null) return; // 413 already sent
+      Map<String, Object> request = parseObjectBody(ex, body);
+      if (request == null) return; // 400 already sent
       try {
-        Object parsed = Json.parse(body);
-        if (!(parsed instanceof Map)) {
-          throw new IllegalArgumentException("state body must be a JSON object");
-        }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> request = (Map<String, Object>) parsed;
         Object stateValue = request.getOrDefault("state", Map.of());
         if (!(stateValue instanceof Map)) {
           throw new IllegalArgumentException("\"state\" must be a JSON object");
@@ -179,20 +177,63 @@ public final class GuestServer {
     return Map.of("message", message, "type", t.getClass().getSimpleName());
   }
 
+  /**
+   * Parses the body as a JSON object, or sends the canonical malformed-request
+   * answer (400, constant envelope — never echoes the body) and returns null.
+   */
+  private Map<String, Object> parseObjectBody(HttpExchange ex, String body) throws IOException {
+    Object parsed;
+    try {
+      parsed = Json.parse(body);
+    } catch (Exception e) {
+      sendParseError(ex);
+      return null;
+    }
+    if (!(parsed instanceof Map)) {
+      sendParseError(ex);
+      return null;
+    }
+    @SuppressWarnings("unchecked")
+    Map<String, Object> request = (Map<String, Object>) parsed;
+    return request;
+  }
+
+  private void sendParseError(HttpExchange ex) throws IOException {
+    send(ex, 400, Json.write(Map.of(
+        "ok", false,
+        "error", Map.of("message", "malformed request body", "type", "ParseError"))));
+  }
+
   private boolean unauthorized(HttpExchange ex) throws IOException {
     if (token == null || token.isEmpty()) return false;
     String header = ex.getRequestHeaders().getFirst("Authorization");
-    if (("Bearer " + token).equals(header)) return false;
+    if (authorized(header)) return false;
     send(ex, 401, Json.write(Map.of(
         "ok", false,
         "error", Map.of("message", "unauthorized", "type", "AuthError"))));
     return true;
   }
 
+  /** Constant-time bearer check: compare SHA-256 digests, never the strings. */
+  private boolean authorized(String header) {
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      byte[] expected = md.digest(("Bearer " + token).getBytes(StandardCharsets.UTF_8));
+      byte[] presented = md.digest((header == null ? "" : header).getBytes(StandardCharsets.UTF_8));
+      return MessageDigest.isEqual(expected, presented);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
+  }
+
   /** Reads the request body, or sends 413 and returns null if it exceeds the cap. */
   private String readBody(HttpExchange ex) throws IOException {
     byte[] bytes = ex.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
     if (bytes.length > MAX_BODY_BYTES) {
+      // Drain the rest of the upload so the client can read the response,
+      // then close: a half-read request socket cannot be reused.
+      ex.getRequestBody().transferTo(OutputStream.nullOutputStream());
+      ex.getResponseHeaders().set("connection", "close");
       send(ex, 413, Json.write(Map.of(
           "ok", false,
           "error", Map.of("message", "payload too large", "type", "PayloadError"))));

@@ -155,5 +155,73 @@ for (const target of targets) {
       await handle.setState!({ counter: 41 });
       await expect(handle.call('./counter', 'increment', [])).resolves.toBe(42);
     });
+
+    const post = async (port: number, path: string, body: string) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+        body,
+      });
+
+    test('malformed bodies get the canonical 400 ParseError envelope, no echo, connection live', { timeout: 30_000 }, async () => {
+      const { port, handle } = await bootOnce(target);
+      const probe = '<script>alert(1)</script>{{{not json';
+      for (const endpoint of ['/mf/call', '/mf/state']) {
+        const res = await post(port, endpoint, probe);
+        expect(res.status).toBe(400);
+        const text = await res.text();
+        expect(JSON.parse(text)).toEqual({
+          ok: false,
+          error: { message: 'malformed request body', type: 'ParseError' },
+        });
+        // The message is constant — the body must never be reflected.
+        expect(text).not.toContain('alert');
+      }
+      // The guest survives: health stays live and a normal call still works.
+      const health = await fetch(`http://127.0.0.1:${port}/mf/health`);
+      expect(health.status).toBe(200);
+      const { module, fn, args, expect: expected } = target.sampleCall;
+      await expect(handle.call(module, fn, args)).resolves.toEqual(expected);
+    });
+
+    test('non-object JSON bodies are malformed requests too', { timeout: 30_000 }, async () => {
+      const { port } = await bootOnce(target);
+      for (const body of ['[1,2,3]', '"a string"', '42', 'null']) {
+        const res = await post(port, '/mf/call', body);
+        expect(res.status).toBe(400);
+        const envelope = (await res.json()) as { error: { type: string } };
+        expect(envelope.error.type).toBe('ParseError');
+      }
+    });
+
+    test('oversized bodies get a 413 envelope and the guest stays live', { timeout: 30_000 }, async () => {
+      const { port } = await bootOnce(target);
+      const oversized = `{"module":"./x","fn":"y","args":["${'x'.repeat(6 * 1024 * 1024)}"]}`;
+      const res = await post(port, '/mf/call', oversized);
+      expect(res.status).toBe(413);
+      const envelope = (await res.json()) as { error: { type: string } };
+      expect(envelope.error.type).toBe('PayloadError');
+
+      const health = await fetch(`http://127.0.0.1:${port}/mf/health`);
+      expect(health.status).toBe(200);
+    });
+
+    if (target.label === 'java guest') {
+      test('JSON nested deeper than 256 levels is a 400 parse error, and /mf/health stays live', { timeout: 30_000 }, async () => {
+        const { port } = await bootOnce(target);
+        const nested = '['.repeat(300) + ']'.repeat(300);
+        const res = await post(
+          port,
+          '/mf/call',
+          `{"module":"./strings","fn":"upper","args":${nested}}`,
+        );
+        expect(res.status).toBe(400);
+        const envelope = (await res.json()) as { error: { type: string } };
+        expect(envelope.error.type).toBe('ParseError');
+
+        const health = await fetch(`http://127.0.0.1:${port}/mf/health`);
+        expect(health.status).toBe(200);
+      });
+    }
   });
 }

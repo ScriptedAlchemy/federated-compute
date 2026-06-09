@@ -404,3 +404,273 @@ describe('disposeMachines (MINOR)', () => {
     expect(plugin.metrics()).toEqual({}); // recorders cleared with the machines
   });
 });
+
+describe('token redaction across the failure surface (MAJOR-1, ported)', () => {
+  const TOKEN = 'super-secret-token-do-not-leak';
+
+  test('transport failures and crash hooks never carry the token', async () => {
+    // Nothing listens on this port: every request is a transport failure.
+    const plugin = machinenPlugin({
+      driver: httpAttachDriver(),
+      restartOnCrash: false,
+      bootTimeoutMs: 2_000,
+      calls: { retries: 0, circuitBreaker: false },
+    });
+    const crashEntries: string[] = [];
+    plugin.machineHooks.onMachineCrash.on(({ spec }) => crashEntries.push(spec.entry));
+    const bootEntries: string[] = [];
+    plugin.machineHooks.beforeMachineBoot.on(({ spec }) =>
+      bootEntries.push(`${spec.entry} ${spec.params.toString()}`),
+    );
+    const remote = { name: 'dead_machine', entry: `machinen+http://127.0.0.1:1?token=${TOKEN}` };
+    const h = host(plugin, remote);
+
+    const error = (await h.loadRemote(`${remote.name}/svc`).catch((e: unknown) => e)) as Error;
+    expect(error).toBeTruthy();
+    expect(`${error.name} ${error.message} ${error.stack ?? ''}`).not.toContain(TOKEN);
+    expect(bootEntries.length).toBeGreaterThan(0);
+    for (const entry of [...bootEntries, ...crashEntries]) {
+      expect(entry).not.toContain(TOKEN);
+    }
+  });
+
+  test('reboots after a crash keep authenticating with the out-of-band token', async () => {
+    const guest = createGuestRuntime({
+      name: 'reboot_secured',
+      exposes: { './math': { add: (a: number, b: number) => a + b } },
+    });
+    const server = await serveGuest(guest, { port: 0, token: TOKEN });
+    guestServers.push(server);
+
+    let boots = 0;
+    const base = httpAttachDriver();
+    const plugin = machinenPlugin({
+      restartOnCrash: true,
+      calls: { retries: 0, backoffMs: 1, circuitBreaker: false },
+      driver: {
+        boot: async (spec) => {
+          boots++;
+          const handle = await base.boot(spec);
+          if (boots === 1) {
+            // First generation dies on its first call.
+            return { ...handle, call: async () => Promise.reject(connRefused()) };
+          }
+          return handle;
+        },
+      },
+    });
+    const remote = {
+      name: 'reboot_secured_machine',
+      entry: `machinen+http://127.0.0.1:${server.port}?token=${TOKEN}`,
+    };
+    const h = host(plugin, remote);
+    const mod = await h.loadRemote<{ add(a: number, b: number): Promise<number> }>(
+      `${remote.name}/math`,
+    );
+
+    // Crash -> reboot -> the second generation's real HTTP call must still
+    // carry the token even though the cached (redacted) spec.entry has none.
+    await expect(mod!.add(3, 4)).resolves.toBe(7);
+    expect(boots).toBe(2);
+  });
+});
+
+describe('crash bookkeeping (MAJOR-2, ported)', () => {
+  test('a crashed handle is disposed even without restartOnCrash', async () => {
+    const remote = uniqueRemote();
+    let disposed = 0;
+    const plugin = machinenPlugin({
+      restartOnCrash: false,
+      calls: { retries: 0, circuitBreaker: false },
+      driver: {
+        boot: async () => ({
+          manifest: async () => manifestFor(remote.name),
+          call: async () => Promise.reject(connRefused()),
+          dispose: async () => {
+            disposed++;
+          },
+        }),
+      },
+    });
+    const h = host(plugin, remote);
+    const mod = await h.loadRemote<{ run(): Promise<string> }>(`${remote.name}/svc`);
+
+    await expect(mod!.run()).rejects.toThrow(/connection refused/);
+    expect(disposed).toBe(1);
+  });
+
+  test('a boot that completes after the boot timeout is disposed, not leaked', async () => {
+    const remote = uniqueRemote();
+    let disposed = 0;
+    const plugin = machinenPlugin({
+      bootTimeoutMs: 25,
+      driver: {
+        boot: async (): Promise<MachineHandle> => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return {
+            manifest: async () => manifestFor(remote.name),
+            call: async () => 'late',
+            dispose: async () => {
+              disposed++;
+            },
+          };
+        },
+      },
+    });
+    const h = host(plugin, remote);
+
+    await expect(h.loadRemote(`${remote.name}/svc`)).rejects.toThrow(/timed out/);
+    await until(() => disposed === 1);
+  });
+
+  test('a boot that fails after creating a handle (version mismatch) disposes it', async () => {
+    const remote = uniqueRemote('?version=^9.0.0');
+    let disposed = 0;
+    const plugin = machinenPlugin({
+      driver: {
+        boot: async () => ({
+          manifest: async () => ({ ...manifestFor(remote.name), version: '2.0.0' }),
+          call: async () => 'never',
+          dispose: async () => {
+            disposed++;
+          },
+        }),
+      },
+    });
+    const h = host(plugin, remote);
+
+    await expect(h.loadRemote(`${remote.name}/svc`)).rejects.toThrow(/version/);
+    expect(disposed).toBe(1);
+  });
+});
+
+describe('cancellation across retries (MAJOR-3, ported)', () => {
+  test('every retry attempt gets its own fresh abort signal', async () => {
+    const remote = uniqueRemote();
+    const signals: AbortSignal[] = [];
+    const plugin = machinenPlugin({
+      restartOnCrash: false,
+      calls: { timeoutMs: 20, retries: 1, backoffMs: 1, circuitBreaker: false },
+      driver: {
+        boot: async () => ({
+          manifest: async () => manifestFor(remote.name),
+          call: (_m: string, _f: string, _a: unknown[], opts?: CallOptions) => {
+            if (opts?.signal) {
+              expect(opts.signal.aborted).toBe(false); // fresh per attempt
+              signals.push(opts.signal);
+            }
+            return new Promise<never>(() => {}); // hangs forever
+          },
+        }),
+      },
+    });
+    const h = host(plugin, remote);
+    const mod = await h.loadRemote<{ run(): Promise<string> }>(`${remote.name}/svc`);
+
+    await expect(mod!.run()).rejects.toBeInstanceOf(MachineTimeoutError);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+});
+
+describe('status classification edge cases (MAJOR-4, ported)', () => {
+  test('a plain 404 from the guest is a MachineRequestError carrying the status', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+    const port = await listen(server);
+    const handle = httpMachineHandle(`http://127.0.0.1:${port}`);
+
+    const error = (await handle
+      .call('./svc', 'run', [])
+      .catch((e: unknown) => e)) as MachineRequestError;
+    expect(error).toBeInstanceOf(MachineRequestError);
+    expect(error.status).toBe(404);
+    expect(isTransportFailure(error)).toBe(false);
+  });
+
+  test('after a 413 the machine stays booted and the next call succeeds', async () => {
+    const guest = createGuestRuntime({
+      name: 'big_guest',
+      exposes: { './echo': { size: (s: string) => s.length } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    guestServers.push(server);
+
+    let boots = 0;
+    const base = httpAttachDriver();
+    const plugin = machinenPlugin({
+      restartOnCrash: true,
+      calls: { retries: 2, backoffMs: 1, circuitBreaker: false },
+      driver: {
+        boot: (spec) => {
+          boots++;
+          return base.boot(spec);
+        },
+      },
+    });
+    const crashes: unknown[] = [];
+    plugin.machineHooks.onMachineCrash.on(() => crashes.push(1));
+
+    const remote = { name: 'big_guest_e2e', entry: `machinen+http://127.0.0.1:${server.port}` };
+    const h = host(plugin, remote);
+    const mod = await h.loadRemote<{ size(s: string): Promise<number> }>(`${remote.name}/echo`);
+
+    const error = (await mod!
+      .size('x'.repeat(6 * 1024 * 1024))
+      .catch((e: unknown) => e)) as MachineRequestError;
+    expect(error).toBeInstanceOf(MachineRequestError);
+    expect(error.status).toBe(413);
+
+    const metrics = plugin.metrics()[remote.name];
+    expect(metrics.retries).toBe(0);
+    expect(metrics.crashes).toBe(0);
+    expect(crashes).toHaveLength(0);
+
+    // The machine is alive and untouched: a normal call still works.
+    await expect(mod!.size('abc')).resolves.toBe(3);
+    expect(boots).toBe(1);
+  });
+});
+
+describe('restartOnCrash × circuit breaker (ported)', () => {
+  test('persistent failures open the circuit across crash/reboot cycles', async () => {
+    const remote = uniqueRemote();
+    let boots = 0;
+    const plugin = machinenPlugin({
+      restartOnCrash: true,
+      calls: { retries: 0, backoffMs: 1, circuitBreaker: { threshold: 2, resetMs: 60_000 } },
+      driver: {
+        boot: async () => {
+          boots++;
+          return {
+            manifest: async () => manifestFor(remote.name),
+            call: async () => Promise.reject(connRefused()),
+          };
+        },
+      },
+    });
+    const opened: string[] = [];
+    plugin.machineHooks.onCircuitOpen.on(({ spec }) => opened.push(spec.remoteName));
+
+    const h = host(plugin, remote);
+    const mod = await h.loadRemote<{ run(): Promise<string> }>(`${remote.name}/svc`);
+
+    // Each failed call counts toward the breaker and reboots the machine.
+    await expect(mod!.run()).rejects.toThrow(/connection refused/);
+    expect(boots).toBe(2);
+    await expect(mod!.run()).rejects.toThrow(/connection refused/);
+    expect(opened).toEqual([remote.name]); // threshold reached
+
+    // Circuit is open: fail fast, no further boots.
+    const bootsBefore = boots;
+    await expect(mod!.run()).rejects.toBeInstanceOf(MachineCircuitOpenError);
+    expect(boots).toBe(bootsBefore);
+
+    const metrics = plugin.metrics()[remote.name];
+    expect(metrics.crashes).toBeGreaterThanOrEqual(2);
+    expect(metrics.circuitOpens).toBe(1);
+  });
+});

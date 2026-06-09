@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,7 +51,12 @@ def _make_handler(
         def _unauthorized(self) -> bool:
             if config.token is None:
                 return False
-            if self.headers.get("authorization") == f"Bearer {config.token}":
+            # Constant time: compare SHA-256 digests, never the raw strings.
+            expected = hashlib.sha256(f"Bearer {config.token}".encode()).digest()
+            presented = hashlib.sha256(
+                (self.headers.get("authorization") or "").encode()
+            ).digest()
+            if hmac.compare_digest(expected, presented):
                 return False
             self._send(
                 {"ok": False, "error": {"message": "unauthorized", "type": "AuthError"}},
@@ -57,10 +64,30 @@ def _make_handler(
             )
             return True
 
-        def _read_body(self) -> Any | None:
-            """Parse the JSON body; sends 413 and returns None when oversized."""
+        def _send_parse_error(self) -> None:
+            # Canonical malformed-request answer: constant message, never an
+            # echo of the body.
+            self._send(
+                {
+                    "ok": False,
+                    "error": {"message": "malformed request body", "type": "ParseError"},
+                },
+                status=400,
+            )
+
+        def _read_body(self) -> dict[str, Any] | None:
+            """Parse the JSON-object body; answers 413/400 and returns None on failure."""
             length = int(self.headers.get("content-length", "0"))
             if length > MAX_BODY_BYTES:
+                # Drain the upload so the client can read the response, then
+                # close: a half-read request socket cannot be reused.
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                self.close_connection = True
                 self._send(
                     {
                         "ok": False,
@@ -69,7 +96,15 @@ def _make_handler(
                     status=413,
                 )
                 return None
-            return json.loads(self.rfile.read(length))
+            try:
+                parsed = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._send_parse_error()
+                return None
+            if not isinstance(parsed, dict):
+                self._send_parse_error()
+                return None
+            return parsed
 
         def do_GET(self) -> None:
             if self.path == "/mf/health":
