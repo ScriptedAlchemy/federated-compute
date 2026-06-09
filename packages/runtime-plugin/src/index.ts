@@ -17,8 +17,11 @@ export {
 } from './policy.js';
 export { generateBindings } from './bindgen.js';
 export {
+  formatMachineEntry,
   isMachineEntry,
+  normalizeExpose,
   parseMachineEntry,
+  stripExposePrefix,
   type CallContext,
   type FunctionSignature,
   type MachineDriver,

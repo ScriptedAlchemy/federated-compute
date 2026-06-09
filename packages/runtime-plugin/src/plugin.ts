@@ -14,6 +14,7 @@ import {
 } from './policy.js';
 import {
   isMachineEntry,
+  normalizeExpose,
   parseMachineEntry,
   type CallContext,
   type MachineDriver,
@@ -50,10 +51,6 @@ interface BootedMachine {
   spec: MachineSpec;
   handle: MachineHandle;
   manifest: MachineExposeManifest;
-}
-
-function normalizeExpose(path: string): string {
-  return path.startsWith('.') ? path : `./${path}`;
 }
 
 function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void {

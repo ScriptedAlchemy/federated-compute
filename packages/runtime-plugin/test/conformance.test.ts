@@ -1,21 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import net from 'node:net';
 import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
-import { processDriver } from '../src/drivers/process.js';
+import { getFreePort, processDriver } from '../src/drivers/process.js';
 import { parseMachineEntry, type MachineHandle } from '../src/types.js';
 import { GuestError } from '../src/errors.js';
-
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const port = (probe.address() as net.AddressInfo).port;
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 const APPS = path.resolve(import.meta.dirname, '../../../apps');
 const TOKEN = 'conformance-secret';

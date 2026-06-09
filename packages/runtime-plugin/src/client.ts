@@ -2,12 +2,18 @@ import { createInstance } from '@module-federation/runtime';
 import { httpAttachDriver } from './drivers/http.js';
 import { machinenPlugin, type MachinenPlugin } from './plugin.js';
 import type { CallPolicy, MachineMetrics } from './policy.js';
-import type { MachineDriver } from './types.js';
+import {
+  formatMachineEntry,
+  normalizeExpose,
+  parseMachineEntry,
+  stripExposePrefix,
+  type MachineDriver,
+} from './types.js';
 
 /**
- * End-user facade. The goal: importing a machine function should feel like
- * importing a local function — no instance wiring, no loadRemote, no plugin
- * setup at call sites. Addresses and auth resolve from config or env:
+ * End-user facade. Importing a machine function should feel like importing a
+ * local function — no instance wiring, no loadRemote, no plugin setup at call
+ * sites. Addresses and auth resolve from config or env:
  *
  *   MACHINEN_REMOTE_<NAME>  machine address (e.g. machinen+http://host:port)
  *   MACHINEN_TOKEN          bearer token, appended automatically
@@ -50,19 +56,21 @@ export interface MachinesClient {
   plugin: MachinenPlugin;
 }
 
-function envKeyFor(name: string): string {
+export function envKeyFor(name: string): string {
   return `MACHINEN_REMOTE_${name.toUpperCase()}`;
 }
 
-function stripDotSlash(path: string): string {
-  return path.startsWith('./') ? path.slice(2) : path;
+function stringProp(prop: PropertyKey): prop is string {
+  // 'then' is excluded so awaiting a proxy never traps it as a method.
+  return typeof prop === 'string' && prop !== 'then';
 }
 
 /**
  * A call result that works for both unary (`await fn()`) and streaming
  * (`for await (const x of fn())`) bindings — the actual kind is only known
  * once the machine manifest has loaded, but user-facing types (from bindgen)
- * always say which one to use.
+ * always say which one to use. The invocation is memoized, so awaiting and
+ * iterating the same result never calls the machine twice.
  */
 function lazyResult(getFn: Promise<AnyFn>, args: unknown[]): any {
   let pending: Promise<unknown> | undefined;
@@ -72,8 +80,9 @@ function lazyResult(getFn: Promise<AnyFn>, args: unknown[]): any {
     catch: (onRejected?: any) => run().catch(onRejected),
     finally: (onFinally?: any) => run().finally(onFinally),
     async *[Symbol.asyncIterator]() {
-      const fn = await getFn;
-      yield* fn(...args) as AsyncIterable<unknown>;
+      // Stream bindings return an AsyncIterable synchronously, so run()
+      // resolves to the iterable itself.
+      yield* (await run()) as AsyncIterable<unknown>;
     },
   };
 }
@@ -95,7 +104,10 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   });
 
   const registered = new Map<string, string>();
+  const machineProxies = new Map<string, AnyModules>();
+  const moduleProxies = new Map<string, AnyModule>();
   const modules = new Map<string, Promise<AnyModule>>();
+  const callables = new Map<string, AnyFn>();
 
   function resolveEntry(name: string, opts?: MachineModuleOptions): string {
     const base = options.remotes?.[name] ?? process.env[envKeyFor(name)];
@@ -104,21 +116,21 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
         `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }) or set ${envKeyFor(name)}.`,
       );
     }
-    const queryIndex = base.indexOf('?');
-    const params = new URLSearchParams(queryIndex === -1 ? '' : base.slice(queryIndex + 1));
+    const spec = parseMachineEntry(name, base);
     const token = options.token ?? process.env.MACHINEN_TOKEN;
-    if (token && !params.has('token')) params.set('token', token);
-    if (opts?.version && !params.has('version')) params.set('version', opts.version);
-    const path = queryIndex === -1 ? base : base.slice(0, queryIndex);
-    const query = params.toString();
-    return query ? `${path}?${query}` : path;
+    if (token && !spec.params.has('token')) spec.params.set('token', token);
+    if (opts?.version && !spec.params.has('version')) spec.params.set('version', opts.version);
+    return formatMachineEntry(spec);
   }
 
-  function ensureRegistered(name: string, opts?: MachineModuleOptions): void {
-    if (registered.has(name)) return;
-    const entry = resolveEntry(name, opts);
-    registered.set(name, entry);
-    instance.registerRemotes([{ name, entry }]);
+  function ensureRegistered(name: string, opts?: MachineModuleOptions): string {
+    let entry = registered.get(name);
+    if (!entry) {
+      entry = resolveEntry(name, opts);
+      registered.set(name, entry);
+      instance.registerRemotes([{ name, entry }]);
+    }
+    return entry;
   }
 
   function loadModule(name: string, modulePath: string, opts?: MachineModuleOptions) {
@@ -127,7 +139,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     if (!loading) {
       loading = (async () => {
         ensureRegistered(name, opts);
-        const mod = await instance.loadRemote<AnyModule>(`${name}/${stripDotSlash(modulePath)}`);
+        const mod = await instance.loadRemote<AnyModule>(`${name}/${stripExposePrefix(modulePath)}`);
         if (!mod) throw new Error(`[machinen] module "${modulePath}" not found on "${name}"`);
         return mod;
       })();
@@ -137,39 +149,62 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     return loading;
   }
 
+  function callable(
+    name: string,
+    modulePath: string,
+    fnName: string,
+    opts?: MachineModuleOptions,
+  ): AnyFn {
+    const key = `${name}|${modulePath}|${fnName}`;
+    let fn = callables.get(key);
+    if (!fn) {
+      const resolved = () =>
+        loadModule(name, modulePath, opts).then((mod) => {
+          const target = mod[fnName];
+          if (typeof target !== 'function') {
+            throw new Error(`[machinen] "${name}/${modulePath}" has no function "${fnName}"`);
+          }
+          return target as AnyFn;
+        });
+      fn = (...args: unknown[]) => lazyResult(resolved(), args);
+      callables.set(key, fn);
+    }
+    return fn;
+  }
+
   function moduleProxy(name: string, modulePath: string, opts?: MachineModuleOptions): AnyModule {
-    return new Proxy({} as AnyModule, {
-      get(_target, fnName) {
-        if (typeof fnName !== 'string' || fnName === 'then') return undefined;
-        return (...args: unknown[]) =>
-          lazyResult(
-            loadModule(name, modulePath, opts).then((mod) => {
-              const fn = mod[fnName];
-              if (typeof fn !== 'function') {
-                throw new Error(`[machinen] "${name}/${modulePath}" has no function "${fnName}"`);
-              }
-              return fn;
-            }),
-            args,
-          );
-      },
-    });
+    const key = `${name}|${modulePath}`;
+    let proxy = moduleProxies.get(key);
+    if (!proxy) {
+      proxy = new Proxy({} as AnyModule, {
+        get(_target, fnName) {
+          if (!stringProp(fnName)) return undefined;
+          return callable(name, modulePath, fnName, opts);
+        },
+      });
+      moduleProxies.set(key, proxy);
+    }
+    return proxy;
   }
 
   return {
     machine<M extends AnyModules = AnyModules>(name: string, opts?: MachineModuleOptions) {
-      return new Proxy({} as MachineProxy<M>, {
-        get(_target, moduleName) {
-          if (typeof moduleName !== 'string' || moduleName === 'then') return undefined;
-          return moduleProxy(name, moduleName, opts);
-        },
-      });
+      let proxy = machineProxies.get(name);
+      if (!proxy) {
+        proxy = new Proxy({} as AnyModules, {
+          get(_target, moduleName) {
+            if (!stringProp(moduleName)) return undefined;
+            return moduleProxy(name, normalizeExpose(moduleName), opts);
+          },
+        });
+        machineProxies.set(name, proxy);
+      }
+      return proxy as MachineProxy<M>;
     },
 
     async warm(remoteNames) {
       const names = remoteNames ?? Object.keys(options.remotes ?? {});
-      for (const name of names) ensureRegistered(name);
-      await plugin.warm(names.map((name) => ({ name, entry: registered.get(name)! })));
+      await plugin.warm(names.map((name) => ({ name, entry: ensureRegistered(name) })));
     },
 
     metrics() {
@@ -180,10 +215,8 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Default client — what generated bindings import, so user code can simply
 // `import { math } from './machines/compute_machine'` and call functions.
-// ---------------------------------------------------------------------------
 
 let defaultOptions: MachinesOptions = {};
 let defaultClient: MachinesClient | undefined;
@@ -206,11 +239,12 @@ export function machineModule<M extends AnyModule>(
   modulePath: string,
   opts?: MachineModuleOptions,
 ): M {
+  let mod: AnyModule | undefined;
   return new Proxy({} as M, {
     get(_target, fnName) {
-      if (typeof fnName !== 'string' || fnName === 'then') return undefined;
-      const mod = getMachines().machine(machineName, opts) as Record<string, AnyModule>;
-      return mod[modulePath][fnName];
+      if (!stringProp(fnName)) return undefined;
+      mod ??= getMachines().machine(machineName, opts)[normalizeExpose(modulePath)];
+      return mod[fnName];
     },
   });
 }

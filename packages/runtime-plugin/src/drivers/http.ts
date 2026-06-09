@@ -64,13 +64,14 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
       if (!res.body) throw new MachineTransportError('stream response had no body');
 
       const decoder = new TextDecoder();
-      let buffer = '';
+      // Split per chunk and carry only the trailing partial line, so long
+      // streams stay linear instead of re-slicing one growing buffer.
+      let remainder = '';
       for await (const part of res.body) {
-        buffer += decoder.decode(part as Uint8Array, { stream: true });
-        let newline: number;
-        while ((newline = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, newline).trim();
-          buffer = buffer.slice(newline + 1);
+        const lines = (remainder + decoder.decode(part as Uint8Array, { stream: true })).split('\n');
+        remainder = lines.pop() ?? '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
           if (!line) continue;
           const event = JSON.parse(line) as {
             chunk?: unknown;

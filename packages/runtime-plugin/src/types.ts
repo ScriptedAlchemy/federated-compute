@@ -103,3 +103,20 @@ export function parseMachineEntry(remoteName: string, entry: string): MachineSpe
   }
   throw new Error(`[machinen-plugin] not a machine entry: "${entry}"`);
 }
+
+/** Inverse of parseMachineEntry: serialize a spec (with possibly edited params) back to an entry string. */
+export function formatMachineEntry(spec: MachineSpec): string {
+  const base = spec.kind === 'image' ? `${IMAGE_PROTOCOL}${spec.image}` : `${ATTACH_PREFIX}${spec.url}`;
+  const query = spec.params.toString();
+  return query ? `${base}?${query}` : base;
+}
+
+/** `'./math'` -> `'math'` (MF loadRemote id form). */
+export function stripExposePrefix(path: string): string {
+  return path.startsWith('./') ? path.slice(2) : path;
+}
+
+/** `'math'` -> `'./math'` (manifest expose-map form). */
+export function normalizeExpose(path: string): string {
+  return path.startsWith('.') ? path : `./${path}`;
+}

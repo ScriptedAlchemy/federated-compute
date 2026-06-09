@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { createMachines } from '../src/client.js';
+import { createMachines, envKeyFor } from '../src/client.js';
 import { createGuestRuntime } from '../src/guest.js';
 import { inProcessDriver } from '../src/drivers/in-process.js';
 import type { MachineDriver } from '../src/types.js';
@@ -90,7 +90,7 @@ describe('createMachines facade', () => {
 
   test('remote addresses resolve from MACHINEN_REMOTE_* env vars', async () => {
     const { name, entry } = unique('envy');
-    const envKey = `MACHINEN_REMOTE_${name.toUpperCase()}`;
+    const envKey = envKeyFor(name);
     process.env[envKey] = entry;
     cleanupEnv.push(envKey);
 

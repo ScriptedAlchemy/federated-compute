@@ -1,4 +1,4 @@
-import type { FunctionSignature, MachineExposeManifest } from './types.js';
+import { stripExposePrefix, type FunctionSignature, type MachineExposeManifest } from './types.js';
 
 function pascalCase(input: string): string {
   return input
@@ -15,7 +15,7 @@ function renderFunction(name: string, sig: FunctionSignature): string {
 }
 
 function identifier(exposePath: string): string {
-  return exposePath.replace(/^\.\//, '').replace(/[^a-zA-Z0-9_$]/g, '_');
+  return stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
 }
 
 /**

@@ -69,7 +69,7 @@ export function processDriver(opts: { commands?: BootCommandMap } = {}): Machine
   };
 }
 
-function getFreePort(): Promise<number> {
+export function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', reject);
