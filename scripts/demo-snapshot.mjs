@@ -1,13 +1,5 @@
-// Boot once, run everywhere — the Machinen story through Module Federation.
-//
-// Scenario 1 (cold): federation boots machines from images, works them warm.
-// Scenario 2 (unfreeze): the warm machines are snapshotted; a brand-new
-// federation host then points its entries at the snapshots — loading the
-// remote IS restoring the machine, which continues exactly where it left off.
-//
-// The process driver simulates the freeze at application-state level; with
-// @machinen/runtime the same driver interface snapshots the whole microVM
-// (memory, open files, timers).
+// Boot once, run everywhere: cold-boot machines, work them warm, snapshot,
+// then a fresh federation host restores them from the snapshots mid-state.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMachines } from '../packages/runtime-plugin/dist/client.js';

@@ -1,10 +1,9 @@
-// Host-owned bindgen: pull types from DEPLOYED machines, exactly like MF
-// hosts pull @mf-types from a remote's URL. This app knows only addresses
-// (its own config/env) — it never reads another repo's source or disk.
+// Host-owned bindgen: pull types from deployed machine addresses only —
+// the @mf-types flow for machines.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchBindingsSource } from '@federated-compute/machinen-plugin';
+import { fetchBindingsSource, parseMachineEntry } from '@federated-compute/machinen-plugin';
 
 const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'src/generated');
 const token = process.env.MACHINEN_TOKEN;
@@ -20,7 +19,7 @@ const machines = {
 
 await mkdir(OUT_DIR, { recursive: true });
 for (const [name, entry] of Object.entries(machines)) {
-  const url = entry.replace(/^machinen\+/, '').split('?')[0];
+  const { url } = parseMachineEntry(name, entry);
   const source = await fetchBindingsSource(url, { token });
   const file = path.join(OUT_DIR, `${name}.ts`);
   await writeFile(file, source);

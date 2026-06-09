@@ -1,4 +1,4 @@
-import type { CallContext, MachineHandle, MachineSpec } from './types.js';
+import type { CallContext, MachineExposeManifest, MachineHandle, MachineSpec } from './types.js';
 
 type Listener<T> = (ctx: T) => void | Promise<void>;
 
@@ -27,7 +27,11 @@ export class AsyncSeriesHook<T> {
 
 export interface MachineHooks {
   beforeMachineBoot: AsyncSeriesHook<{ spec: MachineSpec }>;
-  onMachineReady: AsyncSeriesHook<{ spec: MachineSpec; handle: MachineHandle }>;
+  onMachineReady: AsyncSeriesHook<{
+    spec: MachineSpec;
+    handle: MachineHandle;
+    manifest: MachineExposeManifest;
+  }>;
   beforeCall: AsyncSeriesHook<CallContext>;
   afterCall: AsyncSeriesHook<CallContext & { result: unknown; durationMs: number }>;
   /** A call failed *inside* the machine (guest threw). */

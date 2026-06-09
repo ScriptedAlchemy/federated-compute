@@ -1,7 +1,5 @@
-// Interactive demo backend: the browser calls this API, and each handler is
-// plain binding usage — machines attach lazily on the first call that needs
-// them. The hook system feeds a live activity log so the UI can show
-// federation working in real time.
+// Interactive demo backend: every handler is plain binding usage; machines
+// attach lazily on first call.
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -42,9 +40,12 @@ function logEvent(kind: ActivityEvent['kind'], detail: string) {
   if (events.length > 200) events.splice(0, events.length - 200);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const plugin = getMachines().plugin;
-plugin.machineHooks.onMachineReady.on(async ({ spec, handle }) => {
-  const manifest = await handle.manifest();
+plugin.machineHooks.onMachineReady.on(({ spec, manifest }) => {
   machineStatus.set(spec.remoteName, {
     attached: true,
     runtime: manifest.metaData?.runtime,
@@ -57,7 +58,7 @@ plugin.machineHooks.afterCall.on(({ spec, module, fn, durationMs }) => {
   logEvent('call', `${spec.remoteName} ${module}#${fn} ${durationMs.toFixed(1)}ms`);
 });
 plugin.machineHooks.onMachineError.on(({ spec, module, fn, error }) => {
-  logEvent('error', `${spec.remoteName} ${module}#${fn} failed: ${(error as Error).message}`);
+  logEvent('error', `${spec.remoteName} ${module}#${fn} failed: ${errorMessage(error)}`);
 });
 plugin.machineHooks.onMachineCrash.on(({ spec }) => {
   machineStatus.set(spec.remoteName, { attached: false });
@@ -100,10 +101,7 @@ async function handleStatus(res: http.ServerResponse) {
   });
 }
 
-/**
- * The "real-world scenario": one user action fanning out across three
- * machines in three languages, composed like local function calls.
- */
+/** One request fanning out across three machines in three languages. */
 async function handlePipeline(req: http.IncomingMessage, res: http.ServerResponse) {
   const { text: input } = await readBody(req);
   if (typeof input !== 'string' || !input.trim()) {
@@ -145,7 +143,7 @@ async function handleCompute(req: http.IncomingMessage, res: http.ServerResponse
     const n = Math.min(Math.max(Number(body.n) || 0, 0), 35);
     return json(res, 200, { result: await math.fib(n), n });
   }
-  json(res, 400, { error: 'expected op: add | fib' });
+  return json(res, 400, { error: 'expected op: add | fib' });
 }
 
 /** Stream crossing two boundaries: machine -> host (NDJSON) -> browser (SSE). */
@@ -168,7 +166,7 @@ async function handleCountdown(req: http.IncomingMessage, res: http.ServerRespon
     }
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
   } catch (error) {
-    res.write(`data: ${JSON.stringify({ error: (error as Error).message })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
   }
   res.end();
 }
@@ -180,15 +178,9 @@ async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse
   json(res, 200, { value: await counter.increment() });
 }
 
-// ---------------------------------------------------------------------------
-// Data gravity: the same report, two topologies.
-// ---------------------------------------------------------------------------
-
-/**
- * Scenario 1 — the consumer queries the far-region database itself. The host's
- * db_machine entry points THROUGH the simulated WAN link, so this classic
- * sequential N+1 pays region latency on every single query.
- */
+// Data gravity: the same report, two topologies. The host's db_machine entry
+// routes through the simulated WAN, so this sequential N+1 pays region
+// latency per query.
 async function handleReportRemote(req: http.IncomingMessage, res: http.ServerResponse) {
   const { limit = 5 } = await readBody(req);
   const start = performance.now();
@@ -216,11 +208,8 @@ async function handleReportRemote(req: http.IncomingMessage, res: http.ServerRes
   });
 }
 
-/**
- * Scenario 2 — the code went to the data: one federated call to
- * analytics_machine (co-located with db_machine), which runs the same N+1
- * over same-region hops and returns the finished report.
- */
+// One federated call to analytics_machine (co-located with the db), which
+// runs the same N+1 over same-region hops.
 async function handleReportColocated(req: http.IncomingMessage, res: http.ServerResponse) {
   const { limit = 5 } = await readBody(req);
   const start = performance.now();
@@ -239,17 +228,24 @@ async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerRe
   if (req.method === 'POST') {
     const { ms } = await readBody(req);
     const results = await Promise.all(
-      REGION_LINKS.map((link) =>
-        fetch(`${link}/__latency`, {
+      REGION_LINKS.map(async (link) => {
+        const upstream = await fetch(`${link}/__latency`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ ms }),
-        }).then((r) => r.json()),
-      ),
-    );
-    return json(res, 200, results[0]);
+        });
+        if (!upstream.ok) throw new Error(`region link ${link} answered ${upstream.status}`);
+        return upstream.json();
+      }),
+    ).catch((error) => {
+      json(res, 502, { error: errorMessage(error) });
+      return undefined;
+    });
+    if (results) json(res, 200, results[0]);
+    return;
   }
   const upstream = await fetch(`${REGION_LINKS[0]}/__latency`);
+  if (!upstream.ok) return json(res, 502, { error: `region link answered ${upstream.status}` });
   json(res, 200, await upstream.json());
 }
 
@@ -296,7 +292,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   } catch (error) {
-    json(res, 500, { error: (error as Error).message });
+    json(res, 500, { error: errorMessage(error) });
   }
 });
 

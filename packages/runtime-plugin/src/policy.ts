@@ -110,12 +110,15 @@ export class MetricsRecorder {
   };
   private durations: number[] = [];
   private cursor = 0;
+  /** Sorted view cached between snapshots; polling metrics shouldn't re-sort idle data. */
+  private sortedCache: number[] | null = null;
 
   record(event: keyof MetricsRecorder['counters']): void {
     this.counters[event]++;
   }
 
   recordDuration(ms: number): void {
+    this.sortedCache = null;
     if (this.durations.length < RESERVOIR_SIZE) {
       this.durations.push(ms);
     } else {
@@ -125,7 +128,7 @@ export class MetricsRecorder {
   }
 
   snapshot(): MachineMetrics {
-    const sorted = [...this.durations].sort((a, b) => a - b);
+    const sorted = (this.sortedCache ??= [...this.durations].sort((a, b) => a - b));
     const at = (q: number) => (sorted.length ? sorted[Math.floor((sorted.length - 1) * q)] : 0);
     return {
       ...this.counters,

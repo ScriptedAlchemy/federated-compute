@@ -1,10 +1,5 @@
-// Data gravity, CLI edition: the same report two ways.
-//
-//   cross-region:  host runs the N+1 itself; every query crosses the WAN
-//   co-located:    one federated call to analytics_machine, deployed next to
-//                  the database — the N+1 happens over same-region hops
-//
-// The consumer's code style is identical in both: imported functions.
+// Data gravity, CLI edition: the same report cross-region (N+1 over the WAN)
+// vs co-located (one federated call to analytics_machine next to the db).
 import { createMachines } from '../packages/runtime-plugin/dist/client.js';
 import { startLatencyProxy } from './latency-proxy.mjs';
 import { startMachines } from './machines.mjs';
@@ -41,7 +36,11 @@ const totals = [];
 for (const user of users) {
   const orders = await db.ordersFor(user.id);
   queries++;
-  totals.push({ name: user.name, total: orders.reduce((s, o) => s + o.amount, 0) });
+  totals.push({
+    name: user.name,
+    plan: user.plan,
+    total: orders.reduce((s, o) => s + o.amount, 0),
+  });
 }
 totals.sort((a, b) => b.total - a.total);
 const remoteMs = performance.now() - start;

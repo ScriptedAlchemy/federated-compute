@@ -41,6 +41,8 @@ const shutdown = () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 host.on('exit', (code) => {
+  wanDb.close();
+  wanAnalytics.close();
   stop();
   process.exit(code ?? 0);
 });

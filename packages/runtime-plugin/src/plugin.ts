@@ -128,7 +128,7 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         const handle = await options.driver.boot(spec);
         const manifest = await handle.manifest();
         checkVersion(spec, manifest);
-        await machineHooks.onMachineReady.emit({ spec, handle });
+        await machineHooks.onMachineReady.emit({ spec, handle, manifest });
         return { spec, handle, manifest };
       })(),
       bootTimeoutMs,

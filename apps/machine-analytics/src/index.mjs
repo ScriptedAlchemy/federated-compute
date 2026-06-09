@@ -1,7 +1,6 @@
-// Analytics machine — "the code that moved to the data". It is BOTH a guest
-// (serves the protocol to consumers) and a consumer (uses federation bindings
-// to query db_machine, which sits in the same region: its MACHINEN_REMOTE_DB_MACHINE
-// points at the LOCAL address, no WAN in between).
+// Analytics machine — guest AND consumer: it serves the protocol while
+// querying db_machine through federation bindings resolved to a same-region
+// (local) address.
 import { createGuestRuntime, serveGuest } from '@federated-compute/machinen-plugin/guest';
 import { createMachines } from '@federated-compute/machinen-plugin/client';
 
@@ -10,8 +9,6 @@ const db = machines.machine('db_machine').db;
 
 async function topSpenders(limit = 5) {
   const start = performance.now();
-  // The exact same N+1 the consumer would run — but here every query is a
-  // same-region hop instead of a WAN round-trip.
   const users = await db.listUsers();
   let queries = 1;
   const totals = [];

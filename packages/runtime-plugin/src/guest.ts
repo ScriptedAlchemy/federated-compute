@@ -168,6 +168,27 @@ function errorBody(error: unknown) {
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
+/** Read a JSON request body, answering 413 and returning undefined past the cap. */
+async function readJsonBody(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<Record<string, unknown> | undefined> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += (chunk as Buffer).length;
+    if (bytes > MAX_BODY_BYTES) {
+      res.writeHead(413, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({ ok: false, error: { message: 'payload too large', type: 'PayloadError' } }),
+      );
+      return undefined;
+    }
+    chunks.push(chunk as Buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
+
 /**
  * Serve a guest runtime over HTTP (`GET /mf-manifest.json`, `GET /mf/health`,
  * `POST /mf/call`). Streaming functions respond as NDJSON. In a real Machinen
@@ -175,12 +196,13 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024;
  */
 export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
   const hostname = opts.hostname ?? '127.0.0.1';
+  const guestName = guest.manifest().name;
 
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/mf/health') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, name: guest.manifest().name }));
+        res.end(JSON.stringify({ ok: true, name: guestName }));
         return;
       }
       if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) {
@@ -193,8 +215,7 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         res.end(JSON.stringify(guest.manifest()));
         return;
       }
-      // The machine distributes its own bindings (MF's @mf-types analog):
-      // consumers' bindgen downloads this, never reading this repo's source.
+      // Type distribution: the machine's own bindings, MF's @mf-types analog.
       if (req.method === 'GET' && req.url === '/mf-types.ts') {
         res.writeHead(200, { 'content-type': 'application/typescript' });
         res.end(generateBindings(guest.manifest()));
@@ -217,29 +238,22 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
           return;
         }
         if (req.method === 'POST') {
-          const chunks: Buffer[] = [];
-          for await (const chunk of req) chunks.push(chunk as Buffer);
-          guest.state.rehydrate(JSON.parse(Buffer.concat(chunks).toString()).state);
+          const body = await readJsonBody(req, res);
+          if (!body) return;
+          guest.state.rehydrate(body.state);
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
           return;
         }
       }
       if (req.method === 'POST' && req.url === '/mf/call') {
-        const chunks: Buffer[] = [];
-        let bytes = 0;
-        for await (const chunk of req) {
-          bytes += (chunk as Buffer).length;
-          if (bytes > MAX_BODY_BYTES) {
-            res.writeHead(413, { 'content-type': 'application/json' });
-            res.end(
-              JSON.stringify({ ok: false, error: { message: 'payload too large', type: 'PayloadError' } }),
-            );
-            return;
-          }
-          chunks.push(chunk as Buffer);
-        }
-        const { module: modulePath, fn, args } = JSON.parse(Buffer.concat(chunks).toString());
+        const body = await readJsonBody(req, res);
+        if (!body) return;
+        const { module: modulePath, fn, args } = body as {
+          module: string;
+          fn: string;
+          args?: unknown[];
+        };
 
         const signature = guest.signature(modulePath, fn);
         if (signature?.stream) {

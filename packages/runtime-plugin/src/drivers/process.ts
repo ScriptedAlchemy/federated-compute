@@ -50,14 +50,9 @@ export interface ProcessDriverOptions {
 /**
  * Driver that boots the machine guest as a local child process — the stand-in
  * for `@machinen/runtime`'s `boot()` until its source is public. The entry's
- * image path is the guest program: `machinen://./dist/guest.js?port=3001`,
- * `machinen://./Main.java?port=3002`, `machinen://./app.jar?port=3003`, ...
- *
- * Boot once, run everywhere: `handle.snapshot()` freezes the machine's warm
- * state into a `.snap.json` bundle (which, like Machinen snapshot bundles,
- * remembers the image it was booted from). Booting an entry whose image is a
- * `.snap.json` RESTORES: the image boots and the saved state is injected, so
- * the machine resumes where it left off instead of starting over.
+ * image is the guest program (`.js`/`.java`/`.jar`/`.py`...).
+ * `handle.snapshot()` freezes warm state into a `.snap` bundle that remembers
+ * its image; booting a `machinen://*.snap` entry restores instead of cold-booting.
  */
 export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
   const snapshotDir = opts.snapshotDir ?? path.join('.machinen', 'snapshots');
