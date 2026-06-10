@@ -138,6 +138,91 @@ button:active { transform: translateY(1px) scale(.985); }
   white-space: nowrap;
 }
 
+/* ---- "what moves where?" vocabulary -----------------------------------------
+   The demo teaches four ways to move compute; every interactive surface
+   declares its movement pattern with one badge + mini-diagram so the cards
+   read as variations on a single question: what crosses the wire (calls,
+   the artifact, or nothing) — and in which direction?
+
+     attach  — calls move, the machine stays put           (blue)
+     pull    — the artifact moves TO you, a clone boots    (teal)
+     deploy  — the artifact moves TO the data              (green)
+     freeze  — nothing crosses the network; state -> disk  (purple)        */
+:root {
+  --mv-attach: #58a6ff;
+  --mv-pull: #4dd2bf;
+  --mv-deploy: #3fb950;
+  --mv-freeze: #c792ea;
+}
+.mv { display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.mv[data-mv=attach] { --mvc: var(--mv-attach); }
+.mv[data-mv=pull]   { --mvc: var(--mv-pull); }
+.mv[data-mv=deploy] { --mvc: var(--mv-deploy); }
+.mv[data-mv=freeze] { --mvc: var(--mv-freeze); }
+.mv .mvname {
+  font-family: var(--display); font-size: 9px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; white-space: nowrap;
+  color: var(--mvc);
+  border: 1px solid color-mix(in srgb, var(--mvc) 40%, transparent);
+  background: color-mix(in srgb, var(--mvc) 9%, transparent);
+  border-radius: 3px; padding: 2px 7px;
+}
+.mv .mvdiag { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; color: var(--ink-dim); }
+.mv .mvdiag i {
+  font-style: normal; white-space: nowrap;
+  border: 1px solid var(--panel-edge); border-radius: 3px;
+  background: var(--well); padding: 1px 6px;
+}
+.mv .mvdiag i.mvhot { color: var(--mvc); border-color: color-mix(in srgb, var(--mvc) 45%, transparent); }
+/* The wire: line style encodes WHAT moves, arrowheads encode the direction. */
+.mv .mvwire { position: relative; width: 54px; height: 10px; flex: none; background-repeat: repeat-x; }
+.mv .mvwire[data-what=calls] {
+  background-image: repeating-linear-gradient(90deg, var(--mvc) 0 5px, transparent 5px 9px);
+  background-size: 9px 2px; background-position: 0 4px;
+}
+.mv .mvwire[data-what=artifact] {
+  background-image: linear-gradient(var(--mvc), var(--mvc));
+  background-size: 100% 4px; background-position: 0 3px; border-radius: 2px;
+}
+.mv .mvwire[data-what=none] {
+  background-image: repeating-linear-gradient(90deg, var(--ink-faint) 0 2px, transparent 2px 8px);
+  background-size: 8px 2px; background-position: 0 4px; opacity: .6;
+}
+.mv .mvwire::before, .mv .mvwire::after {
+  content: none; position: absolute; top: 1px; width: 0; height: 0;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+}
+.mv .mvwire[data-dir=right]::after, .mv .mvwire[data-dir=both]::after { content: ''; right: 0; border-left: 6px solid var(--mvc); }
+.mv .mvwire[data-dir=left]::before, .mv .mvwire[data-dir=both]::before { content: ''; left: 0; border-right: 6px solid var(--mvc); }
+.mv .mvwhat { font-size: 9.5px; color: var(--ink-dim); white-space: nowrap; }
+.mv .mvwhat b { color: var(--mvc); font-weight: 500; }
+
+/* The legend strip tying the four moves together (page 01 hosts it). */
+.moves { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.move {
+  border: 1px solid var(--panel-edge); border-radius: 6px;
+  background: var(--well); padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.move .mv { gap: 7px; }
+.move .mvline { color: var(--ink-dim); font-size: 10.5px; line-height: 1.5; }
+.move .mvline b { color: var(--ink); font-weight: 500; }
+.move .mvwhere { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); margin-top: auto; }
+.move .mvwhere a { color: var(--ink-dim); text-decoration: none; }
+.move .mvwhere a:hover { color: var(--ink); }
+@media (max-width: 1100px) {
+  .moves { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 700px) {
+  .moves { grid-template-columns: 1fr; }
+}
+
+/* Act numbering: the page reads as one arc. */
+h2 .actno {
+  color: var(--ink-faint); font-weight: 600; letter-spacing: .14em;
+  padding-right: 2px;
+}
+
 /* Staggered page-load reveal: give elements .reveal + an inline --d index. */
 @keyframes rise {
   from { opacity: 0; transform: translateY(16px); }

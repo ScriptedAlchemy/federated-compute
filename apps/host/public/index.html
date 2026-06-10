@@ -14,6 +14,7 @@
     --python: #58a6ff;
     --hot: #e5534b;
     --snap: #c792ea;
+    --pull: #4dd2bf;
   }
   body {
     background-image:
@@ -146,7 +147,11 @@
   .tnode.host-node { border-color: rgba(63, 185, 80, .35); }
   .tnode.host-node .tled { background: var(--node); box-shadow: 0 0 8px var(--node); }
 
-  /* Edges column: each row is one loadRemote id — the edge IS the import. */
+  /* Edges column: each row is one loadRemote id — the edge IS the import.
+     Edge taxonomy (data-kind): line style says WHAT crosses the edge.
+       rpc      thin dashed line, one pulse dot per call
+       artifact thicker solid line, packet TRAIN + bytes/digest label;
+                persists dimmed afterward as provenance                  */
   .tedges { display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 0 14px; }
   .tedge {
     display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
@@ -171,6 +176,43 @@
     font-size: 10px; color: var(--ink-faint); letter-spacing: .1em; text-transform: uppercase;
   }
   .twan a { color: var(--python); }
+
+  /* Artifact cache sub-node: flashes per resolver event (hit/fetch). */
+  .tnode.cache-node { border-style: dashed; color: var(--ink-dim); transition: border-color .4s, box-shadow .4s; }
+  .tnode.cache-node .tled { background: #2c3640; }
+  .tnode.cache-node.flash-fetch { border-color: rgba(240, 136, 62, .7); box-shadow: 0 0 18px -6px var(--java); }
+  .tnode.cache-node.flash-fetch .tled { background: var(--java); box-shadow: 0 0 8px var(--java); }
+  .tnode.cache-node.flash-hit { border-color: rgba(63, 185, 80, .7); box-shadow: 0 0 18px -6px var(--node); }
+  .tnode.cache-node.flash-hit .tled { background: var(--node); box-shadow: 0 0 8px var(--node); }
+
+  /* Local machines group (process driver): origin + pulled clones, dynamic.
+     The artifact edge here runs VERTICALLY (origin above, clone below): a
+     thick teal pipe whose label is the pull's real stats — the column-width
+     rendering of the same artifact-edge taxonomy. */
+  .tlocal {
+    border-top: 1px dashed var(--panel-edge); margin-top: 10px; padding-top: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .tlocal .tlocal-name {
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 2px;
+  }
+  .tnode.clone { --tacc: var(--pull); border-color: rgba(77, 210, 191, .35); }
+  .tnode.origin-node { --tacc: var(--snap); border-color: rgba(199, 146, 234, .35); animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tclone { animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tclone .tnode { display: flex; }
+  .tpull {
+    margin: 0 0 3px 12px; padding: 2px 0 2px 10px;
+    border-left: 3px solid rgba(77, 210, 191, .45);
+    font-size: 9px; color: var(--ink-faint); line-height: 1.5;
+  }
+  .tpull b { color: var(--pull); font-weight: 500; }
+  .tclone.pulse .tpull { animation: pull-glow 1.2s ease-out 2; }
+  @keyframes pull-glow {
+    0% { border-left-color: rgba(77, 210, 191, .45); }
+    40% { border-left-color: var(--pull); box-shadow: -6px 0 14px -6px var(--pull); }
+    100% { border-left-color: rgba(77, 210, 191, .45); }
+  }
   .topo-caption { color: var(--ink-dim); font-size: 11px; margin-top: 12px; }
   .topo-caption code { color: var(--node); background: var(--well); padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
   .topo-caption b { color: var(--ink); font-weight: 500; }
@@ -250,12 +292,12 @@
   .spark-label { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); margin-top: 5px; }
 
   /* ---------- layout: asymmetric rows ---------- */
-  #panel-pipeline { grid-column: span 8; --sec: var(--java); }
-  #panel-state    { grid-column: span 4; }
-  #panel-snapshot { grid-column: span 8; --sec: var(--snap); }
-  #panel-compute  { grid-column: span 4; --sec: var(--node); }
-  #panel-stream   { grid-column: span 12; --sec: var(--python); }
-  #panel-log      { grid-column: span 12; }
+  #panel-moves     { grid-column: span 12; }
+  #panel-pipeline  { grid-column: span 8; --sec: var(--java); }
+  #panel-state     { grid-column: span 4; }
+  #panel-lifecycle { grid-column: span 12; --sec: var(--snap); }
+  #panel-stream    { grid-column: span 12; --sec: var(--python); }
+  #panel-log       { grid-column: span 12; }
 
   .concept {
     color: var(--ink-dim); font-size: 11.5px; margin: -6px 0 12px;
@@ -369,10 +411,12 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ---------- snapshot ---------- */
+  /* ---------- lifecycle (act 04) ---------- */
   .snap-steps { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
   .snap-steps button { border-color: rgba(199, 146, 234, .4); color: var(--snap); }
   .snap-steps button:hover:not(:disabled) { border-color: var(--snap); box-shadow: 0 0 16px -6px rgba(199, 146, 234, .6); }
+  .snap-steps button.pull-step { border-color: rgba(77, 210, 191, .4); color: var(--pull); }
+  .snap-steps button.pull-step:hover:not(:disabled) { border-color: var(--pull); box-shadow: 0 0 16px -6px rgba(77, 210, 191, .6); }
   .snap-steps button:disabled { opacity: .35; cursor: not-allowed; }
   .snap-steps .sarrow { color: var(--ink-faint); font-size: 12px; }
   .snap-phase {
@@ -384,16 +428,58 @@
   .snap-phase[data-phase=running] i { background: var(--node); box-shadow: 0 0 8px var(--node); }
   .snap-phase[data-phase=snapshotted] i { background: var(--snap); box-shadow: 0 0 8px var(--snap); }
   .snap-phase[data-phase=restored] i { background: var(--node); box-shadow: 0 0 8px var(--node); }
-  .snap-story { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; }
-  .snap-narrative { font-size: 11.5px; color: var(--ink-dim); min-height: 34px; }
+  .snap-phase[data-phase=forked] i { background: var(--pull); box-shadow: 0 0 8px var(--pull); }
+
+  /* Lineage strip: the artifact chain, lit up as the arc advances. */
+  .lineage { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .lineage .lin {
+    font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--panel-edge); border-radius: 999px;
+    color: var(--ink-faint); background: var(--well);
+    padding: 1px 9px; transition: color .4s, border-color .4s;
+  }
+  .lineage .lin.lit { color: var(--snap); border-color: rgba(199, 146, 234, .45); }
+  .lineage .lin.lit.pull-lin { color: var(--pull); border-color: rgba(77, 210, 191, .45); }
+  .lineage .larr { color: var(--ink-faint); font-size: 10px; }
+
+  .snap-narrative { font-size: 11.5px; color: var(--ink-dim); min-height: 34px; max-width: 100ch; }
   .snap-narrative b { color: var(--ink); font-weight: 500; }
   .snap-narrative .snapc { color: var(--snap); }
-  .snapval {
-    font-family: var(--display); font-size: 38px; font-weight: 700;
-    color: var(--snap); text-shadow: 0 0 22px rgba(199, 146, 234, .4);
-    font-variant-numeric: tabular-nums; min-width: 60px; text-align: right;
+  .snap-narrative .pullc { color: var(--pull); }
+
+  /* Three counters: origin + clones, each independently incrementable. */
+  .fleet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  .fleet .member {
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 10px 13px;
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center;
+    transition: border-color .4s, opacity .4s;
   }
-  .snapval .svlabel { display: block; font-size: 9px; letter-spacing: .14em; color: var(--ink-faint); text-shadow: none; font-weight: 400; }
+  .fleet .member[data-acc=snap] { --macc: var(--snap); --macc-rgb: 199, 146, 234; }
+  .fleet .member[data-acc=pull] { --macc: var(--pull); --macc-rgb: 77, 210, 191; }
+  .fleet .member.alive { border-color: rgba(var(--macc-rgb), .4); }
+  .fleet .member.absent { opacity: .45; }
+  .fleet .mname { font-family: var(--display); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--macc); }
+  .fleet .msub { grid-column: 1; font-size: 9.5px; color: var(--ink-faint); min-height: 14px; }
+  .fleet .mval {
+    grid-row: 1 / span 2; grid-column: 2;
+    font-family: var(--display); font-size: 34px; font-weight: 700;
+    color: var(--macc); text-shadow: 0 0 20px rgba(var(--macc-rgb), .4);
+    font-variant-numeric: tabular-nums;
+  }
+  .fleet .mrow { grid-column: 1 / span 2; margin-top: 8px; }
+  .fleet .mrow button { padding: 5px 12px; font-size: 10px; color: var(--macc); border-color: rgba(var(--macc-rgb), .4); }
+  .fleet .mrow button:hover:not(:disabled) { border-color: var(--macc); }
+  .fleet .mrow button:disabled { opacity: .35; cursor: not-allowed; }
+
+  .card-footer {
+    margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--panel-edge);
+    font-size: 10.5px; color: var(--ink-faint);
+  }
+  .card-footer code { color: var(--ink-dim); background: var(--well); padding: 0 4px; border-radius: 3px; }
+
+  /* artifacts capability chip on machine cards (capability-as-presence). */
+  .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
 
   /* ---------- stream ---------- */
   .ticks { display: flex; gap: 9px; margin-top: 14px; min-height: 46px; flex-wrap: wrap; align-items: center; }
@@ -433,23 +519,25 @@
   }
   #log .line[data-k=ready] .kb { color: var(--node); }
   #log .line[data-k=snapshot] .kb, #log .line[data-k=restore] .kb { color: var(--snap); }
+  #log .line[data-k=pull] .kb { color: var(--pull); }
   #log .line[data-k=error] .kb, #log .line[data-k=crash] .kb, #log .line[data-k=circuit] .kb { color: var(--hot); }
   #log .msg { color: var(--ink-dim); }
   #log .line[data-k=ready] .msg { color: var(--ink); }
-  #log .line[data-k=snapshot] .msg, #log .line[data-k=restore] .msg { color: var(--ink); }
+  #log .line[data-k=snapshot] .msg, #log .line[data-k=restore] .msg, #log .line[data-k=pull] .msg { color: var(--ink); }
   #log .line[data-k=error] .msg, #log .line[data-k=crash] .msg, #log .line[data-k=circuit] .msg { color: var(--hot); }
 
   .ms { color: var(--ink-dim); font-size: 11px; }
 
   @media (max-width: 1100px) {
-    #panel-pipeline, #panel-state, #panel-snapshot, #panel-compute, #panel-stream { grid-column: span 12; }
+    #panel-pipeline, #panel-state, #panel-lifecycle, #panel-stream { grid-column: span 12; }
     .hero { grid-template-columns: 1fr; gap: 24px; }
     .topo { grid-template-columns: 1fr; gap: 12px; }
     .tedges { padding: 0; }
+    .fleet { grid-template-columns: 1fr; }
   }
   @media (max-width: 900px) {
     main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
-    .hero, .machines, #panel-topo, #panel-pipeline, #panel-state, #panel-snapshot, #panel-compute, #panel-stream, #panel-log { grid-column: span 1; }
+    .hero, .machines, #panel-moves, #panel-topo, #panel-pipeline, #panel-state, #panel-lifecycle, #panel-stream, #panel-log { grid-column: span 1; }
     .machines { grid-template-columns: 1fr; }
     .stages { grid-template-columns: 1fr; }
     header { padding: 22px 18px 16px; }
@@ -477,11 +565,11 @@
         <b>fetch('/api/…')</b>. Federation lives in the <b>host</b>: a Node process
         (apps/host/src/server.ts) that is a stock <b>Module Federation runtime</b> consumer —
         the same <b>createInstance</b> + <b>loadRemote</b> as module-federation.io. The twist:
-        every remote entry is <b class="nodec">machinen+http://</b>, claimed by a runtime plugin
+        every remote entry is a <b class="nodec">machinen</b> address, claimed by a runtime plugin
         that resolves it to a running <b>machine</b> — a Node service, a JVM, a CPython process —
-        and hands back typed async functions. Each call becomes a
-        <b>POST /mf/call</b> RPC into the machine. Every card below shows the exact bytes that
-        crossed each boundary — open <b>“what just happened on the wire”</b> after you click.
+        and hands back typed async functions. Every card below answers one question —
+        <b>what moves where?</b> — and shows the exact bytes that crossed each boundary: open
+        <b>“what just happened on the wire”</b> after you click.
       </p>
     </div>
     <div>
@@ -489,6 +577,10 @@
       <code class="block"><span class="kw">import</span> { createInstance } <span class="kw">from</span> <span class="str">'@module-federation/runtime'</span>;
 <span class="kw">import</span> { machinenPlugin, httpAttachDriver } <span class="kw">from</span> <span class="str">'@federated-compute/machinen-plugin'</span>;
 
+<span class="cm">// three entry kinds, one runtime:</span>
+<span class="cm">//   machinen://&lt;path&gt;            boot from local disk</span>
+<span class="cm">//   machinen+http://host:port    attach to a deployment</span>
+<span class="cm">//   machinen+pull+http://…       fetch the artifact, boot a local clone</span>
 <span class="kw">const</span> host = <span class="fn">createInstance</span>({
   name: <span class="str">'host'</span>,
   remotes: [{ name: <span class="str">'java_machine'</span>, entry: <span class="str">'machinen+http://127.0.0.1:3802'</span> }, <span class="cm">/* … */</span>],
@@ -501,8 +593,46 @@
     </div>
   </section>
 
-  <section class="panel reveal" id="panel-topo" style="--d:2">
-    <h2>Topology — who runs what, where</h2>
+  <section class="panel reveal" id="panel-moves" style="--d:2">
+    <h2>The four ways to move compute — what moves where?</h2>
+    <div class="moves">
+      <div class="move">
+        <span class="mv" data-mv="attach">
+          <span class="mvname">attach</span>
+          <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+        </span>
+        <span class="mvline"><b>Calls move.</b> The machine stays where it was deployed; every invocation is an RPC to its address.</span>
+        <span class="mvwhere"><a href="#panel-pipeline">acts 02 · 03 · 05 below</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="freeze">
+          <span class="mvname">freeze / restore</span>
+          <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
+        </span>
+        <span class="mvline"><b>Nothing crosses the network.</b> State drops to disk, the process dies, a new one resumes mid-count.</span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 1–3</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="pull">
+          <span class="mvname">pull to me</span>
+          <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
+        </span>
+        <span class="mvline"><b>The artifact moves to you.</b> Image or warm snapshot is fetched over HTTP; an independent clone boots locally.</span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 4–5</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="deploy">
+          <span class="mvname">code → data</span>
+          <span class="mvdiag"><i>artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i class="mvhot">data region</i></span>
+        </span>
+        <span class="mvline"><b>The artifact moves toward the data.</b> Deploy by pull into the far region; calls stay short forever after.</span>
+        <span class="mvwhere"><a href="/gravity">page 02 — data gravity</a></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel reveal" id="panel-topo" style="--d:3">
+    <h2><span class="actno">act 01 ·</span> Topology — who runs what, where</h2>
     <div class="topo">
       <div class="tregion">
         <div class="rname"><span class="actor browser">browser</span></div>
@@ -515,6 +645,11 @@
         <div class="rname"><span class="actor host">host — node process</span></div>
         <div class="rbody">
           <span class="tnode host-node"><span class="tled"></span><span class="tlabel">MF runtime</span><span class="tsub">createInstance + machinenPlugin<br />runs every loadRemote</span></span>
+          <span class="tnode cache-node" id="topo-cache"><span class="tled"></span><span class="tlabel">artifact cache</span><span class="tsub" id="topo-cache-sub">0 artifacts<br />sha256-addressed</span></span>
+          <div class="tlocal" id="topo-local" hidden>
+            <div class="tlocal-name">local machines — process driver</div>
+            <div class="tedges" id="topo-local-edges"></div>
+          </div>
         </div>
       </div>
       <div class="tregion">
@@ -529,16 +664,23 @@
     </div>
     <p class="topo-caption">
       The chain is always: <b>browser</b> → HTTP → <b>host process</b> (which executes
-      <code>host.loadRemote('&lt;machine&gt;/&lt;module&gt;')</code> server-side) → <b>machine</b>
-      (an RPC: <code>POST /mf/call</code> to that machine's address). Edges flash as calls cross
-      them. The two eu-west machines sit behind a simulated WAN — that's page <b>02</b>.
+      <code>host.loadRemote('&lt;machine&gt;/&lt;module&gt;')</code> server-side) → <b>machine</b>.
+      Edge style says what crosses it: thin dashed = <b>RPC calls</b>, thick teal pipe = an
+      <b>artifact</b> moved (real bytes · cache hit|miss; the digest is in the wire trace). Act 04
+      grows this map live: the pulled clones appear under the host with the cache that fed them.
+      The two eu-west machines sit behind a simulated WAN — that's page <b>02</b>.
     </p>
   </section>
 
-  <div class="machines reveal" id="machines" style="--d:3"></div>
+  <div class="machines reveal" id="machines" style="--d:4"></div>
 
-  <section class="panel reveal" id="panel-pipeline" style="--d:4">
-    <h2>Polyglot pipeline — one request, three machines</h2>
+  <section class="panel reveal" id="panel-pipeline" style="--d:5">
+    <h2><span class="actno">act 02 ·</span> Polyglot pipeline — one request, three machines</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">3 machines</i></span>
+      <span class="mvwhat"><b>calls move</b> — the machines stay put</span>
+    </div>
     <p class="concept"><b>One handler fans out across three runtimes.</b> Each stage below is one <code>loadRemote</code> + plain calls — no SDKs, no per-language clients.</p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> apps/host/src/server.ts</div>
     <code class="card-code"><span class="kw">const</span> strings = <span class="kw">await</span> host.loadRemote(<span class="str">'java_machine/strings'</span>);   <span class="cm">// jvm</span>
@@ -557,9 +699,14 @@
     </details>
   </section>
 
-  <section class="panel reveal" id="panel-state" style="--d:5">
-    <h2>Machine-owned state</h2>
-    <p class="concept"><b>State has an address.</b> Each counter lives inside its machine, not in this app.</p>
+  <section class="panel reveal" id="panel-state" style="--d:6">
+    <h2><span class="actno">act 03 ·</span> Machine-owned state</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+      <span class="mvwhat"><b>calls move</b> — state doesn't</span>
+    </div>
+    <p class="concept"><b>State has an address.</b> Each counter lives inside its machine, not in this app — and because state lives in the machine, it can be frozen, shipped, and forked. That's act 04.</p>
     <div class="card-code-label"><span class="actor host">runs in the host</span></div>
     <code class="card-code"><span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'java_machine/counter'</span>);
 <span class="kw">await</span> counter.increment();</code>
@@ -572,65 +719,96 @@
     </details>
   </section>
 
-  <section class="panel reveal" id="panel-snapshot" style="--d:6">
-    <h2>Snapshot — freeze a machine, restore it by entry</h2>
+  <section class="panel reveal" id="panel-lifecycle" style="--d:7">
+    <h2><span class="actno">act 04 ·</span> Machine lifecycle — freeze it, restore it, fork it by pull</h2>
+    <div class="row" style="gap:18px; margin:0 0 10px">
+      <span class="mv" data-mv="freeze">
+        <span class="mvname">freeze / restore</span>
+        <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
+        <span class="mvwhat">steps 1–3 — <b>nothing moves</b>, state survives death</span>
+      </span>
+      <span class="mv" data-mv="pull">
+        <span class="mvname">pull to me</span>
+        <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
+        <span class="mvwhat">steps 4–5 — <b>the artifact moves</b>, a clone boots</span>
+      </span>
+    </div>
     <p class="concept">
-      <b>Boot once, run everywhere.</b> This card's machine (<code>snap_machine</code>) is booted by
-      the host from an image via the process driver. <b>Boot &amp; work</b> bumps its counter to 3.
-      <b>Freeze</b> calls <code>plugin.snapshotMachine()</code> — state is captured into a
-      <code>.snap</code> bundle — then the process is killed. <b>Restore</b> points the <i>same remote
-      name</i> at the bundle and calls <code>loadRemote</code> again: a fresh process resumes
-      mid-count, because the state lives in the machine, not the host. The real-VM variant
-      (<code>machinenDriver()</code>, whole-microVM dumps incl. heap) is <code>pnpm demo:machinen</code>.
+      <b>One machine, one stepper, the whole lifecycle.</b> Steps 1–3: <code>snap_machine</code> is
+      booted from an image (process driver, fixed port 3811), worked to 3, <b>frozen</b> into a
+      <code>.snap</code> bundle, killed, and <b>restored</b> by pointing the same remote name at the
+      bundle. Steps 4–5: the restored process serves <code>/mf-manifest.json</code>,
+      <code>/mf-image</code> and <code>/mf-snapshot</code> — <b>it is a registry of itself</b> — so a
+      <code>machinen+pull+http://</code> entry forks it: snapshot re-fetched fresh each time
+      (it's <code>no-store</code>), image by digest — <b>MISS</b> then <b>HIT</b>. Clones own their
+      state; divergence is the point. <b>Attach to state you share; pull state you want to own.</b>
     </p>
-    <div class="card-code-label"><span class="actor host">runs in the host</span> the restore is just a remote entry change</div>
-    <code class="card-code"><span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                       <span class="cm">// freeze -> .snap</span>
-host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <span class="str">'machinen://….snap'</span> }], { force: <span class="kw">true</span> });
-<span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'snap_machine/counter'</span>);     <span class="cm">// restores the machine</span></code>
-    <div class="snap-story">
-      <div>
-        <div class="row snap-steps">
-          <button id="snap-boot">1 · boot &amp; work</button>
-          <span class="sarrow">→</span>
-          <button id="snap-freeze" disabled>2 · freeze + kill</button>
-          <span class="sarrow">→</span>
-          <button id="snap-restore" disabled>3 · restore from .snap</button>
-          <span class="snap-phase" id="snap-phase" data-phase="cold"><i></i><span>cold</span></span>
-        </div>
-        <div class="snap-narrative" id="snap-narrative">No machine yet. Step 1 boots <b>snap_machine</b> from its image and increments its counter three times.</div>
+    <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
+    <code class="card-code"><span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                                <span class="cm">// 2 · freeze -> .snap</span>
+host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <span class="str">'machinen://….snap?port=3811'</span> }], { force: <span class="kw">true</span> });  <span class="cm">// 3 · restore</span>
+host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,                                <span class="cm">// 4 · fork by pull</span>
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3811?artifact=snapshot'</span> }]);
+<span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'snap_clone_a/counter'</span>);   <span class="cm">// pulls, verifies, boots the clone</span></code>
+    <div class="row snap-steps">
+      <button id="snap-boot">1 · boot &amp; work</button>
+      <span class="sarrow">→</span>
+      <button id="snap-freeze" disabled>2 · freeze + kill</button>
+      <span class="sarrow">→</span>
+      <button id="snap-restore" disabled>3 · restore from .snap</button>
+      <span class="sarrow">→</span>
+      <button id="snap-pull-a" class="pull-step" disabled>4 · fork by pull</button>
+      <span class="sarrow">→</span>
+      <button id="snap-pull-b" class="pull-step" disabled>5 · fork again</button>
+      <span class="snap-phase" id="snap-phase" data-phase="cold"><i></i><span>cold</span></span>
+    </div>
+    <div class="lineage" aria-label="artifact lineage">
+      <span class="lin" id="lin-image">image</span><span class="larr">→</span>
+      <span class="lin" id="lin-process">process</span><span class="larr">→</span>
+      <span class="lin" id="lin-snap">.snap</span><span class="larr">→</span>
+      <span class="lin" id="lin-process2">process′</span><span class="larr">→</span>
+      <span class="lin pull-lin" id="lin-clone-a">clone a</span><span class="larr">/</span>
+      <span class="lin pull-lin" id="lin-clone-b">clone b</span>
+    </div>
+    <div class="snap-narrative" id="snap-narrative">No machine yet. Step 1 boots <b>snap_machine</b> from its image and increments its counter three times. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)</div>
+    <div class="fleet">
+      <div class="member absent" data-acc="snap" id="fleet-origin">
+        <span class="mname">snap_machine · origin</span>
+        <span class="msub" id="fleet-origin-sub">not booted</span>
+        <span class="mval" id="fleet-origin-val">—</span>
+        <div class="row mrow"><button data-lcounter="origin" disabled>origin +1</button></div>
       </div>
-      <div class="snapval" id="snap-value">—<span class="svlabel">counter</span></div>
+      <div class="member absent" data-acc="pull" id="fleet-a">
+        <span class="mname">snap_clone_a</span>
+        <span class="msub" id="fleet-a-sub">step 4 pulls it</span>
+        <span class="mval" id="fleet-a-val">—</span>
+        <div class="row mrow"><button data-lcounter="a" disabled>clone a +1</button></div>
+      </div>
+      <div class="member absent" data-acc="pull" id="fleet-b">
+        <span class="mname">snap_clone_b</span>
+        <span class="msub" id="fleet-b-sub">step 5 pulls it</span>
+        <span class="mval" id="fleet-b-val">—</span>
+        <div class="row mrow"><button data-lcounter="b" disabled>clone b +1</button></div>
+      </div>
     </div>
     <details class="wiretrace" id="snap-wire" hidden>
       <summary>what just happened on the wire<span class="wcount"></span></summary>
       <div class="wirebody"></div>
     </details>
-  </section>
-
-  <section class="panel reveal" id="panel-compute" style="--d:7">
-    <h2>Compute playground</h2>
-    <p class="concept"><b>Lazy attach.</b> First click pays a one-time attach — watch the machine card warm up.</p>
-    <div class="card-code-label"><span class="actor host">runs in the host</span></div>
-    <code class="card-code"><span class="kw">const</span> math = <span class="kw">await</span> host.loadRemote(<span class="str">'compute_machine/math'</span>);
-<span class="kw">await</span> math.add(a, b);</code>
-    <div class="row">
-      <input class="num" id="add-a" type="number" value="20" aria-label="first addend" /> +
-      <input class="num" id="add-b" type="number" value="22" aria-label="second addend" />
-      <button id="add-run">add</button>
+    <div class="card-footer">
+      Same flow with a whole microVM — heap, JIT, sockets — is <code>machinen-vmstate@1</code>:
+      ~2.5&nbsp;GB, arch-bound, registry-published (Phase 2). CLI preview: <code>pnpm demo:machinen</code>.
+      The pull protocol is deliberately unauthenticated and loopback-bound — publishing artifacts
+      means anyone who can reach the machine can take its code and its memory.
     </div>
-    <div class="row">
-      fib(<input class="num" id="fib-n" type="number" value="25" aria-label="fibonacci n" />)
-      <button id="fib-run">fib</button>
-    </div>
-    <div class="result" id="compute-result"><span class="placeholder">—</span></div>
-    <details class="wiretrace" id="compute-wire" hidden>
-      <summary>what just happened on the wire<span class="wcount"></span></summary>
-      <div class="wirebody"></div>
-    </details>
   </section>
 
   <section class="panel reveal" id="panel-stream" style="--d:8">
-    <h2>Live stream — machine → host → browser</h2>
+    <h2><span class="actno">act 05 ·</span> Live stream — machine → host → browser</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+      <span class="mvwhat"><b>calls move</b> — this one streams back</span>
+    </div>
     <p class="concept"><b>Streaming bindings.</b> <code>countdown()</code> is an async iterable crossing two boundaries: machine → host as NDJSON (the RPC response stays open), host → you as server-sent events.</p>
     <div class="card-code-label"><span class="actor host">runs in the host</span></div>
     <code class="card-code"><span class="kw">const</span> math = <span class="kw">await</span> host.loadRemote(<span class="str">'compute_machine/math'</span>);
@@ -643,8 +821,8 @@ host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <s
   </section>
 
   <section class="panel reveal" id="panel-log" style="--d:9">
-    <h2>Activity — runtime plugin hooks, live</h2>
-    <p class="concept"><b>Observable by construction.</b> Every boot, call, snapshot, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener in the host.</p>
+    <h2><span class="actno">act 06 ·</span> Activity — runtime plugin hooks, live</h2>
+    <p class="concept"><b>Observable by construction.</b> Every boot, call, snapshot, artifact pull, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener in the host.</p>
     <div id="log" aria-live="polite"></div>
   </section>
 </main>
@@ -667,6 +845,7 @@ const SHAPE = { compute_machine: 'hex', java_machine: 'diamond', python_machine:
 const MONOGRAM = { compute_machine: 'N', java_machine: 'J', python_machine: 'P' };
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPARK_SLOTS = 28;
+const fmtBytes = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
 
 // Eased number tween for metric count-ups; snaps instantly under reduced motion.
 function countUp(el, from, to, fmt = (v) => String(Math.round(v))) {
@@ -725,12 +904,17 @@ const chainHtml = (...actors) => actors
 
 function wireHopHtml(e) {
   if (e.type === 'attach') {
+    const boot = e.url
+      ? `fetched <code>GET ${esc(e.url)}/mf-manifest.json</code>, negotiated version`
+      : `booted it (process driver), read its manifest, negotiated version`;
     return `<div class="whop">
       <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
-      <span class="wdetail"><b>attach</b> — resolved entry <code>${esc(e.entry)}</code>,
-        fetched <code>GET ${esc(e.url ?? '')}/mf-manifest.json</code>, negotiated version
+      <span class="wdetail"><b>${e.url ? 'attach' : 'boot'}</b> — resolved entry <code>${esc(e.entry)}</code>,
+        ${boot}
         <b>${esc(e.version ?? '?')}</b>${e.requires ? ` against required <b>${esc(e.requires)}</b>` : ''}
-        (${esc(e.runtime ?? 'unknown runtime')})</span>
+        (${esc(e.runtime ?? 'unknown runtime')})${e.pulledFrom
+          ? `<br />provenance: this machine was pulled from <code>${esc(e.pulledFrom)}</code> and boots from the local cache`
+          : ''}</span>
     </div>`;
   }
   if (e.type === 'call') {
@@ -745,6 +929,20 @@ function wireHopHtml(e) {
     return `<div class="whop">
       <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
       <span class="wdetail"><b>snapshot</b> — state frozen into <code>${esc(e.snapFile)}</code></span>
+    </div>`;
+  }
+  if (e.type === 'artifact') {
+    const origin = esc(e.origin ?? '');
+    const snapshotHop = e.artifact === 'snapshot'
+      ? ` → <code>GET ${origin}/mf-snapshot</code> (<b>no-store</b> — every GET is a fresh fork point)`
+      : '';
+    return `<div class="whop">
+      <span class="wchain">${chainHtml(['host', 'host'], ['machine', 'origin'])}</span>
+      <span class="wdetail"><b>pull ${esc(e.artifact)}</b> — resolved <code>${esc(e.entry)}</code>:
+        <code>GET ${origin}/mf-manifest.json</code> (version negotiated <b>before</b> any artifact bytes moved)${snapshotHop}
+        → image digest <b>${e.cacheHit ? 'HIT — image served from the local cache' : 'MISS — fetched + sha256-verified'}</b>${
+          e.digest ? ` <code>${esc(String(e.digest).slice(0, 19))}…</code>` : ''}
+        → <span class="wres">${fmtBytes(e.bytes)} moved</span> in <span class="wms">${e.ms}ms</span>, clone boots from the cache</span>
     </div>`;
   }
   return '';
@@ -764,7 +962,10 @@ function renderWire(detailsId, apiLabel, wire) {
   const hops = (wire ?? []).map(wireHopHtml).join('');
   body.innerHTML = browserHop + (hops || '<div class="wempty">no machine traffic — containers were already cached in the host</div>');
   details.querySelector('.wcount').textContent = `${1 + (wire?.length ?? 0)} hops`;
-  for (const e of wire ?? []) if (e.machine) pulseEdge(e.machine);
+  for (const e of wire ?? []) {
+    if (e.type === 'artifact') flashCache(e.cacheHit ? 'flash-hit' : 'flash-fetch');
+    else if (e.machine) pulseEdge(e.machine);
+  }
 }
 
 /* ---------- machine cards (the three runtimes) ---------- */
@@ -783,6 +984,7 @@ function buildCard(name, idx, entry) {
         <div class="name">${esc(name)}</div>
         <div class="state"><span class="led"></span><span data-f="state">cold · not loaded</span></div>
       </div>
+      <span class="chip artcap" data-f="artcap" hidden>artifacts</span>
     </div>
     <div class="mc-entry" title="${esc(entry ?? '')}"><b>entry</b> ${esc(entry ?? '—')}</div>
     <dl class="mc-metrics">
@@ -797,7 +999,7 @@ function buildCard(name, idx, entry) {
   const f = (k) => el.querySelector(`[data-f=${k}]`);
   const card = {
     el, state: f('state'), runtime: f('runtime'), version: f('version'),
-    calls: f('calls'), lat: f('lat'), spark: f('spark'),
+    calls: f('calls'), lat: f('lat'), spark: f('spark'), artcap: f('artcap'),
     prevCalls: 0, prevAttached: false, history: new Array(SPARK_SLOTS).fill(0),
   };
   cards.set(name, card);
@@ -823,6 +1025,9 @@ function updateCard(m, idx) {
   card.prevAttached = m.attached;
   card.el.classList.toggle('warm', !!m.attached);
   card.state.textContent = m.attached ? 'warm · attached' : 'cold · not loaded';
+  // Capability-as-presence: the manifest advertises an artifacts block.
+  card.artcap.hidden = !m.artifacts?.length;
+  if (m.artifacts?.length) card.artcap.title = `publishes: ${m.artifacts.join(' + ')} — pullable`;
   card.runtime.textContent = m.runtime ?? LABEL[m.name];
   card.version.textContent = m.version ?? '—';
   const calls = m.metrics?.calls ?? 0;
@@ -854,6 +1059,8 @@ async function refreshDashboard() {
   for (const m of payload.machines) {
     if (ACCENT[m.name]) updateCard(m, cardIdx++);
   }
+  if (payload.cache) renderCache(payload.cache);
+  if (payload.lifecycle) syncLifecycleFromPoll(payload.lifecycle);
   $('log').innerHTML = payload.events.slice().reverse().map((e) => {
     const t = new Date(e.ts).toLocaleTimeString('en-GB');
     return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
@@ -884,20 +1091,6 @@ $('pipeline-run').onclick = async () => {
   refreshDashboard();
 };
 
-$('add-run').onclick = async () => {
-  const r = await post('/api/compute', { op: 'add', a: $('add-a').value, b: $('add-b').value });
-  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
-  $('compute-result').textContent = `add → ${r.result}`;
-  renderWire('compute-wire', 'POST /api/compute', r.wire);
-};
-$('fib-run').onclick = async () => {
-  $('compute-result').innerHTML = '<span class="running">fib…</span>';
-  const r = await post('/api/compute', { op: 'fib', n: $('fib-n').value });
-  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
-  $('compute-result').textContent = `fib(${r.n}) → ${r.result}`;
-  renderWire('compute-wire', 'POST /api/compute', r.wire);
-};
-
 const counterPrev = {};
 document.querySelectorAll('[data-counter]').forEach((btn) => {
   btn.onclick = async () => {
@@ -917,39 +1110,183 @@ document.querySelectorAll('[data-counter]').forEach((btn) => {
   };
 });
 
-/* ---------- snapshot story ---------- */
-const SNAP_NARRATIVES = {
-  running: (s) => `<b>snap_machine</b> is alive (a real child process) — counter at <b>${s.value}</b>. Now <span class="snapc">freeze</span> it.`,
-  snapshotted: (s) => `Process <b>killed</b>. The counter exists only inside <span class="snapc">${esc(s.snapFile ?? '.snap')}</span> (${s.snapBytes ?? '?'} bytes). Restore it.`,
-  restored: (s, extra) => `Restored from the bundle: a <b>new process</b> resumed at <b>${extra?.resumed}</b> and continued to <b>${s.value}</b>. State survived the kill because it lives in the machine.`,
-};
-
-function setSnapUI(s, extra) {
-  $('snap-phase').dataset.phase = s.phase;
-  $('snap-phase').querySelector('span').textContent = s.phase;
-  $('snap-value').firstChild.textContent = s.value ?? '—';
-  $('snap-freeze').disabled = s.phase !== 'running';
-  $('snap-restore').disabled = s.phase !== 'snapshotted';
-  const narrative = SNAP_NARRATIVES[s.phase];
-  if (narrative) $('snap-narrative').innerHTML = narrative(s, extra);
+/* ---------- artifact cache node ---------- */
+let prevCache = null;
+function renderCache(cache) {
+  $('topo-cache-sub').innerHTML =
+    `${cache.artifacts} artifact${cache.artifacts === 1 ? '' : 's'} · ${fmtBytes(cache.bytes)} fetched<br />` +
+    `${cache.hits} hit / ${cache.misses} miss`;
+  $('topo-cache').classList.toggle('on', cache.artifacts > 0);
+  if (prevCache && !REDUCED) {
+    if (cache.misses > prevCache.misses) flashCache('flash-fetch');
+    else if (cache.hits > prevCache.hits) flashCache('flash-hit');
+  }
+  prevCache = cache;
+}
+function flashCache(cls) {
+  const node = $('topo-cache');
+  if (!node || REDUCED) return;
+  node.classList.remove('flash-fetch', 'flash-hit');
+  void node.offsetWidth;
+  node.classList.add(cls);
+  setTimeout(() => node.classList.remove(cls), 1600);
 }
 
-async function snapAction(btn, url, apiLabel) {
+/* ---------- lifecycle story (act 04) ---------- */
+const ORIGIN_ALIVE = ['running', 'restored', 'forked'];
+
+const LC_NARRATIVES = {
+  cold: () => `No machine yet. Step 1 boots <b>snap_machine</b> from its image and increments its counter three times. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)`,
+  running: (s) => `<b>snap_machine</b> is alive (a real child process on :${s.originPort}) — counter at <b>${s.value}</b>. Now <span class="snapc">freeze</span> it.`,
+  snapshotted: (s) => `Process <b>killed</b>. The counter exists only inside <span class="snapc">${esc(s.snapFile ?? '.snap')}</span> (${s.snapBytes ?? '?'} bytes). Nothing crossed the network. Restore it.`,
+  restored: (s, extra) => `Restored from the bundle: a <b>new process</b> resumed at <b>${extra?.resumed ?? (s.value != null ? s.value - 1 : '?')}</b> and continued to <b>${s.value}</b>. And because it serves <span class="pullc">/mf-image + /mf-snapshot</span>, it is a registry of itself — step 4 forks it over plain HTTP.`,
+  forked: (s, extra) => {
+    if (extra?.clone === 'a' && !s.clones.b) {
+      const a = s.clones.a;
+      return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh, image digest <b>MISS</b> — <b>${fmtBytes(a?.pulledBytes ?? 0)}</b> moved, sha256-verified — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again: the image is now cached.`;
+    }
+    if (extra?.clone === 'b') {
+      return `<span class="pullc">Forked again:</span> the snapshot was re-fetched (tiny, by design — it's no-store) but the image was a digest cache <b>HIT</b> — near-instant boot. One warm machine, forked twice over plain HTTP. Increment the three counters separately: <b>clones own their state — divergence is the point.</b>`;
+    }
+    return `One warm machine, forked over plain HTTP. <b>Attach to state you share; pull state you want to own.</b> Step 1 resets the arc.`;
+  },
+};
+
+function light(id, on) { $(id).classList.toggle('lit', !!on); }
+
+function setMember(key, alive, value, sub) {
+  const el = $(`fleet-${key}`);
+  el.classList.toggle('alive', alive);
+  el.classList.toggle('absent', !alive);
+  $(`fleet-${key}-val`).textContent = value ?? '—';
+  $(`fleet-${key}-sub`).innerHTML = sub;
+  el.querySelector('button').disabled = !alive;
+}
+
+function cloneSub(clone, step) {
+  if (!clone) return `step ${step} pulls it`;
+  return `resumed at ${clone.resumed} · ${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'}`;
+}
+
+let topoLifecycleSig = '';
+/** The host-column "local machines" group: origin + pulled clones, live. */
+function renderLifecycleTopo(s) {
+  const sig = JSON.stringify([s.phase, s.clones.a?.entry, s.clones.b?.entry]);
+  if (sig === topoLifecycleSig) return;
+  topoLifecycleSig = sig;
+  const local = $('topo-local');
+  const edges = $('topo-local-edges');
+  if (s.phase === 'cold') { local.hidden = true; edges.innerHTML = ''; return; }
+  local.hidden = false;
+  const alive = ORIGIN_ALIVE.includes(s.phase);
+  let html = `<span class="tnode origin-node${alive ? ' on' : ''}"><span class="tled"></span>` +
+    `<span class="tlabel">snap_machine</span><span class="tsub">:${esc(s.originPort)} · ${esc(s.phase === 'snapshotted' ? 'frozen' : 'pull origin')}</span></span>`;
+  for (const id of ['a', 'b']) {
+    const clone = s.clones?.[id];
+    if (!clone) continue;
+    const label = `${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'} · ${clone.pullMs}ms`;
+    html += `<div class="tclone" data-clone="${id}">` +
+      `<div class="tpull">⇣ <b>artifact</b> pulled · <b>${esc(label)}</b></div>` +
+      `<span class="tnode clone on" title="pulled from ${esc(clone.entry)}"><span class="tled"></span>` +
+      `<span class="tlabel">snap_clone_${id}</span><span class="tsub">clone</span></span></div>`;
+  }
+  edges.innerHTML = html;
+}
+
+/** Glow the clone's artifact pipe right after its pull. */
+function animateClonePull(id) {
+  const row = $('topo-local-edges').querySelector(`[data-clone=${id}]`);
+  if (!row || REDUCED) return;
+  row.classList.add('pulse');
+  setTimeout(() => row.classList.remove('pulse'), 2600);
+}
+
+function setLifecycleUI(s, extra) {
+  $('snap-phase').dataset.phase = s.phase;
+  $('snap-phase').querySelector('span').textContent = s.phase;
+  $('snap-boot').disabled = false;
+  $('snap-freeze').disabled = s.phase !== 'running';
+  $('snap-restore').disabled = s.phase !== 'snapshotted';
+  $('snap-pull-a').disabled = !(s.phase === 'restored' && !s.clones.a);
+  $('snap-pull-b').disabled = !(s.phase === 'forked' && s.clones.a && !s.clones.b);
+  const everBooted = s.phase !== 'cold';
+  light('lin-image', everBooted);
+  light('lin-process', everBooted);
+  light('lin-snap', ['snapshotted', 'restored', 'forked'].includes(s.phase));
+  light('lin-process2', ['restored', 'forked'].includes(s.phase));
+  light('lin-clone-a', !!s.clones.a);
+  light('lin-clone-b', !!s.clones.b);
+  const alive = ORIGIN_ALIVE.includes(s.phase);
+  setMember('origin', alive, alive || s.phase === 'snapshotted' ? s.value : undefined,
+    s.phase === 'cold' ? 'not booted'
+      : s.phase === 'snapshotted' ? `frozen — state lives in ${esc(s.snapFile ?? '.snap')}`
+      : `live child process · :${esc(s.originPort)}`);
+  setMember('a', !!s.clones.a, s.clones.a?.value, cloneSub(s.clones.a, 4));
+  setMember('b', !!s.clones.b, s.clones.b?.value, cloneSub(s.clones.b, 5));
+  const narrative = LC_NARRATIVES[s.phase];
+  if (narrative) $('snap-narrative').innerHTML = narrative(s, extra);
+  renderLifecycleTopo(s);
+}
+
+let lcPhase = 'cold';
+/** Background poll: adopt state changes made elsewhere without churning the narrative. */
+function syncLifecycleFromPoll(s) {
+  if (s.phase !== lcPhase) {
+    lcPhase = s.phase;
+    setLifecycleUI(s);
+    return;
+  }
+  renderLifecycleTopo(s);
+}
+
+async function lcAction(btn, url, apiLabel) {
   btn.disabled = true;
   try {
     const r = await post(url, {});
-    if (r.error) { $('snap-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
-    setSnapUI(r, r);
+    if (r.error) {
+      $('snap-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+      return null;
+    }
+    lcPhase = r.phase;
+    setLifecycleUI(r, r);
     renderWire('snap-wire', apiLabel, r.wire);
     refreshDashboard();
+    return r;
   } finally {
-    btn.disabled = false;
+    if (btn === $('snap-boot')) btn.disabled = false;
   }
 }
-$('snap-boot').onclick = () => snapAction($('snap-boot'), '/api/snapshot/boot', 'POST /api/snapshot/boot');
-$('snap-freeze').onclick = () => snapAction($('snap-freeze'), '/api/snapshot/freeze', 'POST /api/snapshot/freeze');
-$('snap-restore').onclick = () => snapAction($('snap-restore'), '/api/snapshot/restore', 'POST /api/snapshot/restore');
-fetch('/api/snapshot/state').then((r) => r.json()).then((s) => { if (s.phase) setSnapUI(s); }).catch(() => {});
+$('snap-boot').onclick = () => lcAction($('snap-boot'), '/api/lifecycle/boot', 'POST /api/lifecycle/boot');
+$('snap-freeze').onclick = () => lcAction($('snap-freeze'), '/api/lifecycle/freeze', 'POST /api/lifecycle/freeze');
+$('snap-restore').onclick = () => lcAction($('snap-restore'), '/api/lifecycle/restore', 'POST /api/lifecycle/restore');
+const pullAction = async (btn) => {
+  const r = await lcAction(btn, '/api/lifecycle/pull', 'POST /api/lifecycle/pull');
+  if (r?.clone) animateClonePull(r.clone);
+};
+$('snap-pull-a').onclick = () => pullAction($('snap-pull-a'));
+$('snap-pull-b').onclick = () => pullAction($('snap-pull-b'));
+
+document.querySelectorAll('[data-lcounter]').forEach((btn) => {
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await post('/api/lifecycle/counter', { target: btn.dataset.lcounter });
+      if (r.error) {
+        $('snap-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+        return;
+      }
+      lcPhase = r.phase;
+      setLifecycleUI(r);
+      renderWire('snap-wire', 'POST /api/lifecycle/counter', r.wire);
+    } finally {
+      btn.disabled = !btn.closest('.member').classList.contains('alive');
+    }
+  };
+});
+
+fetch('/api/lifecycle/state').then((r) => r.json()).then((s) => {
+  if (s.phase) { lcPhase = s.phase; setLifecycleUI(s); }
+}).catch(() => {});
 
 let es = null;
 $('cd-run').onclick = () => {
