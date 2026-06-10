@@ -1,34 +1,48 @@
 # Design: image/vmstate federation Phase 2 — whole-VM pull and restore
 
 Date: 2026-06-11
-Status: Design only
+Status: Design only (revised to re-center on the MF runtime plugin)
 
 ## Executive summary
 
-Phase 2 should make a running microVM's **whole VM state** a federated artifact:
-RAM, rootdisk, vCPU state, and the small restore metadata needed to bring the
-guest protocol back online somewhere else. This is the Machinen version of
-Module Federation loading `remoteEntry.js`, except the artifact is a paused
-process image rather than executable source. Pulling it means "ship the running
-process": fetch a digest-pinned vmstate bundle, materialize it in the local
-cache, restore it through `machinenDriver()`, and bind the same exposed
-functions the host already knows how to call.
+The product is **machinen for Module Federation**. Machines are MF remotes,
+and everything Phase 2 adds rides the MF runtime: its plugin API, its
+manifest-first transport surface, and its remote lifecycle. The user-facing
+surface does not grow. It remains exactly an MF runtime instance,
+`machinenPlugin()` (or `createMachines()` wrapping it), machine entries in
+config, `loadRemote('compute_machine/counter')`, and the plugin's lifecycle
+verbs. There is no separate product and no service the user deploys or
+operates. Every new moving part in this design is plumbing the plugin owns
+internally, the way `machinenDriver()` already lazily loads
+`@machinen/runtime` without the user ever thinking about a VMM.
 
-The recommended architecture is **host-owned publication through a machine
-registry sidecar**, backed by a content-addressed HTTP layout that can be served
-by a dumb file server or CDN once a bundle is published. A VM guest cannot dump
-its own VM; only the host that owns the VMM can call `handle.snapshot()`.
-Trying to force this through `/mf-snapshot` inside the guest would hide the
-most important asymmetry in the system. Phase 2 should embrace the asymmetry:
-guests keep serving protocol, calls, types, and Phase 1 app-state artifacts;
-the host sidecar serves whole-VM artifacts.
+Within that frame, Phase 2 makes a running microVM's **whole VM state** a
+federated artifact: RAM, rootdisk, vCPU state, and the small restore metadata
+needed to bring the guest protocol back online somewhere else. This is the
+Machinen version of Module Federation loading `remoteEntry.js`, except the
+artifact is a paused process image rather than executable source. Pulling it
+means "ship the running process": fetch a digest-pinned vmstate bundle,
+materialize it in the local cache, restore it through `machinenDriver()`, and
+bind the same exposed functions the host already knows how to call.
+
+The recommended architecture is **plugin-owned publication**. A VM guest
+cannot dump its own VM; only the host-side plugin that booted it holds
+`handle.snapshot()`. Trying to force vmstate through `/mf-snapshot` inside
+the guest would hide the most important asymmetry in the system. So the
+producing plugin gains one lifecycle verb, `publishMachine()` — a sibling of
+`snapshotMachine()` and `forkMachine()` — and a lazily started, plugin-owned
+artifact endpoint that serves the machine's manifest plus a content-addressed
+bundle layout over HTTP. Consumers never see a service; they see a URL
+speaking the same manifest-first surface every machine already speaks. Once
+published, the layout is static files, so a dumb file server, object store,
+or CDN can serve it identically — a CDN tier is a choice about where the
+plugin's output lands, not a second system to operate.
 
 The smallest credible increment, **Phase 2a**, is explicit publish and pull:
-boot a VM, call `snapshotMachine()`, publish the resulting snapshot directory
-into a local registry layout, serve it over HTTP with `Range` support, resolve
-`machinen+pull+http://...?artifact=vmstate`, restore it elsewhere, and prove
-the counter continues. Streaming resume, automated GC, and fork-by-pull
-ergonomics can follow after the end-to-end shape is true.
+boot a VM through the plugin, call `plugin.publishMachine()`, point a second
+host's entry at `machinen+pull+http://...?artifact=vmstate`, restore it
+there, and prove the counter continues. Streaming resume, automated GC, and
+fork-by-pull ergonomics follow after the end-to-end shape is true.
 
 Top design risks:
 
@@ -66,8 +80,32 @@ That matters for the API boundary. In MF, a remote deploy can serve its own
 `remoteEntry.js` because the artifact is just a file in the deploy. In Phase 1,
 a guest can serve `/mf-image` and `/mf-snapshot` because those artifacts are
 inside the guest's application authority. In Phase 2, a guest cannot serve
-vmstate: the guest is inside the state being captured. The artifact publisher is
-the host that owns the VMM.
+vmstate: the guest is inside the state being captured. The artifact publisher
+is the host-side plugin that owns the VMM.
+
+## MF lifecycle mapping
+
+The transport story in one sentence: the guest protocol endpoints
+(`/mf-manifest.json`, `/mf-types.ts`, `/mf/call`, `/mf-image`, `/mf-snapshot`,
+and now the vmstate bundle layout) are this product's
+remoteEntry/manifest/types/artifact surface, and the plugin's `loadEntry` hook
+is the single place that claims and consumes it.
+
+| MF runtime concept | Machine lifecycle today | Where Phase 2 vmstate slots in |
+| --- | --- | --- |
+| `createInstance` / `init` | `createMachines()` builds the MF instance with `machinenPlugin()` | `publish` options ride the same plugin options; no new instance kind |
+| `registerRemotes` / remotes config | machine entries (`machinen://`, `machinen+http://`, `machinen+pull+http(s)://`) via `parseMachineEntry()` | the same pull entry with `?artifact=vmstate`; no new grammar |
+| `loadEntry` hook | claims machine entries; `ensureMachine()` resolves, boots, binds a virtual container | pull resolution materializes the vmstate dir before `driver.boot()`; the claim is unchanged |
+| `getRemoteEntry` / script loader | `driver.boot(spec)` (`processDriver` spawn, `machinenDriver` VM boot) | `machinenDriver` restore of the materialized snapshot dir |
+| `mf-manifest.json` | `GET /mf-manifest.json` from the guest | the publishing plugin serves the same manifest with `artifacts.vmstate` merged in |
+| `@mf-types` DTS | `GET /mf-types.ts` | unchanged |
+| manifest `remoteEntry` field | `artifacts.image` / `artifacts.snapshot` descriptors | `artifacts.vmstate` descriptor pointing at a bundle manifest |
+| `preloadRemote` | `plugin.warm()` pre-boots and pre-pulls | `warm()` pre-pulls multi-GB bundles before traffic |
+| share scope | digest-addressed `.machinen/cache` | per-file blob cache shared across bundles and machines |
+| `requiredVersion` negotiation | `?version=` checked at origin and against the booted clone | plus platform/runtime/format compatibility preflight before blobs move |
+| `errorLoadRemote` / load retry | boot timeout, `restartOnCrash`, circuit breaker | resumable blob downloads; crash-restarts reuse the memoized resolution and never re-pull |
+| *(no MF analog)* snapshot / fork | `snapshotMachine()` / `forkMachine()` | `publishMachine()` = snapshot + publish to the artifact surface |
+| instance teardown | `disposeMachines()` | also closes the plugin's artifact endpoint and clears unpublished temp state |
 
 ## Current implementation surfaces
 
@@ -218,9 +256,9 @@ that the digest covers, makes resume harder, and leaves too much behavior to
 proxies. Compression should be an explicit file property:
 
 - Phase 2a: `compression: "none"` only. Prove restore semantics first.
-- Phase 2b: allow `zstd` for files published offline or by the sidecar, with
-  digests over the stored compressed bytes and a second `uncompressedDigest`
-  only if restore needs it.
+- Phase 2b: allow `zstd` for files published offline or by the plugin's
+  publisher, with digests over the stored compressed bytes and a second
+  `uncompressedDigest` only if restore needs it.
 
 The honest default is uncompressed. `state.vmstate` may contain pages that
 compress well, but compression spends CPU on the producer during an already
@@ -244,9 +282,10 @@ disk:
   verifies.
 
 A "dumb HTTP directory" can satisfy this if it serves static files, stable
-headers, and byte ranges. For Phase 2a, even a simple Node static server is
-enough. For production-like use, nginx, object storage, or a CDN is the right
-shape; the smart part is the publisher, not the file server.
+headers, and byte ranges. For Phase 2a, the plugin's own artifact endpoint is
+that server. For production-like use, nginx, object storage, or a CDN serving
+a copy of the same layout is the right shape; the smart part is the
+plugin-owned publisher, not the file server.
 
 The resolver should emit progress through a new hook shape rather than burying
 it in logs:
@@ -266,51 +305,59 @@ handle belongs to the host-side driver. It also cannot safely stream the
 resulting `state.vmstate` while being frozen by the snapshot operation. Phase 2
 should not add `/mf-vmstate` to `serveGuest()`.
 
-Instead, introduce a host-side **machine registry sidecar**. It runs next to the
-host process that called `createMachines({ driver: machinenDriver() })`, has
-access to that plugin instance, and owns three responsibilities:
+Instead, **the publisher is the plugin itself**. The process that called
+`createMachines({ driver: machinenDriver() })` already owns the live handle,
+the snapshot verb, and the boot metadata, so Phase 2 gives the plugin three
+new internal responsibilities:
 
-1. Resolve the live machine by name.
-2. Trigger `plugin.snapshotMachine(name)` on explicit request or schedule.
-3. Publish the resulting snapshot directory into a registry layout and serve the
-   manifest plus blobs.
+1. Resolve the live machine by name (it already does, for `snapshotMachine()`).
+2. On `plugin.publishMachine(name)`, snapshot the VM and write a
+   content-addressed bundle into the plugin's publish directory.
+3. Serve the published layout (manifest plus blobs) from a lazily started,
+   plugin-owned artifact endpoint — started on first publish (or at `warm()`
+   when publication is configured), closed by `disposeMachines()`.
 
-This can be a small package-level helper rather than a new service framework:
-`serveMachineRegistry({ machines, publishDir, hostname, port })`.
+None of this is user-operated. The endpoint is to the plugin what the in-VM
+guest server is to `machinenDriver()`: transport plumbing behind the MF
+surface, configured — never deployed — through plugin options:
+
+```ts
+createMachines({
+  driver: machinenDriver(),
+  publish: { dir: ".machinen/registry", hostname: "127.0.0.1", port: 0 },
+  remotes: { compute_machine: `machinen://${bundlePath}` },
+});
+```
 
 ### Trigger semantics
 
-Snapshotting is a side effect measured in seconds and gigabytes, so **GET should
-not create a new vmstate bundle**. The sidecar should expose explicit publish
-operations:
+Snapshotting is a side effect measured in seconds and gigabytes, so **GET must
+never create a new vmstate bundle**. Publication is triggered in-process,
+through the plugin verb — not over HTTP:
 
-- `POST /machines/:name/vmstate` creates a new snapshot and returns `202` with
-  an operation URL, or blocks and returns `201` for the first simple version.
-- `GET /machines/:name/mf-manifest.json` returns the machine manifest with the
-  latest published `artifacts.vmstate`, if one exists.
-- `GET /machines/:name/vmstate/<bundle>/bundle.json` returns the bundle
-  manifest.
-- `GET /machines/:name/blobs/sha256/<hex>` returns blob bytes with `Range`
-  support.
+- `plugin.publishMachine(name)` snapshots the machine (the existing
+  `beforeSnapshot`/`onSnapshotted` hooks fire), writes the bundle into the
+  publish layout, and resolves with the bundle digest, size, and URL. New
+  `beforePublish`/`onPublished` machine hooks bracket the publish step itself.
+- The artifact endpoint is read-only:
+  - `GET /mf-manifest.json` — the guest's manifest with the latest published
+    `artifacts.vmstate` merged in.
+  - `GET /vmstate/<bundle>/bundle.json` — the bundle manifest.
+  - `GET /blobs/sha256/<hex>` — blob bytes with `Range` support.
+- A later option may auto-publish on a schedule or after every
+  `snapshotMachine()`, but the explicit verb is the Phase 2a contract.
 
-For compatibility with Phase 1's machine-scoped URL style, the sidecar can also
-mount one machine at a base URL:
-
-```text
-GET /mf-manifest.json
-GET /vmstate/sha256-.../bundle.json
-GET /blobs/sha256/<hex>
-```
-
-This keeps `machinen+pull+http://host:port/machines/compute?artifact=vmstate`
-and `machinen+pull+http://host:port?artifact=vmstate` both possible without a
+When one plugin publishes several machines, the endpoint mounts each under
+`/machines/:name/` with the identical per-machine layout, so both
+`machinen+pull+http://host:port/machines/compute?artifact=vmstate` and the
+single-machine `machinen+pull+http://host:port?artifact=vmstate` work without
 new entry grammar.
 
 ### Quiesce semantics
 
 The Phase 2 default is **VM-consistent, not application-drained**:
 
-- The sidecar calls `handle.snapshot()`.
+- `publishMachine()` calls `handle.snapshot()` through the plugin.
 - `machinenDriver()` writes the reseed shim, asks the runtime to snapshot
   through an attach handle, and the VMM freezes state.
 - The guest resumes on the source host after the dump completes.
@@ -320,15 +367,16 @@ The Phase 2 default is **VM-consistent, not application-drained**:
 This is stronger than Phase 1 app-state snapshots because it captures heap,
 kernel state, timers, file descriptors, and rootdisk. It is not a distributed
 transaction. In-flight requests, external database connections, leases, and
-identity-bearing sockets need application policy. The sidecar should offer
-optional pre/post hooks later (`beforeVmstateSnapshot`, `afterVmstateSnapshot`),
-but Phase 2a should document the default and keep the implementation honest.
+identity-bearing sockets need application policy. The plugin's machine hooks
+are the extension point (`beforePublish` can drain or pause app work,
+`onPublished` can resume it), but Phase 2a should document the default and
+keep the implementation honest.
 
 ### Where bundles land
 
 `machinenDriver()` already writes raw snapshots to `.machinen/vm-snapshots` by
-default. The sidecar should copy or hardlink those files into a publication
-store:
+default. The plugin's publisher copies or hardlinks those files into the
+publish layout:
 
 ```text
 .machinen/registry/
@@ -369,10 +417,10 @@ bundle manifests.
 
 ### Options
 
-**Direct peer pull** is attractive for demos: the source host snapshots and the
-consumer downloads from it. It has the fewest moving parts, but it couples
-source VM health to download traffic, repeats 2.5GB transfers per consumer, and
-turns every producer into a CDN.
+**Direct peer pull** is attractive for demos: the producing plugin snapshots
+and the consumer downloads straight from its artifact endpoint. It has the
+fewest moving parts, but it couples source-host health to download traffic,
+repeats 2.5GB transfers per consumer, and turns every producer into a CDN.
 
 **Registry/cache tier** is the CDN analog. A host publishes once, consumers pull
 from a nearby cache, and the registry can enforce retention, serve ranges well,
@@ -384,31 +432,34 @@ machines or restored clones share blobs by digest on the same host.
 
 ### Recommendation
 
-Build Phase 2 around a **host-side machine registry sidecar that publishes to a
-dumb HTTP-compatible content store**, plus the existing consumer cache extended
-for large blobs. This gives the demo a direct peer path and gives production a
-CDN path without changing the resolver:
+Build Phase 2 around **plugin-owned publication to a dumb HTTP-compatible
+content layout**, plus the existing consumer cache extended for large blobs.
+The producing plugin's lazily started endpoint is the direct peer path (and
+the demo path); copying the published layout to static hosting is the CDN
+path. Neither changes the resolver:
 
 ```text
-source host             registry/cache                 consumer host
------------             --------------                 -------------
+producer (MF runtime + plugin)   static tier (optional)     consumer (MF runtime + plugin)
+------------------------------   ----------------------     ------------------------------
 running VM
   |
-sidecar POST snapshot
+plugin.publishMachine()
   |
 handle.snapshot()
   |
-publish bundle  --->  static HTTP / object store  --->  resolvePullEntry()
-                                                        blob cache
-                                                        machinenDriver.restore()
+plugin artifact endpoint  ---> copy layout to HTTP/CDN ---> loadRemote() -> loadEntry hook
+(content-addressed layout)     (same files, zero compute)   resolvePullEntry() + blob cache
+                                                            machinenDriver restore
 ```
 
-The registry API should be deliberately boring:
+The HTTP surface should be deliberately boring and read-only:
 
 - `GET /mf-manifest.json` or `GET /machines/:name/mf-manifest.json`
 - `GET /vmstate/:bundle/bundle.json`
 - `GET /blobs/sha256/:hex`
-- Optional producer-only `POST /machines/:name/vmstate`
+
+Publication itself is the in-process `publishMachine()` verb, not an HTTP
+operation.
 
 No OCI registry dependency is needed for Phase 2. The layout is OCI-like in the
 useful parts: content-addressed blobs, a small manifest that names blobs, and
@@ -460,8 +511,8 @@ The repo deliberately has no auth. Phase 2 should keep that scope:
 
 - No tokens, OAuth, mTLS, ACL system, signed URLs, or registry identity in the
   design to be implemented now.
-- Bind sidecars and guests to loopback by default.
-- Treat exposing a sidecar beyond loopback as an operator decision.
+- Bind the plugin's artifact endpoint and guests to loopback by default.
+- Treat exposing the endpoint beyond loopback as an operator decision.
 
 Integrity is in scope:
 
@@ -472,9 +523,10 @@ Integrity is in scope:
 - Digest mismatches fail closed and cache nothing.
 
 Auth slots for real deployments are obvious and should not disturb the design:
-an HTTP middleware in front of the sidecar, CDN/object-store auth on blob URLs,
-signed manifests, or mTLS between hosts. Those layers decide who may read a
-bundle; the Phase 2 resolver decides whether the bytes are the advertised bytes.
+an HTTP middleware or reverse proxy in front of the plugin's artifact
+endpoint, CDN/object-store auth on blob URLs, signed manifests, or mTLS
+between hosts. Those layers decide who may read a bundle; the Phase 2
+resolver decides whether the bytes are the advertised bytes.
 
 ## Driver integration
 
@@ -504,30 +556,34 @@ because restore timeout and network timeout are different failure domains.
 
 ### Producer side
 
-Add a host-side sidecar rather than changing `serveGuest()`:
+Publication lives inside the plugin rather than in `serveGuest()` or in any
+service the user runs:
 
 ```ts
-serveMachineRegistry({
-  machines,
-  publishDir: ".machinen/registry",
-  remotes: ["compute_machine"],
-  hostname: "127.0.0.1",
-  port: 0
+const machines = createMachines({
+  driver: machinenDriver(),
+  publish: { dir: ".machinen/registry", hostname: "127.0.0.1", port: 0 },
+  remotes: { compute_machine: `machinen://${bundlePath}` },
 });
+
+await machines.machine("compute_machine").counter.increment();
+const published = await machines.plugin.publishMachine("compute_machine");
+// published: { digest, url, snapDir, bytes }
 ```
 
-The sidecar can be implemented in this package because it needs plugin access,
-not guest access. It asks the plugin for the live machine, triggers
-`snapshotMachine()`, reads the returned `{ snapDir, image }`, builds a bundle
-manifest, and serves registry files. If a VM was produced outside this plugin,
-the sidecar can also publish an existing snapshot directory as a static bundle,
-which is the best 2a path.
+The publisher needs plugin access, not guest access: it resolves the live
+machine, triggers the snapshot through the existing handle, reads the
+returned `{ snapDir, image }`, builds a bundle manifest, and serves the
+layout from the lazily started endpoint that `disposeMachines()` closes. A
+snapshot directory produced outside this plugin can also be published (a
+`publishSnapshotDir()` helper, surfaced through the existing CLI), which is
+the best 2a bootstrapping path.
 
 ### Manifest source of truth
 
-The sidecar should serve the guest's normal manifest with only one additive
-change: `artifacts.vmstate`. It can obtain the base manifest from the live
-handle or from the plugin's cached boot result. It must not invent `exposes`,
+The publishing plugin serves the guest's normal manifest with only one
+additive change: `artifacts.vmstate`. It obtains the base manifest from the
+live handle or from its own cached boot result. It must not invent `exposes`,
 `version`, or `metaData`; those remain guest-owned. This keeps bindgen, version
 checks, and call binding aligned with the running VM.
 
@@ -572,8 +628,8 @@ Most resolver and registry behavior can be tested with fake bundles:
   `federated-machine.json`.
 - Cache hits avoid network blob downloads and re-verify file hashes or trust a
   recorded verified marker depending on the final performance choice.
-- Registry sidecar can publish an existing fake snapshot directory and serve a
-  dumb HTTP layout.
+- The plugin's publisher can publish an existing fake snapshot directory and
+  its lazily started endpoint serves the dumb HTTP layout.
 - GC mark-and-sweep preserves blobs referenced by retained bundles and deletes
   unreferenced blobs.
 
@@ -587,7 +643,7 @@ The real-VM lane should add a vmstate pull leg once 2a exists:
 1. Build the real Node guest.
 2. Boot it with `machinenDriver()`.
 3. Increment the counter twice.
-4. Publish vmstate through the sidecar.
+4. Publish vmstate with `plugin.publishMachine()`.
 5. Create a second client with
    `machinen+pull+http://registry...?artifact=vmstate`.
 6. Assert the restored VM's next increment is `3`.
@@ -614,9 +670,10 @@ Scope:
 - Add a bundle manifest reader/verifier.
 - Stream files to a content-addressed blob cache.
 - Materialize a local snapshot dir.
-- Add a minimal sidecar or script that publishes an existing `snapshotMachine()`
-  directory into the registry layout.
-- Serve the layout over HTTP with range support.
+- Add `plugin.publishMachine()` and the lazily started plugin-owned artifact
+  endpoint (publishing an existing `snapshotMachine()` directory is the
+  bootstrapping path).
+- Serve the layout over HTTP with range support from that endpoint.
 - Add fake-bundle unit tests and one real machinen e2e assertion.
 
 Non-goals:
@@ -683,9 +740,10 @@ better.
 ## Demo hook sketch
 
 Add `scripts/demo-vmstate-pull.mjs` after 2a: build the remote guest, boot it
-with `machinenDriver()`, increment the counter to a warm value, start the
-sidecar, publish a vmstate bundle, then create a second `createMachines()` host
-using `machinen+pull+http://127.0.0.1:<registry>?artifact=vmstate&version=^1.0.0`.
+with `machinenDriver()`, increment the counter to a warm value, call
+`plugin.publishMachine()` (the plugin starts its own artifact endpoint), then
+create a second `createMachines()` host using
+`machinen+pull+http://127.0.0.1:<endpoint>?artifact=vmstate&version=^1.0.0`.
 The first call on the consumer restores the VM and prints `counter 2 -> 3`; a
 second consumer restores the same digest and proves divergence. The script
 prints snapshot, transfer, restore, cache-hit timings, and exits 78 with the
@@ -694,10 +752,14 @@ unavailable.
 
 ## Recommendation
 
-Build Phase 2 as registry-shaped vmstate pull, not guest-served vmstate. Keep
-the consumer path as an additive extension of `resolvePullEntry()` and
-`machinenDriver()` restore. Put the new producer behavior in a host-side machine
-registry sidecar that can publish explicit snapshots into a content-addressed
-HTTP layout. Start with Phase 2a's explicit publish/pull/restore loop, because
-it proves the primitive and reveals the real costs before resume, compression,
-GC, and fork ergonomics complicate the surface.
+Build Phase 2 as plugin-shaped vmstate pull, not guest-served vmstate and not
+a standalone registry product. The user-facing surface stays exactly MF
+runtime + `machinenPlugin()` + entries + `loadRemote()` + lifecycle verbs.
+Keep the consumer path as an additive extension of `resolvePullEntry()` and
+`machinenDriver()` restore, claimed by the same `loadEntry` hook. Keep the
+producer path inside the plugin: a `publishMachine()` lifecycle verb plus a
+lazily started artifact endpoint that publishes explicit snapshots into a
+content-addressed HTTP layout. Start with Phase 2a's explicit
+publish/pull/restore loop, because it proves the primitive and reveals the
+real costs before resume, compression, GC, and fork ergonomics complicate the
+surface.
