@@ -1,6 +1,7 @@
 import type { ModuleFederationRuntimePlugin } from '@module-federation/runtime';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
+import { resolvePullEntry } from './artifacts.js';
 import { isTransportFailure, MachineCircuitOpenError, MachineVersionError } from './errors.js';
 import { createMachineHooks, type MachineHooks } from './hooks.js';
 import {
@@ -27,10 +28,12 @@ export interface MachinenPluginOptions {
   driver: MachineDriver;
   /** Reboot the machine and retry once when a call exhausts transport retries. */
   restartOnCrash?: boolean;
-  /** Timeout for boot + manifest fetch. Default 30s. */
+  /** Timeout for boot + manifest fetch (including pull-entry artifact fetches). Default 30s. */
   bootTimeoutMs?: number;
   /** Per-call resilience policy (timeout, retries, circuit breaker). */
   calls?: CallPolicy;
+  /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
+  artifactCacheDir?: string;
 }
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
@@ -135,6 +138,33 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     }
   }
 
+  /**
+   * Pull-entry resolutions, memoized per entry string and deliberately NOT
+   * evicted on crash: restartOnCrash must reboot from the artifact already
+   * pulled, never re-fetch newer state mid-incident. Cleared only by
+   * disposeMachines(); a failed resolution evicts itself so retries can pull.
+   */
+  const resolutions = new Map<string, Promise<MachineSpec>>();
+
+  function resolveSpec(remoteName: string, entry: string): Promise<MachineSpec> {
+    const parsed = parseMachineEntry(remoteName, entry);
+    if (parsed.kind !== 'pull') return Promise.resolve(parsed);
+    let resolving = resolutions.get(entry);
+    if (!resolving) {
+      resolving = (async () => {
+        await machineHooks.beforeArtifactFetch.emit({ spec: parsed });
+        const resolution = await resolvePullEntry(parsed, { cacheDir: options.artifactCacheDir });
+        await machineHooks.onArtifactFetched.emit({ spec: parsed, resolution });
+        return resolution.spec;
+      })();
+      resolving.catch(() => {
+        if (resolutions.get(entry) === resolving) resolutions.delete(entry);
+      });
+      resolutions.set(entry, resolving);
+    }
+    return resolving;
+  }
+
   function ensureMachine(remoteName: string, entry: string): Promise<BootedMachine> {
     knownRemotes.set(remoteName, entry);
     const cached = machines.get(entry);
@@ -144,7 +174,9 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     generations.set(entry, generation);
 
     const boot = (async (): Promise<BootedMachine> => {
-      const spec = parseMachineEntry(remoteName, entry);
+      // Pull entries resolve (fetch + cache + rewrite) to local image specs
+      // here; drivers only ever see what they already know how to boot.
+      const spec = await resolveSpec(remoteName, entry);
       await machineHooks.beforeMachineBoot.emit({ spec });
       const handle = await options.driver.boot(spec);
       try {
@@ -405,6 +437,7 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       breakers.clear();
       recorders.clear();
       knownRemotes.clear();
+      resolutions.clear();
       // allSettled: one throwing dispose must not abandon the rest.
       await Promise.allSettled(
         booted

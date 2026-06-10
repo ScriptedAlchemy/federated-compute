@@ -40,6 +40,8 @@ export interface MachinesOptions {
    * machine addresses and version pins: options > MACHINEN_REMOTE_* env > config.
    */
   configDir?: string;
+  /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
+  artifactCacheDir?: string;
 }
 
 export interface MachineModuleOptions {
@@ -109,6 +111,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     restartOnCrash: options.restartOnCrash ?? true,
     bootTimeoutMs: options.bootTimeoutMs,
     calls: options.calls,
+    artifactCacheDir: options.artifactCacheDir,
   });
 
   clientCounter++;

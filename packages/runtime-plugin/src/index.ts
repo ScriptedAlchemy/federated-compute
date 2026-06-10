@@ -1,4 +1,12 @@
 export { machinenPlugin, type MachinenPlugin, type MachinenPluginOptions } from './plugin.js';
+export {
+  DEFAULT_ARTIFACT_CACHE_DIR,
+  joinArtifactUrl,
+  resolvePullEntry,
+  type PullArtifactKind,
+  type PullResolution,
+  type ResolvePullOptions,
+} from './artifacts.js';
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
 export {
   GuestError,
@@ -57,6 +65,7 @@ export {
   normalizeExpose,
   parseMachineEntry,
   stripExposePrefix,
+  type ArtifactDescriptor,
   type CallContext,
   type CallOptions,
   type FunctionSignature,
