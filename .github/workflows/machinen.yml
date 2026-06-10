@@ -1,0 +1,223 @@
+# Real Machinen validation lane.
+#
+# Separate from ci.yml on purpose: the main lane stays strict, this lane
+# probes whether REAL machinen (@machinen/runtime microVMs — no mocks, no
+# process drivers) can run on GitHub-hosted runners, and if it can, runs an
+# ENFORCED end-to-end validation of our federation protocol inside a real VM
+# (provision -> boot -> /mf calls -> snapshot -> kill -> restore -> counter
+# continues).
+#
+# Runner reality as of 2026-06:
+#   - ubuntu-24.04 (x64): /dev/kvm IS available on hosted runners, and
+#     machinen 0.4.0 ships @machinen/native-x64-linux — this lane can run
+#     real microVMs.
+#   - ubuntu-24.04-arm (arm64): hosted runners have NO /dev/kvm (nested
+#     virtualization is not exposed on Azure arm64 VMs; see
+#     actions/runner-images#14062). This lane reports the hardware audit and
+#     exits honestly as "not yet runnable" — it will flip to enforcing
+#     automatically if GitHub ever exposes KVM on arm64 runners.
+#
+# Honesty contract: the job NEVER fakes success. Each leg either
+#   (a) runs the real validation and fails the job if validation fails, or
+#   (b) declares "machinen not yet runnable: <reason>" in the job summary
+#       with machinen_available=false.
+
+name: Machinen
+
+on:
+  push:
+    branches: [main, machine-federation]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: machinen-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  machinen-e2e:
+    name: machinen-e2e (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    outputs:
+      machinen_available: ${{ steps.probe.outputs.machinen_available }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hosted x64 runners ship /dev/kvm owned root:kvm 0660 with the runner
+      # user outside the kvm group; this is GitHub's documented recipe to make
+      # it usable (same one the Android emulator workflows use). No-op when
+      # the device is absent (arm64 hosted runners).
+      - name: Enable KVM access
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "/dev/kvm absent; nothing to enable"
+          fi
+
+      - name: Hardware audit
+        id: audit
+        run: |
+          {
+            echo "## Machinen hardware audit (${{ matrix.runner }})"
+            echo '```'
+            echo "arch:     $(uname -m)"
+            echo "kernel:   $(uname -r)"
+            echo "cpu:      $(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -1)"
+            echo "cpus:     $(nproc)"
+            if [ -e /dev/kvm ]; then
+              echo "kvm:      $(ls -l /dev/kvm)"
+              if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+                echo "kvm-rw:   yes (usable by $(id -un))"
+              else
+                echo "kvm-rw:   NO (device present but not read/writable)"
+              fi
+            else
+              echo "kvm:      /dev/kvm ABSENT"
+            fi
+            if command -v kvm-ok >/dev/null 2>&1; then
+              echo "kvm-ok:   $(kvm-ok 2>&1 | tr '\n' '; ')"
+            elif [ -e /dev/kvm ]; then
+              echo "kvm-ok:   (cpu-checker not installed; /dev/kvm exists)"
+            fi
+            if command -v criu >/dev/null 2>&1; then
+              echo "criu:     $(criu --version 2>&1 | head -1)"
+            else
+              echo "criu:     not on host PATH (machinen guests ship their own)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "kvm=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "kvm=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the real Node guest (apps/remote)
+        run: |
+          pnpm --filter @federated-compute/machinen-plugin build
+          pnpm --filter remote build
+          test -f apps/remote/dist/index.js
+
+      - name: Probe machinen availability
+        id: probe
+        env:
+          KVM_USABLE: ${{ steps.audit.outputs.kvm }}
+        run: |
+          SCRATCH="$RUNNER_TEMP/machinen-deps"
+          mkdir -p "$SCRATCH" && cd "$SCRATCH"
+          echo "scratch_dir=$SCRATCH" >> "$GITHUB_OUTPUT"
+
+          # Pinned to 0.4.0: every workaround in the driver and the e2e
+          # script (explicit memory, no provision(), reseed shim, attach-
+          # based snapshot) targets this exact release. An unpinned install
+          # would silently validate a different runtime than the one the
+          # code is written against.
+          cat > package.json <<'JSON'
+          {
+            "private": true,
+            "packageManager": "pnpm@10.34.1",
+            "dependencies": {
+              "@machinen/cli": "0.4.0",
+              "@machinen/runtime": "0.4.0"
+            }
+          }
+          JSON
+          if ! pnpm install --frozen-lockfile=false > pnpm-install.log 2>&1; then
+            tail -20 pnpm-install.log
+            reason="pnpm install of @machinen/cli@0.4.0 + @machinen/runtime@0.4.0 failed on $(uname -m) (packages missing for this platform?)"
+            echo "machinen_available=false" >> "$GITHUB_OUTPUT"
+            echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "installed @machinen/cli + @machinen/runtime:"
+          pnpm list @machinen/cli @machinen/runtime || true
+
+          if [ "$KVM_USABLE" != "true" ]; then
+            reason="/dev/kvm is not usable on the ${{ matrix.runner }} hosted runner (nested virtualization not exposed)"
+            echo "machinen_available=false" >> "$GITHUB_OUTPUT"
+            echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! pnpm exec machinen install --json > machinen-install.json 2> machinen-install.err; then
+            tail -20 machinen-install.err
+            reason="machinen install (kernel + base rootfs prefetch) failed"
+            echo "machinen_available=false" >> "$GITHUB_OUTPUT"
+            echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "machinen assets:" && cat machinen-install.json
+
+          # Machinen's own documented smoke test. If machinen cannot boot its
+          # own base image on this hardware, that is a machinen-availability
+          # problem, not a failure of our protocol — report it honestly and
+          # skip. MACHINEN_MEMORY=1024: machinen 0.4.0's auto-sized >4 GiB
+          # guest RAM breaks the x86 32-bit MMIO gap layout and stalls boot;
+          # 1 GiB boots everywhere (the e2e script caps itself the same way).
+          echo "running machinen smoke boot..."
+          if ! timeout 180 env MACHINEN_MEMORY=1024 pnpm exec machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
+              > smoke.log 2>&1 || ! grep -q MACHINEN_SMOKE_OK smoke.log; then
+            tail -30 smoke.log
+            reason="machinen's own smoke test (pnpm exec machinen boot -- /bin/sh) cannot boot a guest on this runner's hardware ($(uname -m))"
+            echo "machinen_available=false" >> "$GITHUB_OUTPUT"
+            echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "smoke boot OK"
+
+          echo "machinen_available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Real machinen validation (enforced)
+        id: e2e
+        if: steps.probe.outputs.machinen_available == 'true'
+        env:
+          MACHINEN_RUNTIME_DIR: ${{ steps.probe.outputs.scratch_dir }}
+        run: |
+          set +e
+          node scripts/machinen-e2e.mjs
+          rc=$?
+          set -e
+          if [ "$rc" -eq 78 ]; then
+            # The script discovered at runtime that machinen can't run here
+            # (e.g. VMM refused by the hypervisor). Honest skip, not success.
+            echo "machinen_available=false (runtime probe)"
+            echo "outcome=skipped-at-runtime" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "outcome=ran" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Honest result
+        if: always()
+        run: |
+          # Three honest outcomes — never claim the validation ran when the
+          # e2e itself exited 78 (runtime skip) after a successful probe.
+          if [ "${{ steps.e2e.outputs.outcome }}" = "ran" ]; then
+            echo "machinen was installable and KVM is usable: real validation ran (see step above)."
+          elif [ "${{ steps.e2e.outputs.outcome }}" = "skipped-at-runtime" ]; then
+            echo "probe passed but the e2e found machinen unrunnable at runtime (exit 78) — see job summary. No validation ran, none was faked."
+          else
+            echo "machinen_available=false — see job summary for the honest reason. No validation was faked."
+          fi

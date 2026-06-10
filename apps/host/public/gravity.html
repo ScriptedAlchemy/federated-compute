@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — data gravity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
+<style>
+  :root {
+    --wan: #e5534b;
+    --local: #3fb950;
+    --db: #58a6ff;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 70% 42% at 80% -8%, rgba(88, 166, 255, .08), transparent),
+      radial-gradient(ellipse 60% 40% at 10% -10%, rgba(229, 83, 75, .05), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, .012) 2px 4px);
+  }
+  body::before {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, var(--wan) 0 38%, var(--db) 38% 62%, var(--local) 62% 100%);
+    opacity: .8;
+  }
+  header h1 .accent { color: var(--db); text-shadow: 0 0 18px rgba(88, 166, 255, .5); }
+
+  main {
+    max-width: 1180px; margin: 0 auto;
+    padding: 28px 40px 72px;
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px;
+  }
+  .panel { padding: 22px 24px; }
+  #panel-setup   { grid-column: span 12; --sec: var(--db); }
+  .scenarios     { grid-column: span 7; display: grid; gap: 16px; }
+  #panel-compare { grid-column: span 5; --sec: var(--local); display: flex; flex-direction: column; }
+  #panel-report  { grid-column: span 5; --sec: var(--db); }
+  #panel-lesson  { grid-column: span 7; }
+
+  .lede { color: var(--ink-dim); font-size: 12.5px; max-width: 80ch; }
+  .lede b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- topology ---------- */
+  .topo {
+    display: grid; grid-template-columns: 1fr minmax(180px, 260px) 1fr;
+    gap: 0; align-items: stretch; margin-top: 18px;
+  }
+  .region {
+    border: 1px solid var(--panel-edge); border-radius: 8px;
+    background: var(--well);
+    padding: 0 0 14px;
+    overflow: hidden;
+  }
+  .region .rname {
+    font-family: var(--display); font-size: 10px; font-weight: 600;
+    letter-spacing: .18em; text-transform: uppercase; color: var(--ink-dim);
+    background: linear-gradient(180deg, #111a26, #0c121a);
+    border-bottom: 1px solid var(--panel-edge);
+    padding: 8px 14px; margin-bottom: 12px;
+  }
+  .region .rbody { padding: 0 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .nodebox {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--panel-edge); border-radius: 5px;
+    padding: 6px 12px; font-size: 12px;
+    background: linear-gradient(180deg, #0e1620, #0a1018);
+  }
+  .nodebox::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-dim); }
+  .nodebox.host { border-color: rgba(229, 83, 75, .35); }
+  .nodebox.host::before { background: var(--wan); box-shadow: 0 0 6px var(--wan); }
+  .nodebox.db { border-color: rgba(88, 166, 255, .4); color: var(--db); }
+  .nodebox.db::before { background: var(--db); box-shadow: 0 0 6px var(--db); }
+  .nodebox.an { border-color: rgba(63, 185, 80, .4); color: var(--local); }
+  .nodebox.an::before { background: var(--local); box-shadow: 0 0 6px var(--local); }
+
+  .link {
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    gap: 6px; padding: 0 18px;
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .wire {
+    position: relative; width: 100%; height: 14px;
+  }
+  /* the dashed line itself, slowly crawling even at idle */
+  .wire::before {
+    content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 2px;
+    background: repeating-linear-gradient(90deg, var(--wan) 0 8px, transparent 8px 16px);
+    background-size: 16px 2px;
+    opacity: .45;
+    animation: crawl 1.1s linear infinite;
+  }
+  @keyframes crawl { to { background-position: 16px 0; } }
+  .link.busy .wire::before { opacity: 1; animation-duration: .4s; }
+  .link.flow-local .wire::before {
+    background: repeating-linear-gradient(90deg, var(--local) 0 8px, transparent 8px 16px);
+    background-size: 16px 2px;
+  }
+  .packet {
+    position: absolute; top: 3px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--wan); box-shadow: 0 0 10px var(--wan);
+    opacity: 0;
+  }
+  .link.busy .packet { animation: fly 1s linear infinite; }
+  .link.busy .packet.p2 { animation-delay: .33s; }
+  .link.busy .packet.p3 { animation-delay: .66s; }
+  .link.flow-local .packet { background: var(--local); box-shadow: 0 0 10px var(--local); }
+  .link.flow-local .packet.p2, .link.flow-local .packet.p3 { animation: none; }
+  @keyframes fly {
+    0% { left: 0; opacity: 0; }
+    8% { opacity: 1; }
+    92% { opacity: 1; }
+    100% { left: calc(100% - 8px); opacity: 0; }
+  }
+  .link-lat { font-size: 11px; color: var(--ink); letter-spacing: .06em; }
+  .link-lat b { color: var(--wan); font-weight: 600; }
+
+  /* ---------- latency slider ---------- */
+  .latency-row { gap: 14px; margin-top: 18px; }
+  .latency-row label { color: var(--ink-dim); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 240px; height: 4px; border-radius: 2px;
+    background: linear-gradient(90deg, rgba(229, 83, 75, .8), rgba(229, 83, 75, .15));
+    cursor: pointer; vertical-align: middle;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 15px; height: 15px; border-radius: 3px;
+    background: var(--wan); border: 1px solid rgba(255, 255, 255, .25);
+    box-shadow: 0 0 10px rgba(229, 83, 75, .55);
+    transition: transform .12s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  input[type=range]::-moz-range-thumb {
+    width: 15px; height: 15px; border-radius: 3px;
+    background: var(--wan); border: 1px solid rgba(255, 255, 255, .25);
+    box-shadow: 0 0 10px rgba(229, 83, 75, .55);
+  }
+  #lat-value { font-family: var(--display); font-weight: 700; font-size: 15px; min-width: 56px; }
+
+  /* ---------- scenarios ---------- */
+  .scenario { position: relative; overflow: hidden; }
+  .scenario.wan-side { --acc: var(--wan); --acc-rgb: 229, 83, 75; --sec: var(--wan); }
+  .scenario.colo     { --acc: var(--local); --acc-rgb: 63, 185, 80; --sec: var(--local); }
+  .scenario::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--acc), transparent 70%);
+  }
+  .scenario .badge {
+    position: absolute; top: 14px; right: 16px;
+    font-family: var(--display); font-weight: 700; font-size: 44px; line-height: 1;
+    color: rgba(var(--acc-rgb), .12); user-select: none; pointer-events: none;
+  }
+  .scenario h3 { font-family: var(--display); font-size: 15px; margin-bottom: 6px; letter-spacing: .02em; }
+  .scenario .desc { color: var(--ink-dim); font-size: 11.5px; margin-bottom: 12px; max-width: 60ch; }
+  .scenario .desc .acc { color: var(--acc); }
+  .xdots { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 14px; min-height: 14px; }
+  .xdots i {
+    width: 9px; height: 9px; border-radius: 50%; flex: none;
+    background: rgba(var(--acc-rgb), .9); box-shadow: 0 0 7px rgba(var(--acc-rgb), .6);
+    animation: dot-in .3s cubic-bezier(.2, 1.4, .4, 1) both;
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
+  @keyframes dot-in { from { transform: scale(0); opacity: 0; } }
+  .xdots .xlabel { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); }
+  .scenario button {
+    border-color: rgba(var(--acc-rgb), .45); color: var(--acc);
+  }
+  .scenario button:hover {
+    border-color: var(--acc);
+    box-shadow: 0 0 18px -6px rgba(var(--acc-rgb), .7);
+  }
+  .resultline { display: flex; align-items: baseline; gap: 14px; margin-top: 14px; }
+  .stat {
+    font-family: var(--display); font-size: 34px; font-weight: 700; line-height: 1;
+    color: var(--acc); font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 22px rgba(var(--acc-rgb), .35);
+  }
+  .substat { color: var(--ink-dim); font-size: 11px; }
+
+  /* ---------- comparison ---------- */
+  .speedup-hero {
+    text-align: center;
+    padding: 18px 10px 22px;
+    border: 1px dashed var(--panel-edge); border-radius: 8px;
+    background: radial-gradient(ellipse 80% 100% at 50% 0%, rgba(63, 185, 80, .06), transparent);
+    margin-bottom: 18px;
+  }
+  .speedup-hero .idle { color: var(--ink-faint); font-size: 11.5px; letter-spacing: .08em; }
+  .xnum {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(44px, 5vw, 64px); line-height: 1;
+    color: var(--local); font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 34px rgba(63, 185, 80, .45);
+  }
+  .xmark { font-family: var(--display); font-weight: 700; font-size: 28px; color: var(--local); }
+  .xsub { display: block; margin-top: 8px; color: var(--ink-dim); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+  .bars { display: grid; gap: 12px; }
+  .barrow { font-size: 11px; }
+  .barhead { display: flex; justify-content: space-between; margin-bottom: 5px; }
+  .barhead .blabel { letter-spacing: .12em; text-transform: uppercase; }
+  .barhead .bms { font-family: var(--display); font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .barrow.wan .blabel, .barrow.wan .bms { color: var(--wan); }
+  .barrow.local .blabel, .barrow.local .bms { color: var(--local); }
+  .bartrack {
+    background: var(--well); border: 1px solid #131b25;
+    border-radius: 4px; height: 22px; overflow: hidden;
+  }
+  .barfill {
+    height: 100%; width: 0%;
+    transition: width .8s cubic-bezier(.2, .8, .2, 1);
+    background-image: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .07) 0 6px, transparent 6px 12px);
+  }
+  .barfill.wan { background-color: var(--wan); box-shadow: 0 0 18px -4px var(--wan); }
+  .barfill.local { background-color: var(--local); box-shadow: 0 0 18px -4px var(--local); }
+  .compare-hint { color: var(--ink-faint); font-size: 10.5px; margin-top: auto; padding-top: 14px; }
+
+  /* ---------- report table ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+  th {
+    text-align: left; color: var(--ink-dim); font-weight: 400; font-size: 10px;
+    letter-spacing: .14em; text-transform: uppercase; padding: 4px 8px 8px 0;
+  }
+  td { padding: 6px 8px 6px 0; border-top: 1px solid #131b25; }
+  td.amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  td.rank { color: var(--ink-faint); font-family: var(--display); font-weight: 700; width: 28px; }
+  .plan {
+    display: inline-block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    border: 1px solid var(--panel-edge); border-radius: 999px; padding: 0 8px;
+    color: var(--ink-dim);
+  }
+  .plan-pro { color: var(--db); border-color: rgba(88, 166, 255, .4); }
+  .plan-free { color: var(--ink-dim); border-color: var(--panel-edge); }
+  .table-empty { color: var(--ink-faint); font-size: 11.5px; padding: 10px 0; }
+
+  /* ---------- lesson ---------- */
+  #panel-lesson .lede { margin-bottom: 12px; }
+  #panel-lesson .lede:last-child { margin-bottom: 0; }
+  #panel-lesson a { color: var(--db); }
+
+  @media (max-width: 1000px) {
+    .scenarios, #panel-compare, #panel-report, #panel-lesson { grid-column: span 12; }
+  }
+  @media (max-width: 900px) {
+    main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
+    #panel-setup, .scenarios, #panel-compare, #panel-report, #panel-lesson { grid-column: span 1; }
+    .topo { grid-template-columns: 1fr; }
+    .link { padding: 14px 0; }
+    .wire { max-width: 260px; }
+    header { padding: 22px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="reveal" style="--d:0">
+  <h1>data <span class="accent">gravity</span></h1>
+  <span class="sub">move the code to the data, not the data to the code</span>
+  <nav><a href="/">← machine control</a></nav>
+</header>
+
+<main>
+  <section class="panel reveal" id="panel-setup" style="--d:1">
+    <h2>The setup</h2>
+    <p class="lede">
+      The database machine lives in <b>eu-west</b>. The consumer (this app) runs in <b>us-east</b>.
+      A "top spenders" report needs <b>1 + N queries</b> (list users, then orders per user).
+      Same report, two topologies: query the database <b>across the WAN</b> per query — or make
+      <b>one federated call</b> to an analytics machine deployed next to the database, which runs the
+      same queries over same-region hops. The consumer's code style is identical either way:
+      <b>imported functions</b>. Only the federation entries (addresses) differ.
+    </p>
+    <div class="topo">
+      <div class="region">
+        <div class="rname">us-east — consumer</div>
+        <div class="rbody"><span class="nodebox host">host app</span></div>
+      </div>
+      <div class="link" id="wan-link">
+        <span>simulated wan</span>
+        <div class="wire" aria-hidden="true">
+          <i class="packet p1"></i><i class="packet p2"></i><i class="packet p3"></i>
+        </div>
+        <span class="link-lat"><b id="lat-label">+75ms</b> / crossing</span>
+      </div>
+      <div class="region">
+        <div class="rname">eu-west — data region</div>
+        <div class="rbody">
+          <span class="nodebox db">db_machine</span>
+          <span class="nodebox an">analytics_machine</span>
+        </div>
+      </div>
+    </div>
+    <div class="row latency-row">
+      <label for="latency">region latency</label>
+      <input type="range" id="latency" min="0" max="300" step="25" value="75" />
+      <span id="lat-value">75ms</span>
+    </div>
+  </section>
+
+  <div class="scenarios">
+    <section class="panel scenario wan-side reveal" style="--d:2">
+      <span class="badge" aria-hidden="true">01</span>
+      <h3>Query across regions</h3>
+      <p class="desc">The host runs the N+1 itself through its db bindings. Every query is a WAN round-trip: <span class="acc">1 + N crossings</span>.</p>
+      <div class="xdots" id="remote-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
+      <button id="run-remote">Run report (cross-region)</button>
+      <div class="resultline">
+        <span class="stat" id="remote-ms">—</span>
+        <span class="substat" id="remote-detail"></span>
+      </div>
+    </section>
+
+    <section class="panel scenario colo reveal" style="--d:3">
+      <span class="badge" aria-hidden="true">02</span>
+      <h3>The code goes to the data</h3>
+      <p class="desc">One federated call to <span class="acc">analytics_machine.topSpenders()</span> — co-located with the database, it runs the same N+1 locally: <span class="acc">1 crossing</span>.</p>
+      <div class="xdots" id="colo-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
+      <button id="run-colo">Run report (co-located)</button>
+      <div class="resultline">
+        <span class="stat" id="colo-ms">—</span>
+        <span class="substat" id="colo-detail"></span>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel reveal" id="panel-compare" style="--d:4">
+    <h2>Comparison</h2>
+    <div class="speedup-hero" id="speedup"><span class="idle">run both scenarios to compare</span></div>
+    <div class="bars">
+      <div class="barrow wan">
+        <div class="barhead"><span class="blabel">cross-region</span><span class="bms" id="bar-remote-ms">—</span></div>
+        <div class="bartrack"><div class="barfill wan" id="bar-remote"></div></div>
+      </div>
+      <div class="barrow local">
+        <div class="barhead"><span class="blabel">co-located</span><span class="bms" id="bar-colo-ms">—</span></div>
+        <div class="bartrack"><div class="barfill local" id="bar-colo"></div></div>
+      </div>
+    </div>
+    <p class="compare-hint">same queries, same answer — the only variable is where the loop runs.</p>
+  </section>
+
+  <section class="panel reveal" id="panel-report" style="--d:5">
+    <h2>Report output (identical either way)</h2>
+    <table id="spenders">
+      <thead><tr><th>#</th><th>customer</th><th>plan</th><th style="text-align:right">total</th></tr></thead>
+      <tbody><tr><td colspan="4" class="table-empty">run a scenario to fill the report</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel reveal" id="panel-lesson" style="--d:6">
+    <h2>The lesson</h2>
+    <p class="lede">
+      <b>Latency is a property of topology, not of code.</b> Both scenarios run byte-identical
+      business logic — the same 1 + N queries, the same answer. The only difference is <b>where the
+      loop runs</b> relative to the data. Chatty code next to far data is the most common
+      distributed-systems performance bug there is (the N+1 problem, at region scale).
+    </p>
+    <p class="lede">
+      <b>Federation makes topology a config change.</b> The consumer imports
+      <span style="color: var(--local)">analytics.topSpenders()</span> the same way it imports
+      <span style="color: var(--wan)">db.ordersFor()</span> — typed functions pulled from machine
+      manifests. Moving the computation from "here" to "next to the data" changed an
+      <b>address in an env var</b>, not a line of consumer code. The analytics machine itself is a
+      consumer too: it reaches db_machine through the very same bindings, just resolved to a
+      local address. Machines federating machines.
+    </p>
+    <p class="lede">
+      <b>With Machinen, "moving the code" is literal.</b> This demo deploys the analytics
+      service in the data region; with <a href="https://machinen.dev">Machinen</a> you snapshot
+      the running analytics machine — heap, state, open connections — and restore it
+      next to the database. That move is implemented here: <code>machinenDriver()</code> freezes a
+      real microVM and restores it from the bundle (<code>pnpm demo:machinen</code>). Boot once,
+      run where the data lives. The federation entry is the only thing that changes.
+    </p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Machines are untrusted third parties: escape every API-derived value
+// before it lands in innerHTML.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const post = async (url, body) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
+  return data;
+};
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let lastRemote = null, lastColo = null;
+
+function countUp(el, to, fmt) {
+  const from = parseFloat(el.textContent) || 0;
+  if (REDUCED || from === to) { el.textContent = fmt(to); return; }
+  const t0 = performance.now(), dur = 650;
+  const step = (t) => {
+    const k = Math.min((t - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmt(from + (to - from) * e);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+const slider = $('latency');
+slider.oninput = () => { $('lat-value').textContent = slider.value + 'ms'; };
+slider.onchange = async () => {
+  const r = await post('/api/region/latency', { ms: Number(slider.value) });
+  if (r.error || typeof r.ms !== 'number') {
+    $('lat-value').textContent = 'error';
+    $('lat-value').title = r.error ?? 'unexpected response';
+    $('lat-label').textContent = 'link error';
+    return;
+  }
+  $('lat-value').title = '';
+  $('lat-label').textContent = '+' + r.ms + 'ms';
+};
+fetch('/api/region/latency').then(r => r.json()).then(r => {
+  if (typeof r.ms !== 'number') return; // region links unavailable — keep defaults
+  slider.value = r.ms; $('lat-value').textContent = r.ms + 'ms'; $('lat-label').textContent = '+' + r.ms + 'ms';
+}).catch(() => {});
+
+const link = $('wan-link');
+function setFlow(kind) {
+  link.classList.remove('busy', 'flow-wan', 'flow-local');
+  if (kind) link.classList.add('busy', kind);
+}
+
+function renderDots(el, count, cap = 14) {
+  // API-derived: force a number so the interpolations below cannot carry markup.
+  const n = Number(count) || 0;
+  const shown = Math.min(n, cap);
+  el.innerHTML =
+    Array.from({ length: shown }, (_, i) => `<i style="--i:${i}"></i>`).join('') +
+    (n > cap ? `<span class="xlabel">+${n - cap} more</span>` : '') +
+    `<span class="xlabel">${n} crossing${n === 1 ? '' : 's'}</span>`;
+}
+
+function renderSpenders(spenders) {
+  $('spenders').querySelector('tbody').innerHTML = spenders.map((s, i) =>
+    `<tr><td class="rank">${i + 1}</td><td>${esc(s.name)}</td><td><span class="plan plan-${esc(s.plan)}">${esc(s.plan)}</span></td><td class="amt">$${s.total.toFixed(2)}</td></tr>`).join('');
+}
+
+function renderCompare() {
+  const max = Math.max(lastRemote ?? 0, lastColo ?? 0, 1);
+  if (lastRemote != null) {
+    $('bar-remote').style.width = (lastRemote / max * 100) + '%';
+    countUp($('bar-remote-ms'), lastRemote, (v) => v.toFixed(0) + 'ms');
+  }
+  if (lastColo != null) {
+    $('bar-colo').style.width = (lastColo / max * 100) + '%';
+    countUp($('bar-colo-ms'), lastColo, (v) => v.toFixed(0) + 'ms');
+  }
+  if (lastRemote != null && lastColo != null && lastColo > 0) {
+    $('speedup').innerHTML =
+      '<span class="xnum">0.0</span><span class="xmark">×</span>' +
+      '<span class="xsub">faster by moving the code to the data</span>';
+    countUp($('speedup').querySelector('.xnum'), lastRemote / lastColo, (v) => v.toFixed(1));
+  }
+}
+
+$('run-remote').onclick = async () => {
+  $('remote-ms').textContent = '…';
+  setFlow('flow-wan');
+  try {
+    const r = await post('/api/report/remote', { limit: 5 });
+    if (r.error) {
+      $('remote-ms').textContent = '—';
+      $('remote-detail').textContent = `error: ${r.error}`;
+      return;
+    }
+    lastRemote = r.totalMs;
+    $('remote-ms').textContent = '0';
+    countUp($('remote-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
+    $('remote-detail').textContent = `${r.dbQueries} queries · ${r.wanCalls} WAN crossings`;
+    renderDots($('remote-dots'), r.wanCalls);
+    renderSpenders(r.spenders); renderCompare();
+  } finally {
+    setFlow(null);
+  }
+};
+
+$('run-colo').onclick = async () => {
+  $('colo-ms').textContent = '…';
+  setFlow('flow-local');
+  try {
+    const r = await post('/api/report/colocated', { limit: 5 });
+    if (r.error) {
+      $('colo-ms').textContent = '—';
+      $('colo-detail').textContent = `error: ${r.error}`;
+      return;
+    }
+    lastColo = r.totalMs;
+    $('colo-ms').textContent = '0';
+    countUp($('colo-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
+    $('colo-detail').textContent = `${r.dbQueries} queries inside the data region (${r.machineMs.toFixed(0)}ms) · ${r.wanCalls} WAN crossing`;
+    renderDots($('colo-dots'), r.wanCalls);
+    renderSpenders(r.spenders); renderCompare();
+  } finally {
+    setFlow(null);
+  }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "remote-java",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "MACHINEN_TYPES_FILE=dist/mf-types.ts java -jar dist/java-machine.jar"
+  }
+}

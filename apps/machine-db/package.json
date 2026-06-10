@@ -1,0 +1,13 @@
+{
+  "name": "machine-db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Database machine: an in-memory datastore exposed as federated functions. Imagined as deployed in a far region.",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@federated-compute/machinen-plugin": "workspace:*"
+  }
+}

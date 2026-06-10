@@ -1,0 +1,19 @@
+{
+  "name": "federated-compute",
+  "private": true,
+  "description": "Module Federation flavored Machinen: import functions from federated remotes that are actually machine bindings.",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "demo": "node scripts/demo.mjs",
+    "demo:snapshot": "node scripts/demo-snapshot.mjs",
+    "demo:machinen": "node scripts/demo-machinen.mjs",
+    "demo:web": "node scripts/demo-web.mjs",
+    "demo:gravity": "node scripts/demo-gravity.mjs",
+    "bindgen": "node scripts/bindgen.mjs"
+  },
+  "packageManager": "pnpm@10.34.1",
+  "devDependencies": {
+    "@machinen/cli": "0.4.0"
+  }
+}

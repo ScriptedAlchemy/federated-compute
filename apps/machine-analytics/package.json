@@ -1,0 +1,13 @@
+{
+  "name": "machine-analytics",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Analytics machine: the code that moved to the data. Deployed next to db_machine; consumes it through federation bindings.",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@federated-compute/machinen-plugin": "workspace:*"
+  }
+}

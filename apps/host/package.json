@@ -1,0 +1,21 @@
+{
+  "name": "host",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Consumer service: imports functions from a machine-backed Module Federation remote.",
+  "scripts": {
+    "build": "rsbuild build",
+    "start": "node dist/index.js",
+    "serve": "node dist/server.js",
+    "bindgen": "node bindgen.mjs"
+  },
+  "dependencies": {
+    "@federated-compute/machinen-plugin": "workspace:*",
+    "@module-federation/runtime": "^2.5.1"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^2.0.9",
+    "typescript": "^5.7.0"
+  }
+}

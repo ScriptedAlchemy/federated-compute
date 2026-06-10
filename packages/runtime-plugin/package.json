@@ -1,0 +1,67 @@
+{
+  "name": "@federated-compute/machinen-plugin",
+  "version": "0.1.0",
+  "description": "Module Federation runtime plugin that binds remote modules to Machinen-style machines via typed function proxies.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ScriptedAlchemy/federated-compute.git",
+    "directory": "packages/runtime-plugin"
+  },
+  "keywords": [
+    "module-federation",
+    "machinen",
+    "rpc",
+    "bindgen",
+    "microvm",
+    "kvm",
+    "runtime-plugin"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "machinen-bindgen": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./guest": {
+      "types": "./dist/guest.d.ts",
+      "default": "./dist/guest.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@module-federation/runtime": "^2.5.1",
+    "semver": "^7.8.3"
+  },
+  "peerDependencies": {
+    "@machinen/runtime": "^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@machinen/runtime": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@machinen/cli": "0.4.0",
+    "@machinen/runtime": "0.4.0",
+    "@types/node": "^25.9.2",
+    "@types/semver": "^7.7.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

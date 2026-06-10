@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — machine control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
+<style>
+  :root {
+    --node: #3fb950;
+    --java: #f0883e;
+    --python: #58a6ff;
+    --hot: #e5534b;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 70% 42% at 18% -8%, rgba(63, 185, 80, .08), transparent),
+      radial-gradient(ellipse 60% 40% at 85% -10%, rgba(88, 166, 255, .05), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, .012) 2px 4px);
+  }
+  /* Signature strip: the three runtime accents across the very top. */
+  body::before {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, var(--node) 0 33%, var(--java) 33% 66%, var(--python) 66% 100%);
+    opacity: .8;
+  }
+  header h1 .accent { color: var(--node); text-shadow: 0 0 18px rgba(63, 185, 80, .5); }
+  .live {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .live i {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--node);
+    box-shadow: 0 0 8px var(--node);
+    animation: blink 2.2s ease-in-out infinite;
+  }
+  @keyframes blink { 50% { opacity: .25; box-shadow: none; } }
+
+  main {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 16px;
+    padding: 28px 40px 72px;
+    max-width: 1480px;
+    margin: 0 auto;
+  }
+  .panel { padding: 20px 22px; }
+
+  /* ---------- hero ---------- */
+  .hero {
+    grid-column: span 12;
+    display: grid; grid-template-columns: 1.1fr .9fr; gap: 40px;
+    padding: 30px 34px 28px;
+    background:
+      radial-gradient(ellipse 60% 80% at 0% 0%, rgba(63, 185, 80, .06), transparent),
+      linear-gradient(180deg, #0e151f 0%, var(--panel-deep) 100%);
+  }
+  .kicker {
+    font-size: 10px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--node); margin-bottom: 12px;
+  }
+  .kicker::before { content: '▸ '; }
+  .hero-title {
+    font-family: var(--display);
+    font-size: clamp(28px, 3.2vw, 42px); font-weight: 700;
+    line-height: 1.04; letter-spacing: .01em; text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .hero-title em {
+    font-style: normal; color: var(--node);
+    text-shadow: 0 0 26px rgba(63, 185, 80, .45);
+  }
+  .pitch { font-size: 13px; color: var(--ink-dim); max-width: 62ch; }
+  .pitch b { color: var(--ink); font-weight: 500; }
+  .pitch .nodec { color: var(--node); }
+  code.block {
+    display: block; background: var(--well); border: 1px solid var(--panel-edge);
+    border-left: 2px solid var(--node);
+    border-radius: 6px; padding: 14px 16px; font-size: 12px; line-height: 1.75;
+    white-space: pre; overflow-x: auto; margin-top: 18px;
+  }
+  code.block .cm { color: var(--ink-faint); }
+  code.block .kw { color: var(--java); }
+  code.block .fn { color: var(--python); }
+  .steps { counter-reset: step; display: grid; gap: 14px; align-content: start; padding-top: 4px; }
+  .step { display: flex; gap: 14px; font-size: 12px; color: var(--ink-dim); }
+  .step::before {
+    counter-increment: step; content: '0' counter(step);
+    font-family: var(--display); font-weight: 700; font-size: 13px; color: var(--node);
+    border: 1px solid var(--panel-edge); border-radius: 5px;
+    background: var(--well);
+    width: 30px; height: 30px; display: grid; place-items: center; flex: none;
+  }
+  .step b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- machine cards ---------- */
+  .machines { grid-column: span 12; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .machine {
+    position: relative; overflow: hidden;
+    background: linear-gradient(180deg, #0d141d 0%, var(--panel-deep) 100%);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    padding: 18px 20px 14px;
+    transition: box-shadow .7s, border-color .7s;
+    animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both;
+    animation-delay: calc(var(--d, 0) * 110ms + 180ms);
+  }
+  @keyframes card-in { from { opacity: 0; transform: translateY(18px) scale(.985); } }
+  .machine[data-accent=node]   { --acc: var(--node);   --acc-rgb: 63, 185, 80; }
+  .machine[data-accent=java]   { --acc: var(--java);   --acc-rgb: 240, 136, 62; }
+  .machine[data-accent=python] { --acc: var(--python); --acc-rgb: 88, 166, 255; }
+  .machine.warm { border-color: rgba(var(--acc-rgb), .35); box-shadow: 0 0 32px -10px rgba(var(--acc-rgb), .4); }
+  .machine.warming { animation: warmup 1.4s ease-out; }
+  @keyframes warmup {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--acc-rgb), 0); }
+    30%  { box-shadow: 0 0 60px -4px rgba(var(--acc-rgb), .85), inset 0 0 40px -20px rgba(var(--acc-rgb), .5); }
+    100% { box-shadow: 0 0 32px -10px rgba(var(--acc-rgb), .4); }
+  }
+  .mc-index {
+    position: absolute; top: -6px; right: 10px;
+    font-family: var(--display); font-weight: 700; font-size: 64px;
+    color: rgba(var(--acc-rgb), .08); pointer-events: none; user-select: none;
+    line-height: 1;
+  }
+  .machine.warm .mc-index { color: rgba(var(--acc-rgb), .16); }
+  .mc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .glyph {
+    width: 38px; height: 38px; flex: none;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 15px;
+    color: var(--acc);
+    background: rgba(var(--acc-rgb), .1);
+    transition: background .6s, filter .6s;
+  }
+  .machine.warm .glyph { background: rgba(var(--acc-rgb), .22); filter: drop-shadow(0 0 7px rgba(var(--acc-rgb), .6)); }
+  .glyph[data-shape=hex]     { clip-path: polygon(25% 3%, 75% 3%, 100% 50%, 75% 97%, 25% 97%, 0% 50%); }
+  .glyph[data-shape=diamond] { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+  .glyph[data-shape=circle]  { border-radius: 50%; }
+  .machine .name { font-family: var(--display); font-size: 14.5px; font-weight: 600; letter-spacing: .03em; }
+  .machine .state {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-dim); margin-top: 3px;
+  }
+  .led { width: 7px; height: 7px; border-radius: 50%; background: #2c3640; flex: none; transition: background .5s, box-shadow .5s; }
+  .machine.warm .led { background: var(--acc); box-shadow: 0 0 9px var(--acc); }
+  .machine.warm .state { color: var(--ink); }
+  .mc-metrics {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+    margin-bottom: 12px;
+  }
+  .mc-metrics > div { background: var(--well); border: 1px solid #131b25; border-radius: 5px; padding: 6px 9px; }
+  .mc-metrics dt { color: var(--ink-dim); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .mc-metrics dd { font-size: 12px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-metrics dd[data-f=calls] { font-family: var(--display); font-weight: 700; font-size: 17px; color: var(--acc); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 26px; }
+  .spark i {
+    flex: 1 1 0; min-height: 2px; border-radius: 1px 1px 0 0;
+    background: linear-gradient(180deg, rgba(var(--acc-rgb), .85), rgba(var(--acc-rgb), .25));
+    transition: height .4s ease;
+  }
+  .spark i.empty { background: #18212c; }
+  .spark-label { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); margin-top: 5px; }
+
+  /* ---------- layout: asymmetric rows ---------- */
+  #panel-pipeline { grid-column: span 8; --sec: var(--java); }
+  #panel-state    { grid-column: span 4; }
+  #panel-compute  { grid-column: span 4; --sec: var(--node); }
+  #panel-stream   { grid-column: span 8; --sec: var(--python); }
+  #panel-log      { grid-column: span 12; }
+
+  .concept {
+    color: var(--ink-dim); font-size: 11.5px; margin: -6px 0 14px;
+    border-left: 2px solid var(--panel-edge); padding-left: 10px; max-width: 80ch;
+  }
+  .concept b { color: var(--ink); font-weight: 500; }
+  .concept code { color: var(--node); background: var(--well); padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
+
+  /* ---------- pipeline ---------- */
+  textarea { width: 100%; resize: vertical; min-height: 64px; }
+  input:not([type=range]):focus, textarea:focus { outline: none; border-color: var(--node); box-shadow: 0 0 0 1px rgba(63, 185, 80, .3); }
+  .row { gap: 10px; margin-top: 10px; }
+  .num { width: 76px; }
+  .btn-go { border-color: rgba(63, 185, 80, .4); color: var(--node); }
+  .btn-go:hover { color: #6ee07c; border-color: var(--node); box-shadow: 0 0 16px -6px rgba(63, 185, 80, .6); }
+
+  .result {
+    margin-top: 14px; min-height: 24px;
+    font-size: 12px;
+  }
+  .result .placeholder { color: var(--ink-faint); }
+  .running {
+    color: var(--ink-dim);
+    background: linear-gradient(90deg, var(--ink-dim) 30%, var(--ink) 50%, var(--ink-dim) 70%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    animation: shimmer 1.2s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+  .stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stage {
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well);
+    padding: 11px 13px;
+    animation: stage-in .45s cubic-bezier(.2, .7, .2, 1) both;
+    animation-delay: calc(var(--d, 0) * 110ms);
+  }
+  @keyframes stage-in { from { opacity: 0; transform: translateY(10px); } }
+  .stage[data-accent=java]   { --acc: var(--java);   border-top: 2px solid var(--java); }
+  .stage[data-accent=python] { --acc: var(--python); border-top: 2px solid var(--python); }
+  .stage[data-accent=node]   { --acc: var(--node);   border-top: 2px solid var(--node); }
+  .stage header { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+  .stage .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 7px var(--acc); }
+  .stage .sname { font-family: var(--display); font-weight: 600; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--acc); }
+  .stage .chip { margin-left: auto; }
+  .op { display: flex; gap: 10px; font-size: 11.5px; padding: 2.5px 0; }
+  .op + .op { border-top: 1px dashed #131b25; }
+  .opk { color: var(--ink-dim); flex: none; width: 62px; }
+  .opv { word-break: break-all; }
+  .err { color: var(--hot); }
+
+  /* ---------- counters ---------- */
+  .counter-row { gap: 12px; margin-top: 0; padding: 9px 0; }
+  .counter-row + .counter-row { border-top: 1px solid #131b25; }
+  .counter-row button { min-width: 110px; text-align: left; }
+  .counter-row[data-acc=node] button { color: var(--node); }
+  .counter-row[data-acc=java] button { color: var(--java); }
+  .counter-row[data-acc=python] button { color: var(--python); }
+  .counterval {
+    font-family: var(--display); font-size: 22px; font-weight: 700;
+    min-width: 44px; text-align: right; margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .hint { color: var(--ink-dim); font-size: 11px; margin-top: 10px; }
+
+  /* ---------- stream ---------- */
+  .ticks { display: flex; gap: 9px; margin-top: 14px; min-height: 46px; flex-wrap: wrap; align-items: center; }
+  .tick {
+    font-family: var(--display); font-size: 23px; font-weight: 700;
+    color: var(--python);
+    border: 1px solid rgba(88, 166, 255, .3); border-radius: 5px;
+    background: var(--well);
+    padding: 3px 13px;
+    animation: pop .35s cubic-bezier(.2, 1.6, .4, 1);
+    text-shadow: 0 0 14px rgba(88, 166, 255, .5);
+  }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } }
+  .tick.done {
+    color: var(--node); border-color: rgba(63, 185, 80, .35);
+    font-size: 13px; padding: 8px 13px; letter-spacing: .14em;
+    text-shadow: 0 0 14px rgba(63, 185, 80, .5);
+  }
+  .tick.fail {
+    color: var(--hot); border-color: rgba(229, 83, 75, .35);
+    font-size: 12px; padding: 8px 13px; text-shadow: none;
+  }
+
+  /* ---------- log ---------- */
+  #log {
+    height: 230px; overflow-y: auto;
+    background: var(--well); border-radius: 6px;
+    border: 1px solid var(--panel-edge);
+    padding: 12px 14px;
+    font-size: 11.5px;
+  }
+  #log .line { display: flex; gap: 10px; padding: 1px 0; }
+  #log .t { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
+  #log .kb {
+    flex: none; width: 58px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-dim); padding-top: 1px;
+  }
+  #log .line[data-k=ready] .kb { color: var(--node); }
+  #log .line[data-k=error] .kb, #log .line[data-k=crash] .kb, #log .line[data-k=circuit] .kb { color: var(--hot); }
+  #log .msg { color: var(--ink-dim); }
+  #log .line[data-k=ready] .msg { color: var(--ink); }
+  #log .line[data-k=error] .msg, #log .line[data-k=crash] .msg, #log .line[data-k=circuit] .msg { color: var(--hot); }
+
+  .ms { color: var(--ink-dim); font-size: 11px; }
+
+  @media (max-width: 1100px) {
+    #panel-pipeline, #panel-state, #panel-compute, #panel-stream { grid-column: span 12; }
+    .hero { grid-template-columns: 1fr; gap: 24px; }
+  }
+  @media (max-width: 900px) {
+    main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
+    .hero, .machines, #panel-pipeline, #panel-state, #panel-compute, #panel-stream, #panel-log { grid-column: span 1; }
+    .machines { grid-template-columns: 1fr; }
+    .stages { grid-template-columns: 1fr; }
+    header { padding: 22px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="reveal" style="--d:0">
+  <h1>federated<span class="accent">-</span>compute</h1>
+  <span class="sub">module federation as the multiplexer — machines attach on demand</span>
+  <span class="live"><i></i>polling 1.5s</span>
+  <nav><a href="/gravity">data gravity demo →</a></nav>
+</header>
+
+<main>
+  <section class="panel hero reveal" style="--d:1">
+    <div>
+      <p class="kicker">live federation console</p>
+      <div class="hero-title">Three runtimes.<br /><em>One import graph.</em></div>
+      <p class="pitch">
+        Three services — <b>Node</b>, a <b>JVM</b>, and <b>CPython</b> — none of which this app has ever
+        seen the source of. Each one is a <b>machine</b>: an independently deployed process that publishes
+        a typed manifest, exactly like a Module Federation remote publishes <b>mf-manifest.json</b>.
+        This app consumes them as <b class="nodec">plain imported functions</b> — no SDKs, no client
+        libraries, no codegen per language. The federation runtime is the multiplexer; HTTP is just
+        the transport. Watch the cards below flip from <b>cold</b> to <b>warm</b>: nothing attaches
+        until the first call needs it.
+      </p>
+      <code class="block"><span class="cm">// the entire consumer API — types pulled from the machines themselves</span>
+<span class="kw">import</span> { strings } <span class="kw">from</span> './machines/java_machine';
+<span class="kw">import</span> { stats } <span class="kw">from</span> './machines/python_machine';
+
+<span class="kw">await</span> strings.<span class="fn">sha256</span>(text);   <span class="cm">// runs on the JVM</span>
+<span class="kw">await</span> stats.<span class="fn">mean</span>(numbers);     <span class="cm">// runs on CPython</span></code>
+    </div>
+    <div>
+      <h2>Anatomy of a call</h2>
+      <div class="steps">
+        <div class="step"><span><b>Import.</b> Bindgen pulled typed bindings from each machine's manifest at dev time — the machine analog of MF's <b>@mf-types</b>. The import costs nothing.</span></div>
+        <div class="step"><span><b>First call → attach.</b> The runtime plugin claims the <b>machinen+http://</b> entry, fetches the manifest, negotiates the semver version — the card flips to <b>warm</b>.</span></div>
+        <div class="step"><span><b>Every call → RPC.</b> Arguments cross as JSON, governed by deadlines, retries, and a circuit breaker. The guest runs your function and answers.</span></div>
+        <div class="step"><span><b>Hooks see everything.</b> The activity log below is the plugin's hook system narrating boots, calls, latencies, and failures in real time.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="machines reveal" id="machines" style="--d:2"></div>
+
+  <section class="panel reveal" id="panel-pipeline" style="--d:3">
+    <h2>Polyglot pipeline — one request, three machines</h2>
+    <p class="concept"><b>Concept: composition without SDKs.</b> One button fans out across three languages. The handler reads like local code — <code>strings.sha256()</code>, <code>data.wordCount()</code>, <code>text.shout()</code> — but each line executes in a different runtime.</p>
+    <textarea id="pipeline-input" placeholder="type some text… it will be hashed on the JVM, analyzed by CPython, and transformed by Node">boot once run everywhere</textarea>
+    <div class="row">
+      <button id="pipeline-run" class="btn-go">Run pipeline</button>
+      <span class="chip" id="pipeline-ms" hidden></span>
+    </div>
+    <div class="result" id="pipeline-result"><span class="placeholder">— awaiting dispatch</span></div>
+  </section>
+
+  <section class="panel reveal" id="panel-state" style="--d:4">
+    <h2>Machine-owned state</h2>
+    <p class="concept"><b>Concept: state has an address.</b> Each counter lives inside its machine, not in this app. Freeze a machine and its counter travels with it — that's the snapshot demo (<code>pnpm demo:snapshot</code>), and the real-VM variant freezes the whole microVM, heap and all (<code>pnpm demo:machinen</code>).</p>
+    <div class="row counter-row" data-acc="node"><button data-counter="compute_machine">node +1</button><span class="counterval" id="c-compute_machine">—</span></div>
+    <div class="row counter-row" data-acc="java"><button data-counter="java_machine">java +1</button><span class="counterval" id="c-java_machine">—</span></div>
+    <div class="row counter-row" data-acc="python"><button data-counter="python_machine">python +1</button><span class="counterval" id="c-python_machine">—</span></div>
+  </section>
+
+  <section class="panel reveal" id="panel-compute" style="--d:5">
+    <h2>Compute playground</h2>
+    <p class="concept"><b>Concept: lazy attach.</b> If this card is your first click, you'll pay a one-time attach cost — watch the machine card warm up — then calls settle to transport latency.</p>
+    <div class="row">
+      <input class="num" id="add-a" type="number" value="20" aria-label="first addend" /> +
+      <input class="num" id="add-b" type="number" value="22" aria-label="second addend" />
+      <button id="add-run">add</button>
+    </div>
+    <div class="row">
+      fib(<input class="num" id="fib-n" type="number" value="25" aria-label="fibonacci n" />)
+      <button id="fib-run">fib</button>
+    </div>
+    <div class="result" id="compute-result"><span class="placeholder">—</span></div>
+  </section>
+
+  <section class="panel reveal" id="panel-stream" style="--d:6">
+    <h2>Live stream — machine → host → browser</h2>
+    <p class="concept"><b>Concept: streaming bindings.</b> <code>countdown()</code> is an async iterable that crosses two boundaries: machine → host as NDJSON, host → you as server-sent events.</p>
+    <div class="row">
+      countdown(<input class="num" id="cd-from" type="number" value="8" aria-label="countdown start" />)
+      <button id="cd-run">stream</button>
+    </div>
+    <div class="ticks" id="ticks"></div>
+  </section>
+
+  <section class="panel reveal" id="panel-log" style="--d:7">
+    <h2>Activity — runtime plugin hooks, live</h2>
+    <p class="concept"><b>Concept: observable by construction.</b> Every boot, call, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener.</p>
+    <div id="log" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Machines are untrusted third parties: escape every API-derived value
+// before it lands in innerHTML.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const post = async (url, body) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
+  return data;
+};
+const ACCENT = { compute_machine: 'node', java_machine: 'java', python_machine: 'python' };
+const LABEL = { compute_machine: 'node', java_machine: 'jvm', python_machine: 'cpython' };
+const SHAPE = { compute_machine: 'hex', java_machine: 'diamond', python_machine: 'circle' };
+const MONOGRAM = { compute_machine: 'N', java_machine: 'J', python_machine: 'P' };
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SPARK_SLOTS = 28;
+
+// Eased number tween for metric count-ups; snaps instantly under reduced motion.
+function countUp(el, from, to, fmt = (v) => String(Math.round(v))) {
+  if (REDUCED || from === to || !Number.isFinite(from)) { el.textContent = fmt(to); return; }
+  const t0 = performance.now(), dur = 550;
+  const step = (t) => {
+    const k = Math.min((t - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmt(from + (to - from) * e);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// Per-machine client-side state: DOM refs, previous values, p50 poll history.
+const cards = new Map();
+
+function buildCard(name, idx) {
+  const el = document.createElement('article');
+  el.className = 'machine';
+  el.dataset.accent = ACCENT[name];
+  el.style.setProperty('--d', idx);
+  el.innerHTML = `
+    <span class="mc-index">0${idx + 1}</span>
+    <div class="mc-head">
+      <span class="glyph" data-shape="${SHAPE[name]}" aria-hidden="true">${MONOGRAM[name]}</span>
+      <div>
+        <div class="name">${esc(name)}</div>
+        <div class="state"><span class="led"></span><span data-f="state">cold · not loaded</span></div>
+      </div>
+    </div>
+    <dl class="mc-metrics">
+      <div><dt>runtime</dt><dd data-f="runtime">${LABEL[name]}</dd></div>
+      <div><dt>version</dt><dd data-f="version">—</dd></div>
+      <div><dt>calls</dt><dd data-f="calls">0</dd></div>
+      <div><dt>p50 / p95</dt><dd data-f="lat">—</dd></div>
+    </dl>
+    <div class="spark" data-f="spark" aria-hidden="true"></div>
+    <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>`;
+  $('machines').appendChild(el);
+  const f = (k) => el.querySelector(`[data-f=${k}]`);
+  const card = {
+    el, state: f('state'), runtime: f('runtime'), version: f('version'),
+    calls: f('calls'), lat: f('lat'), spark: f('spark'),
+    prevCalls: 0, prevAttached: false, history: new Array(SPARK_SLOTS).fill(0),
+  };
+  cards.set(name, card);
+  return card;
+}
+
+function renderSpark(card) {
+  const max = Math.max(...card.history, 1);
+  card.spark.innerHTML = card.history.map((v) =>
+    v > 0
+      ? `<i style="height:${Math.max(8, (v / max) * 100)}%"></i>`
+      : '<i class="empty"></i>',
+  ).join('');
+}
+
+function updateCard(m, idx) {
+  const card = cards.get(m.name) ?? buildCard(m.name, idx);
+  if (m.attached && !card.prevAttached) {
+    card.el.classList.add('warming');
+    setTimeout(() => card.el.classList.remove('warming'), 1500);
+  }
+  card.prevAttached = m.attached;
+  card.el.classList.toggle('warm', !!m.attached);
+  card.state.textContent = m.attached ? 'warm · attached' : 'cold · not loaded';
+  card.runtime.textContent = m.runtime ?? LABEL[m.name];
+  card.version.textContent = m.version ?? '—';
+  const calls = m.metrics?.calls ?? 0;
+  if (calls !== card.prevCalls) countUp(card.calls, card.prevCalls, calls);
+  card.prevCalls = calls;
+  card.lat.textContent = m.metrics ? `${m.metrics.p50Ms.toFixed(1)} / ${m.metrics.p95Ms.toFixed(1)} ms` : '—';
+  card.history.push(m.metrics?.p50Ms ?? 0);
+  card.history.shift();
+  renderSpark(card);
+}
+
+let dashSeq = 0;
+async function refreshDashboard() {
+  const seq = ++dashSeq;
+  let payload;
+  try {
+    payload = await fetch('/api/dashboard').then((r) => r.json());
+  } catch {
+    return; // host restarting — keep polling
+  }
+  if (seq !== dashSeq) return; // a newer refresh is in flight — drop this stale response
+  payload.machines.forEach(updateCard);
+  $('log').innerHTML = payload.events.slice().reverse().map((e) => {
+    const t = new Date(e.ts).toLocaleTimeString('en-GB');
+    return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
+  }).join('');
+}
+
+$('pipeline-run').onclick = async () => {
+  $('pipeline-ms').hidden = true;
+  $('pipeline-result').innerHTML = '<span class="running">fanning out across three runtimes…</span>';
+  const r = await post('/api/pipeline', { text: $('pipeline-input').value });
+  if (r.error) { $('pipeline-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
+  $('pipeline-ms').hidden = false;
+  $('pipeline-ms').textContent = `total ${r.totalMs.toFixed(1)}ms`;
+  const words = Object.entries(r.python.wordCount).map(([w, c]) => `${w}\u00d7${c}`).join(' · ');
+  const stage = (acc, name, ms, ops, d) => `
+    <article class="stage" data-accent="${acc}" style="--d:${d}">
+      <header><span class="sdot"></span><span class="sname">${name}</span><span class="chip">${ms.toFixed(1)}ms</span></header>
+      ${ops.map(([k, v]) => `<div class="op"><span class="opk">${k}</span><span class="opv">${esc(v)}</span></div>`).join('')}
+    </article>`;
+  $('pipeline-result').innerHTML = `<div class="stages">
+    ${stage('java', 'jvm', r.java.ms, [['sha256', r.java.sha256.slice(0, 24) + '…'], ['upper', r.java.upper]], 0)}
+    ${stage('python', 'cpython', r.python.ms, [['words', words], ['wordlen', `mean ${r.python.meanWordLength.toFixed(2)} · median ${r.python.medianWordLength}`]], 1)}
+    ${stage('node', 'node', r.node.ms, [['shout', r.node.shouted], ['reverse', r.node.reversed]], 2)}
+  </div>`;
+  refreshDashboard();
+};
+
+$('add-run').onclick = async () => {
+  const r = await post('/api/compute', { op: 'add', a: $('add-a').value, b: $('add-b').value });
+  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
+  $('compute-result').textContent = `add → ${r.result}`;
+};
+$('fib-run').onclick = async () => {
+  $('compute-result').innerHTML = '<span class="running">fib…</span>';
+  const r = await post('/api/compute', { op: 'fib', n: $('fib-n').value });
+  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
+  $('compute-result').textContent = `fib(${r.n}) → ${r.result}`;
+};
+
+const counterPrev = {};
+document.querySelectorAll('[data-counter]').forEach((btn) => {
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const machine = btn.dataset.counter;
+      const r = await post('/api/counter', { machine });
+      const el = $('c-' + machine);
+      if (r.error) { el.textContent = '!'; el.title = r.error; return; }
+      el.title = '';
+      countUp(el, counterPrev[machine] ?? r.value, r.value);
+      counterPrev[machine] = r.value;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+});
+
+let es = null;
+$('cd-run').onclick = () => {
+  es?.close();
+  $('ticks').innerHTML = '';
+  es = new EventSource('/api/countdown?from=' + encodeURIComponent($('cd-from').value));
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.error) {
+      const el = document.createElement('span');
+      el.className = 'tick fail';
+      el.textContent = `stream error: ${msg.error}`;
+      $('ticks').appendChild(el);
+      es.close();
+      return;
+    }
+    const el = document.createElement('span');
+    el.className = msg.done ? 'tick done' : 'tick';
+    el.textContent = msg.done ? 'stream complete' : msg.tick;
+    $('ticks').appendChild(el);
+    if (msg.done) es.close();
+  };
+  es.onerror = () => es.close();
+};
+
+refreshDashboard();
+setInterval(refreshDashboard, 1500);
+</script>
+</body>
+</html>

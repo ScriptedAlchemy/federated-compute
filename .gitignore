@@ -1,0 +1,7 @@
+.tokensave
+node_modules/
+dist/
+build/
+__pycache__/
+*.log
+.machinen/

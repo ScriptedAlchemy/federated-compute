@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Unit + conformance tests
+        run: pnpm test
+
+      - name: Build all packages
+        run: pnpm -r build
+
+      - name: End-to-end demo (3 machines + host)
+        run: node scripts/demo.mjs
+
+      - name: Snapshot demo (boot once, run everywhere)
+        run: node scripts/demo-snapshot.mjs
+
+      - name: Data gravity demo (move the code to the data)
+        run: node scripts/demo-gravity.mjs
+
+      - name: Web demo smoke
+        run: node scripts/demo-web.mjs --smoke
