@@ -32,8 +32,10 @@ const host = createInstance({
   remotes: [
     // attach to an independently deployed machine — address + required version
     { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?version=^1.0.0' },
-    // or boot one from an image (driver owns the transport)
+    // or boot one from a local image (driver owns the transport)
     { name: 'compute_machine', entry: 'machinen://images/compute.tar.gz?version=^1.0.0' },
+    // or PULL the machine's published artifact and boot a local clone
+    { name: 'fork_machine', entry: 'machinen+pull+http://127.0.0.1:3801?artifact=snapshot' },
   ],
   plugins: [machinenPlugin({ driver: httpAttachDriver() })],
 });
@@ -49,10 +51,13 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
 | MF concept | Machine analog |
 | --- | --- |
 | `mf-manifest.json` | `GET /mf-manifest.json` — typed manifest with `version`, `metaData`, `exposes` |
-| `requiredVersion` negotiation | entry `?version=^1.0.0` validated against the machine manifest (semver) |
+| `remoteEntry.js` (the fetched executable artifact) | `machinen+pull+http://` entries: the image/snapshot is fetched from the machine's origin, digest-verified, cached, and booted locally |
+| manifest `remoteEntry` field | manifest `artifacts` block (`href`, `format`, `digest`, `platform`) |
+| `requiredVersion` negotiation | entry `?version=^1.0.0` validated against the machine manifest (semver); pull entries check it twice — at the origin before downloading, and on the booted clone |
 | runtime `loadEntry` plugin hook | claims machine entries, synthesizes virtual containers of function proxies |
 | `registerRemotes` / dynamic remotes | machines join at runtime through the same API |
-| `preloadRemote` | `plugin.warm()` pre-attaches and validates machines before traffic |
+| `preloadRemote` | `plugin.warm()` pre-attaches and validates machines before traffic (pull entries pre-fetch their artifact) |
+| share scope (load shared deps once) | the sha256-addressed artifact cache (`.machinen/cache`): identical images are downloaded once, shared across clones |
 | DTS type distribution (`@mf-types`) | machines publish `GET /mf-types.ts`; host bindgen pulls from deployed URLs only |
 | retry plugin / `errorLoadRemote` | call policy: deadlines, transport-only retries, circuit breaker, crash restart |
 
@@ -94,6 +99,47 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
     actual microVMs via `@machinen/runtime` (KVM/HVF), with whole-VM
     snapshot/restore. See [Real Machinen driver](machinen-driver.md).
 
+## Pull federation (fork-by-fetch)
+
+`machinen+pull+http(s)://host:port[/path]` entries complete the MF analogy:
+the machine's **image — or warm snapshot — is the federated artifact**, like
+`remoteEntry.js` fetched from a remote's deploy. Loading the remote fetches
+the origin's manifest, downloads the selected artifact into a
+sha256-addressed cache (`.machinen/cache` by default; `artifactCacheDir`
+overrides), verifies its digest, and boots an **independent local clone**
+through the configured boot-capable driver. `pnpm demo:pull` is the story
+end to end.
+
+Entry params:
+
+- `?artifact=image|snapshot` — `image` (default) pulls the cold program, the
+  strict `remoteEntry.js` analog; `snapshot` pulls a freshly dehydrated warm
+  clone (state + image digest reference) from a live machine — fork-by-fetch.
+- `?version=^1.0.0` — negotiated against the origin manifest **before any
+  bytes move**, then re-checked on the booted clone.
+- `?digest=sha256:…` — pin the exact image; resolution fails if the origin
+  offers anything else.
+
+Operational notes:
+
+- Pull entries need a boot-capable driver (`processDriver()` /
+  `machinenDriver()`), like `machinen://` entries; `httpAttachDriver()`
+  cannot boot what it pulls.
+- Resolutions are memoized per entry: `restartOnCrash` reboots from the
+  artifact already pulled — never a surprise re-pull of newer state
+  mid-incident (the origin may even be gone). `disposeMachines()` clears the
+  memo; the on-disk cache survives and is shared by digest.
+- Snapshot state travels by value, the image by digest reference: repeat
+  pulls re-fetch only the tiny state and reuse the cached image.
+- `beforeArtifactFetch` / `onArtifactFetched` hooks report descriptor,
+  bytes fetched, cache hit/miss, and duration per pull.
+
+**Attach to state you share, pull state you want to own.** Every pull is an
+independent copy — perfect for forks, per-PR environments, and scale-out
+from one warm snapshot; wrong for big stateful singletons (three pulled
+clones of `db_machine` would each believe they are the database) and for
+data-residency topologies where the data must not move.
+
 ## Custom runtime hooks
 
 `@module-federation/runtime-core` doesn't export its hook classes (as of
@@ -109,6 +155,7 @@ tap-and-emit shape:
 | `onCircuitOpen` / `onCircuitClose` | circuit breaker state changes |
 | `beforeSnapshot` / `onSnapshotted` | around `plugin.snapshotMachine(name)` |
 | `beforeFork` / `onForked` | around `plugin.forkMachine(name)` |
+| `beforeArtifactFetch` / `onArtifactFetched` | around a pull entry's artifact resolution (descriptor, bytes, cache hit/miss, duration) |
 
 Snapshot/fork mirror Machinen's signature operations and delegate to the
 driver's handle: the process driver freezes app state into `.snap` bundles,
@@ -186,7 +233,8 @@ walking up from the working directory:
 ```
 
 - `machines.<name>.url` accepts the same entry forms the runtime does
-  (`machinen+http://...` to attach, `machinen://...` to boot an image);
+  (`machinen+http://...` to attach, `machinen://...` to boot a local image,
+  `machinen+pull+http://...` to pull-and-boot a clone);
   `version` is an optional semver range (the MF `requiredVersion` analog).
 - `bindgen.outDir` is where generated bindings land, relative to the config
   file. Default: `src/generated`.

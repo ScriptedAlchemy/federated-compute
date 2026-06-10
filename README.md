@@ -73,6 +73,7 @@ pnpm test           # unit tests + cross-language conformance suite
 pnpm -r build       # plugin, node apps, and the Java machine's jar
 pnpm demo           # boots all machines as separate services, runs the host
 pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
+pnpm demo:pull      # fork-by-fetch: pull a machine's image/snapshot, boot a clone
 pnpm demo:machinen  # the same story on REAL microVMs (needs /dev/kvm or Apple Silicon)
 pnpm demo:web       # interactive dashboard at http://localhost:3800 (+ /gravity)
 pnpm demo:gravity   # data gravity comparison, CLI edition

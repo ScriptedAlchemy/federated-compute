@@ -1,7 +1,7 @@
 # Design: image/vmstate federation — pull-and-boot machine entries
 
 Date: 2026-06-10
-Status: proposed
+Status: Phase 1 implemented (see "Phase 1 implementation notes" at the end)
 
 ## The concept
 
@@ -344,6 +344,35 @@ dirs).
 Multi-machine registry index, multiple published versions with semver-range
 artifact *selection* (true MF-style negotiation at the artifact level, not
 just validation), delta/layered images.
+
+## Phase 1 implementation notes (deviations from the spec above)
+
+Phase 1 landed as scoped. Implementation forced these refinements:
+
+- **`ArtifactDescriptor` gained an `ext` field** (".js"/".jar"/".py"…). The
+  spec's `mediaType` could not safely drive the cached filename, and drivers
+  pick boot commands by file extension — so the origin states it explicitly
+  and the resolver validates it (`/^\.[A-Za-z0-9]{1,16}$/`) so a hostile
+  manifest cannot write outside the cache dir.
+- **`?digest=` pinning does not skip the manifest fetch** — only the artifact
+  download on cache hit. The manifest is needed for `href`/`ext`, and it is
+  tiny; the spec's "skips the network entirely" was overpromising.
+- **Rewritten specs carry `pulledFrom`** (the original pull entry) so hooks
+  and errors keep provenance after the spec is rewritten to a local
+  `kind: 'image'` boot.
+- **Cache hits are re-hashed** before reuse: a corrupt cache entry (partial
+  write, disk fault) is evicted and re-downloaded. Cheap at Phase 1 artifact
+  sizes; revisit for multi-GB Phase 2 bundles.
+- **Materialized `.snap` bundles are content-addressed** (sha256 of the
+  bundle JSON), so a memoized resolution stays valid across
+  `restartOnCrash` reboots and identical pulled states share one file.
+- **Unsupported artifact endpoints answer 404** (the routes simply don't
+  exist without the capability), and the conformance suite now gates this:
+  advertised artifacts must be digest-true, unadvertised endpoints must
+  answer 404/501. Java/Python guests pass untouched (artifact publishing
+  there is follow-up work, as scoped).
+- Pull resolution shares the plugin's `bootTimeoutMs` budget (it runs inside
+  the boot phase); raise it for slow links the same way as for slow boots.
 
 ## Recommendation
 

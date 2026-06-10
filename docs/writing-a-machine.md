@@ -114,6 +114,8 @@ same assertions in the plugin's own guest tests) and asserts:
 - calls round-tripping JSON values
 - typed error envelopes for unknown functions
 - the `/mf-types.ts` static-artifact pattern (200 with content, or 404)
+- the artifact capability gate: advertised `artifacts` must be fetchable and
+  digest-true; unadvertised `/mf-image` & `/mf-snapshot` must answer 404/501
 - state round-trips via `/mf/state`
 - the canonical 400 ParseError for malformed and non-object bodies, with no
   body reflection and the connection staying live
@@ -138,3 +140,22 @@ the `state` capability: pass `state: { dehydrate, rehydrate }` to
 `dehydrate()` returns the machine's warm state; `rehydrate(state)` resumes
 from it. Machines run under `machinenDriver()` don't need it — whole-VM
 snapshots carry the heap itself.
+
+## Publishing artifacts (optional)
+
+A machine can publish *itself* for pull federation, so consumers with a
+`machinen+pull+http://...` entry fetch its program (or a warm snapshot) and
+boot their own clone. In Node it is one option:
+
+```ts
+await serveGuest(guest, { port, imagePath: process.argv[1] });
+```
+
+This makes the manifest advertise an `artifacts` block, serves the program
+at `GET /mf-image` (digest-addressed, immutable), and — when the guest also
+has `state` support — serves fresh warm clones at `GET /mf-snapshot`.
+`apps/remote` does exactly this. Non-Node guests implement the same three
+pieces by hand; see the `artifacts`/`/mf-image`/`/mf-snapshot` sections of
+[guest-protocol.md](guest-protocol.md), including the security note: anyone
+who can reach the machine can take its code and dehydrated memory, so
+publishing is strictly opt-in.
