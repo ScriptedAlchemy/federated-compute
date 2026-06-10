@@ -5,7 +5,7 @@ covers the operator API, call policy, runtime hooks, snapshot/restore,
 the demos, data gravity, and `machinen.config.json`. End users consuming
 machines as imports only need the [README](../README.md).
 
-## For operators and advanced wiring
+## The operator API
 
 ```ts
 import { createMachines } from '@federated-compute/machinen-plugin/client';
@@ -18,6 +18,10 @@ await machines.warm();                         // preloadRemote analog
 machines.plugin.machineHooks.beforeCall.on(...); // full hook surface
 machines.metrics();                            // p50/p95, errors, crashes...
 ```
+
+`configureMachines(options)` is the set-once global variant: it configures
+the default client that generated bindings use, and must run before any
+machine call.
 
 The raw MF runtime style (`createInstance` + `machinenPlugin` + `loadRemote`)
 keeps working underneath:

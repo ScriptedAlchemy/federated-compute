@@ -23,11 +23,10 @@ await math.add(20, 22);                     // runs on the Node machine
 for await (const n of math.countdown(3)) {} // streams across the boundary
 ```
 
-That's the entire API. Addresses and auth resolve from env
-(`MACHINEN_REMOTE_<NAME>`, `MACHINEN_TOKEN`) or one optional
-`configureMachines()` call at startup. Machine addresses live in the app's
+That's the entire API. Machine addresses come from the app's
 [`machinen.config.json`](docs/operators.md#machinenconfigjson), overridable
-per environment with `MACHINEN_REMOTE_<NAME>`. The federation instance,
+per environment with `MACHINEN_REMOTE_<NAME>` env vars (or an optional
+`configureMachines()` call at startup). The federation instance,
 drivers, version negotiation, timeouts, retries, and circuit breaking are
 invisible — exactly like MF consumers importing from a remote without
 thinking about script loading or share scopes.

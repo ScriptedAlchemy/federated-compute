@@ -67,11 +67,39 @@ and builds a single `dist/java-machine.jar`. Because the manifest itself
 carries full function signatures, a Java (or any non-TS) machine needs no
 TypeScript toolchain — hosts render bindings from the manifest alone.
 
+Implementing from scratch in another language? The checklist, with where
+the Java reference does each step:
+
+1. Serve `GET /mf-manifest.json` — `protocol: 3`, semver `version`, full
+   signatures (`GuestServer.handleManifest` builds it from
+   `runtime/Exposes.manifestExposes()`).
+2. Enforce bearer auth on everything except `GET /mf/health`, with a
+   constant-time token compare (`GuestServer` hashes both sides before
+   comparing).
+3. Dispatch `POST /mf/call` — unary JSON `{ ok, result }` / error envelopes
+   with the protocol's wording (`GuestServer.handleCall` →
+   `Exposes.dispatch`); NDJSON streaming is only needed if you expose
+   `stream` functions (the Java and Python references expose none).
+4. Optionally implement `GET/POST /mf/state` for app-state snapshots
+   (`state/MachineState.java`).
+5. Add your machine as a conformance target — see
+   [Conformance](#conformance) below.
+
 ## Python
 
 `apps/remote-python` is the same protocol in Python 3: a `machinen_guest`
-package (protocol, registry, server, modules) using only the standard
-library.
+package using only the standard library. The same checklist maps onto it:
+
+1. Manifest: `protocol.build_manifest()` renders `path -> fn -> signature`
+   maps from `registry.Registry.manifest()`.
+2. Auth: `server.py`'s `GuestHandler._unauthorized` does the hashed
+   constant-time bearer check; `/mf/health` is served before it.
+3. Calls: `GuestHandler.do_POST` routes `/mf/call` to
+   `Registry.dispatch`, answering the protocol's envelopes (including the
+   canonical 400 ParseError and 413 PayloadError).
+4. State: `state.py`'s `CounterState.dehydrate` / `rehydrate` back
+   `GET/POST /mf/state`.
+5. Conformance: registered as the `python guest` target.
 
 ## Type distribution
 
@@ -86,18 +114,29 @@ manifest signatures, so the endpoint is a nicety, not a requirement.
 `packages/runtime-plugin/test/conformance.test.ts` validates guests against
 the protocol. It boots each target through the process driver (the Java jar
 and the Python script today; the Node implementation is exercised by the
-same assertions in the plugin's own guest tests) and asserts: a protocol-v3
-manifest with semver version and typed signatures, an unauthenticated health
-endpoint, calls round-tripping JSON values, typed error envelopes for
-unknown functions, 401s without the bearer token, the `/mf-types.ts`
-static-artifact pattern (200 with content, or 404), state round-trips via
-`/mf/state`, the canonical 400 ParseError for malformed and non-object
-bodies (with no body reflection and the connection staying live), and a 413
-PayloadError for oversized bodies with the guest surviving. To validate a
-new guest, add a target entry to the `targets` array — a label, the image
-path (the process driver picks the boot command from the extension), the
-expected machine name, one sample call, the types expectation, and a
-runtime-availability check — and the whole suite runs against it.
+same assertions in the plugin's own guest tests) and asserts:
+
+- a protocol-v3 manifest with a semver version and typed signatures
+- an unauthenticated health endpoint
+- calls round-tripping JSON values
+- typed error envelopes for unknown functions
+- 401s without the bearer token
+- the `/mf-types.ts` static-artifact pattern (200 with content, or 404)
+- state round-trips via `/mf/state`
+- the canonical 400 ParseError for malformed and non-object bodies, with no
+  body reflection and the connection staying live
+- a 413 PayloadError for oversized bodies, with the guest surviving
+
+To validate a new guest, add an entry to the `targets` array:
+
+- a label and the image path (the process driver picks the boot command from
+  the file extension)
+- the expected machine name and one sample call
+- the `/mf-types.ts` expectation (`200` + a content marker, or `404`)
+- a runtime-availability check (so the suite skips honestly where the
+  language runtime is missing)
+
+The whole suite then runs against it.
 
 ## State (optional)
 
