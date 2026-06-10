@@ -47,7 +47,17 @@
     "@module-federation/runtime": "^2.5.1",
     "semver": "^7.8.3"
   },
+  "peerDependencies": {
+    "@machinen/runtime": "^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@machinen/runtime": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@machinen/cli": "0.4.0",
+    "@machinen/runtime": "0.4.0",
     "@types/node": "^25.9.2",
     "@types/semver": "^7.7.1",
     "typescript": "^5.7.0",

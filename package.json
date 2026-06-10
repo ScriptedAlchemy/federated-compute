@@ -7,6 +7,7 @@
     "test": "pnpm -r test",
     "demo": "node scripts/demo.mjs",
     "demo:snapshot": "node scripts/demo-snapshot.mjs",
+    "demo:machinen": "node scripts/demo-machinen.mjs",
     "demo:web": "node scripts/demo-web.mjs",
     "demo:gravity": "node scripts/demo-gravity.mjs",
     "bindgen": "node scripts/bindgen.mjs"

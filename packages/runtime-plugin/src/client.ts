@@ -34,6 +34,8 @@ export interface MachinesOptions {
   calls?: CallPolicy;
   /** Default true: machines restart-and-retry transparently after crashes. */
   restartOnCrash?: boolean;
+  /** Timeout for boot + manifest fetch. Default 30s; raise for VM drivers that cold-boot. */
+  bootTimeoutMs?: number;
 }
 
 export interface MachineModuleOptions {
@@ -101,6 +103,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   const plugin = machinenPlugin({
     driver: options.driver ?? httpAttachDriver(),
     restartOnCrash: options.restartOnCrash ?? true,
+    bootTimeoutMs: options.bootTimeoutMs,
     calls: options.calls,
   });
 

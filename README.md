@@ -111,8 +111,9 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
     injects auth tokens, picks the boot command by image type (`.js` → node,
     `.java` → java source mode, `.jar` → `java -jar`, `.py` → python3, extensible).
   - `inProcessDriver()` — same-process guest, used by tests.
-  - A real `MachinenDriver` (provision/boot/snapshot/restore over microVMs)
-    slots behind the same interface later.
+  - `machinenDriver()` — the real thing: boots `machinen://` entries as
+    actual microVMs via `@machinen/runtime` (KVM/HVF), with whole-VM
+    snapshot/restore. See [Real Machinen driver](#real-machinen-driver).
 
 ## Custom runtime hooks
 
@@ -147,8 +148,9 @@ Two scenarios, both through federation (`pnpm demo:snapshot`):
    with counters that survive the move across all three languages).
 
 Guests opt in via the protocol's `state` capability (`GET/POST /mf/state`) —
-the process driver's stand-in for a VM memory dump until `@machinen/runtime`
-is public, where the same `MachineDriver` interface snapshots whole microVMs.
+the process driver's stand-in for a VM memory dump. With `machinenDriver()`
+the same `MachineDriver` interface snapshots whole microVMs for real: no
+guest cooperation needed, the heap simply survives (`pnpm demo:machinen`).
 
 ## Interactive demo
 
@@ -255,6 +257,7 @@ pnpm test           # unit tests + cross-language conformance suite
 pnpm -r build       # plugin, node apps, and the Java machine's jar
 pnpm demo           # boots all machines as separate services, runs the host
 pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
+pnpm demo:machinen  # the same story on REAL microVMs (needs /dev/kvm or Apple Silicon)
 pnpm demo:web       # interactive dashboard at http://localhost:3800 (+ /gravity)
 pnpm demo:gravity   # data gravity comparison, CLI edition
 pnpm bindgen        # pull typed bindings from the deployed machines
@@ -263,6 +266,83 @@ pnpm bindgen        # pull typed bindings from the deployed machines
 Requires Node 22+, a JDK 21+ for the Java machine, and Python 3 for the
 Python machine. CI runs the full suite plus all three demos and the web
 demo smoke checks.
+
+## Real Machinen driver
+
+`machinenDriver()` (in `@federated-compute/machinen-plugin`) boots
+`machinen://` entries as **actual microVMs** through
+[`@machinen/runtime`](https://www.npmjs.com/package/@machinen/runtime) — KVM
+on Linux (x86_64 and arm64), HVF on Apple Silicon. Status: **working today**
+on machinen 0.4.0; verified end to end on x86_64/KVM by
+`packages/runtime-plugin/test/machinen-driver.test.ts` (a real-VM integration
+test that skips itself honestly when `/dev/kvm` or the package is missing)
+and by `pnpm demo:machinen`.
+
+```ts
+import { createMachines, machinenDriver } from '@federated-compute/machinen-plugin';
+
+const machines = createMachines({
+  driver: machinenDriver(),            // real VMs from here on
+  bootTimeoutMs: 180_000,
+  remotes: { compute_machine: `machinen://${bundlePath}?token=${token}` },
+});
+await machines.machine('compute_machine').counter.increment(); // runs inside a microVM
+
+const snap = await machines.plugin.snapshotMachine('compute_machine'); // whole-VM vmstate bundle
+// later, anywhere: an entry pointing at the bundle dir restores the VM mid-heap
+// remotes: { compute_machine: `machinen://${snap.snapDir}?token=${token}` }
+```
+
+Boot model: the driver boots the machinen debian base, installs node inside
+the guest over vsock exec (~5s; pass `image:` with node prebaked to skip),
+`vm.writeFile`s the guest bundle plus a launcher carrying
+`PORT`/`HOST`/`MACHINEN_TOKEN`, starts it, and serves all calls through a
+gvproxy host→guest port forward — the handle is the same `httpMachineHandle`
+the other drivers use. `handle.snapshot()` freezes the whole VM (RAM +
+rootdisk + vCPU state, ~2.5GB bundle); booting a `machinen://<snapDir>` entry
+restores it and the guest process resumes mid-heap. `@machinen/runtime` is an
+**optional peer dependency** loaded lazily on first boot — non-VM users never
+pull the ~18MB native package, and the error when it's missing says exactly
+what to install.
+
+Measured on x86_64/KVM (machinen 0.4.0, nested KVM, warm asset cache):
+
+| phase | wall time |
+| --- | --- |
+| VM boot (debian base) | ~5.3s |
+| apt + node install in guest | ~5–6s |
+| boot → guest healthy, total | ~9.5s |
+| warm federated call | ~1–2ms |
+| whole-VM snapshot (2.5GB bundle) | ~7s |
+| restore → guest healthy | ~5.5s |
+
+Four amd64 0.4.0 upstream bugs were diagnosed empirically and are worked
+around inside the driver (each carries a comment at the call site):
+
+1. **Auto memory sizing crashes the VMM** — default sizing picks a guest RAM
+   layout colliding with the KVM APIC page (`KvmCreateVcpuFailed` at boot).
+   The driver always passes an explicit `memory` (default 2048 MiB; keep
+   ≤ ~3500 on amd64).
+2. **`provision()` stalls** — its in-VM exec hangs until the 300s
+   `EXEC_AGENT_TIMEOUT`. The driver never calls `provision()`; boot-then-exec
+   performs the same install in ~5s.
+3. **Restore dies in entropy reseed** — the amd64 base rootfs ships an
+   *aarch64* `/sbin/machinen-vmstate-reseed` ("Exec format error" → restore
+   fails with `BOOT_VMSTATE_RESEED_FAILED`). `handle.snapshot()` stubs the
+   binary with `#!/bin/sh; exit 0` before every dump so the frozen state
+   contains a working no-op.
+4. **`fork()` is unreliable on amd64** — the forked sibling does not resume
+   dependably. `handle.fork()` throws a clear not-supported-on-amd64 error;
+   snapshot + boot-from-bundle covers the clone-a-warm-VM use case meanwhile.
+
+(A fifth quirk, also handled: programmatic `boot()`/`restore()` don't resolve
+the kernel path the way the CLI does — without an explicit `kernel:` the VMM
+exits with "MACHINEN_KERNEL is unset". The driver passes
+`resolveBaseKernel()` on every boot and restore.)
+
+`fork()` and `provision()` support are pending those upstream fixes; the
+driver's semantics (and the error messages) are written so they slot in
+without interface changes.
 
 ## Real Machinen validation in CI
 
@@ -292,7 +372,10 @@ Linux machine with usable `/dev/kvm` can run the validation locally too.
 
 ## Status
 
-Experimental. The binding layer is real today; the process driver simulates
-the boot/port-forward model for fast local dev, and the real-VM layer is
-validated continuously by the Machinen CI lane above as `@machinen/*`
-packages and runner hardware allow.
+Experimental. The binding layer is real today, and so is the VM layer:
+`machinenDriver()` boots, snapshots, and restores actual microVMs through
+`@machinen/runtime` (see [Real Machinen driver](#real-machinen-driver)). The
+process driver remains the fast local-dev simulation of the same
+boot/port-forward model, and the Machinen CI lane above keeps the real-VM
+path continuously validated as `@machinen/*` releases and runner hardware
+evolve.

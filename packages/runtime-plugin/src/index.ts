@@ -48,3 +48,9 @@ export {
 export { inProcessDriver } from './drivers/in-process.js';
 export { httpAttachDriver, httpMachineHandle } from './drivers/http.js';
 export { processDriver, resolveBootCommand, type BootCommandMap } from './drivers/process.js';
+export {
+  isMachinenSnapshotDir,
+  machinenDriver,
+  type MachinenDriverOptions,
+  type MachinenSnapshotDescriptor,
+} from './drivers/machinen.js';
