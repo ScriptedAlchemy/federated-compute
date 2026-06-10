@@ -13,7 +13,7 @@ afterAll(async () => {
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-async function startGuest(name: string, opts: { token?: string } = {}): Promise<GuestServer> {
+async function startGuest(name: string): Promise<GuestServer> {
   const guest = createGuestRuntime({
     name,
     version: '1.0.0',
@@ -22,7 +22,7 @@ async function startGuest(name: string, opts: { token?: string } = {}): Promise<
       './counter': { current: { handler: () => 0, returns: 'number' } },
     },
   });
-  const server = await serveGuest(guest, { port: 0, token: opts.token });
+  const server = await serveGuest(guest, { port: 0 });
   servers.push(server);
   return server;
 }
@@ -81,33 +81,6 @@ describe('runBindgenFromConfig', () => {
     expect(byName.alive_machine.status).toBe('written');
     expect(byName.dead_machine.status).toBe('error');
     expect(existsSync(path.join(config.dir, 'src/generated/alive_machine.ts'))).toBe(true);
-  });
-
-  test('a ?token= on the config entry authenticates against a token-requiring guest', async () => {
-    const guest = await startGuest('entry_token_machine', { token: 'sesame' });
-    const config = makeConfig({
-      entry_token_machine: { url: `machinen+http://127.0.0.1:${guest.port}?token=sesame` },
-    });
-
-    const result = await runBindgenFromConfig(config, {});
-    expect(result.ok).toBe(true);
-    expect(result.machines[0].status).toBe('written');
-  });
-
-  test('options.token wins over a wrong ?token= on the entry', async () => {
-    const guest = await startGuest('option_token_machine', { token: 'sesame' });
-    const config = makeConfig({
-      option_token_machine: { url: `machinen+http://127.0.0.1:${guest.port}?token=wrong` },
-    });
-
-    // Sanity: the entry token alone is rejected by the guest.
-    const denied = await runBindgenFromConfig(config, {});
-    expect(denied.ok).toBe(false);
-    expect(denied.machines[0].status).toBe('error');
-
-    const result = await runBindgenFromConfig(config, { token: 'sesame' });
-    expect(result.ok).toBe(true);
-    expect(result.machines[0].status).toBe('written');
   });
 
   test('check mode reports clean after a write and drift after an edit, writing nothing', async () => {

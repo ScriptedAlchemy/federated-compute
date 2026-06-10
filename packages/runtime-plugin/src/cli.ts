@@ -11,8 +11,6 @@
  * Single-machine mode (ad hoc):
  *
  *   machinen-bindgen --url http://127.0.0.1:3801 --out src/generated/compute_machine.ts
- *
- * Auth: --token, per-entry ?token=, or the MACHINEN_TOKEN env var.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -23,7 +21,6 @@ import { MACHINEN_CONFIG_FILENAME, loadMachinenConfig } from './config.js';
 interface CliArgs {
   url?: string;
   out?: string;
-  token?: string;
   check: boolean;
 }
 
@@ -33,10 +30,10 @@ function parseArgs(argv: string[]): CliArgs {
     const key = argv[i];
     if (key === '--check') {
       args.check = true;
-    } else if (key === '--url' || key === '--out' || key === '--token') {
+    } else if (key === '--url' || key === '--out') {
       const value = argv[++i];
       if (value === undefined) usage();
-      args[key.slice(2) as 'url' | 'out' | 'token'] = value;
+      args[key.slice(2) as 'url' | 'out'] = value;
     } else {
       usage();
     }
@@ -46,20 +43,20 @@ function parseArgs(argv: string[]): CliArgs {
 
 function usage(): never {
   console.error(
-    'usage: machinen-bindgen [--check] [--token <token>]\n' +
-      '       machinen-bindgen --url <machine-url> --out <file.ts> [--token <token>]',
+    'usage: machinen-bindgen [--check]\n' +
+      '       machinen-bindgen --url <machine-url> --out <file.ts>',
   );
   process.exit(2);
 }
 
-async function runSingle(url: string, out: string, token?: string): Promise<void> {
-  const source = await fetchBindingsSource(url, { token: token ?? process.env.MACHINEN_TOKEN });
+async function runSingle(url: string, out: string): Promise<void> {
+  const source = await fetchBindingsSource(url);
   await mkdir(path.dirname(out), { recursive: true });
   await writeFile(out, source);
   console.log(`machinen-bindgen: ${url} -> ${out}`);
 }
 
-async function runConfig(check: boolean, token?: string): Promise<void> {
+async function runConfig(check: boolean): Promise<void> {
   const config = loadMachinenConfig();
   if (!config) {
     console.error(
@@ -68,7 +65,7 @@ async function runConfig(check: boolean, token?: string): Promise<void> {
     );
     process.exit(2);
   }
-  const result = await runBindgenFromConfig(config, { check, token });
+  const result = await runBindgenFromConfig(config, { check });
   const all = result.barrel ? [...result.machines, result.barrel] : result.machines;
   for (const m of all) {
     const rel = path.relative(process.cwd(), m.file);
@@ -82,13 +79,13 @@ async function runConfig(check: boolean, token?: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { url, out, token, check } = parseArgs(process.argv.slice(2));
+  const { url, out, check } = parseArgs(process.argv.slice(2));
   if (url || out) {
     if (!url || !out || check) usage();
-    await runSingle(url, out, token);
+    await runSingle(url, out);
     return;
   }
-  await runConfig(check, token);
+  await runConfig(check);
 }
 
 main().catch((error) => {

@@ -31,7 +31,7 @@ const host = createInstance({
   name: 'host',
   remotes: [
     // attach to an independently deployed machine — address + required version
-    { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?version=^1.0.0&token=...' },
+    { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?version=^1.0.0' },
     // or boot one from an image (driver owns the transport)
     { name: 'compute_machine', entry: 'machinen://images/compute.tar.gz?version=^1.0.0' },
   ],
@@ -65,7 +65,7 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
   proxies governed by the call policy.
 - Machines speak the [guest protocol v3](guest-protocol.md):
   `GET /mf-manifest.json`, `GET /mf/health`, `POST /mf/call` — typed
-  signatures, bearer-token auth, NDJSON streaming, structured error envelopes,
+  signatures, NDJSON streaming, structured error envelopes,
   body caps, graceful shutdown. Any language qualifies: `apps/remote` (Node),
   `apps/remote-java` (Java 21, zero deps), `apps/remote-python` (Python 3,
   stdlib only).
@@ -86,7 +86,7 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
     the containment-preserving default.
   - `processDriver()` — boot an image as a local child process: the lightweight
     local driver for dev and tests (no VMs, instant boots, app-state `.snap`
-    bundles). Allocates ports, injects auth tokens, picks the boot command by
+    bundles). Allocates ports and picks the boot command by
     image type (`.js` → node, `.java` → java source mode, `.jar` → `java -jar`,
     `.py` → python3, extensible).
   - `inProcessDriver()` — same-process guest, used by tests.

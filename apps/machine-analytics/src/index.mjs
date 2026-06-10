@@ -45,7 +45,6 @@ const guest = createGuestRuntime({
 });
 
 const port = Number(process.env.PORT ?? 3805);
-const token = process.env.MACHINEN_TOKEN || undefined;
-serveGuest(guest, { port, token }).then((server) => {
+serveGuest(guest, { port }).then((server) => {
   console.log(`[machine-analytics] analytics machine listening on 127.0.0.1:${server.port}`);
 });

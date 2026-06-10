@@ -48,7 +48,7 @@ export type MachinenPlugin = ModuleFederationRuntimePlugin & {
 };
 
 interface BootedMachine {
-  /** The raw entry string this machine is cached under (may carry auth). */
+  /** The raw entry string this machine is cached under. */
   key: string;
   /** Boot generation for the key; guards crash() against evicting a newer boot. */
   generation: number;
@@ -319,8 +319,8 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         `[machinen-plugin] machine "${machine.spec.remoteName}" does not expose "${key}" (available: ${available})`,
       );
     }
-    // Bindings capture the raw cache key (not the redacted spec.entry) so a
-    // post-crash reboot re-parses the original entry, auth included.
+    // Bindings capture the raw cache key so a post-crash reboot re-parses
+    // the original entry.
     const { remoteName } = machine.spec;
     const moduleExports: Record<string, unknown> = { __esModule: true };
     for (const [fn, signature] of Object.entries(signatures)) {

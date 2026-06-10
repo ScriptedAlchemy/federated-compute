@@ -5,7 +5,6 @@ import { httpMachineHandle } from '../src/drivers/http.js';
 import {
   GuestError,
   isTransportFailure,
-  MachineAuthError,
   MachineRequestError,
   MachineTransportError,
 } from '../src/errors.js';
@@ -169,14 +168,6 @@ describe('guest over HTTP', () => {
     }
   });
 
-  test('a wrong (not just missing) bearer token is a MachineAuthError', async () => {
-    const server = await startGuest({ token: 'right-token' });
-    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'wrong' });
-    const error = await handle.call('./math', 'add', [1, 1]).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(MachineAuthError);
-    expect(isTransportFailure(error)).toBe(false);
-  });
-
   test('a guest {"error"} line mid-stream surfaces as GuestError after earlier chunks', async () => {
     const guest = createGuestRuntime({
       name: 'mid_error_guest',
@@ -214,19 +205,6 @@ describe('guest over HTTP', () => {
     expect((error as GuestError).message).toBe('mid-stream failure');
     expect((error as GuestError).remoteType).toBe('TypeError');
     expect(isTransportFailure(error)).toBe(false); // not retried, no crash bookkeeping
-  });
-
-  test('rejects requests without the right bearer token', async () => {
-    const server = await startGuest({ token: 'secret' });
-
-    const unauthorized = httpMachineHandle(`http://127.0.0.1:${server.port}`);
-    const error = await unauthorized.manifest().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(MachineAuthError);
-    expect((error as Error).message).toMatch(/401/);
-    expect(isTransportFailure(error)).toBe(false); // never retried or restarted
-
-    const authorized = httpMachineHandle(`http://127.0.0.1:${server.port}`, { token: 'secret' });
-    await expect(authorized.call('./math', 'add', [1, 1])).resolves.toBe(2);
   });
 
   test('a guest answering 413 surfaces a non-retriable request error', async () => {
@@ -282,8 +260,8 @@ describe('guest over HTTP', () => {
     expect(shown.remoteStack).toContain('TypeError: guest exploded');
   });
 
-  test('health endpoint responds without auth (liveness probes)', async () => {
-    const server = await startGuest({ token: 'secret' });
+  test('health endpoint responds (liveness probes)', async () => {
+    const server = await startGuest();
     const res = await fetch(`http://127.0.0.1:${server.port}/mf/health`);
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);

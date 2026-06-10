@@ -45,14 +45,6 @@ export class MachineRequestError extends Error {
   }
 }
 
-/** The guest rejected the request's credentials (401). Never retried. */
-export class MachineAuthError extends MachineRequestError {
-  constructor(message: string) {
-    super(message, 401);
-    this.name = 'MachineAuthError';
-  }
-}
-
 /**
  * The machine's circuit is open: recent calls kept failing at the transport
  * level, so calls fail fast without hitting the machine. Deliberately NOT a

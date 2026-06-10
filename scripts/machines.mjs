@@ -66,7 +66,7 @@ export const MACHINES = Object.entries(PORTS).map(([name, port]) => ({
   env: ENV[name],
 }));
 
-async function waitForManifest(port, token, name, child) {
+async function waitForManifest(port, name, child) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
@@ -80,7 +80,6 @@ async function waitForManifest(port, token, name, child) {
       });
       if (health.ok) {
         const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`, {
-          headers: token ? { authorization: `Bearer ${token}` } : {},
           signal: AbortSignal.timeout(2_000),
         });
         if (res.ok) return await res.json();
@@ -93,7 +92,7 @@ async function waitForManifest(port, token, name, child) {
   throw new Error(`machine ${name} did not become ready on :${port}`);
 }
 
-export async function startMachines({ token }) {
+export async function startMachines() {
   const started = [];
   for (const machine of MACHINES) {
     const [cmd, ...args] = machine.command;
@@ -101,7 +100,6 @@ export async function startMachines({ token }) {
       env: {
         ...process.env,
         PORT: String(machine.port),
-        ...(token ? { MACHINEN_TOKEN: token } : {}),
         ...(machine.env ?? {}),
       },
       stdio: ['ignore', 'inherit', 'inherit'],
@@ -110,7 +108,7 @@ export async function startMachines({ token }) {
   }
   try {
     for (const machine of started) {
-      machine.manifest = await waitForManifest(machine.port, token, machine.name, machine.child);
+      machine.manifest = await waitForManifest(machine.port, machine.name, machine.child);
     }
   } catch (error) {
     // Partial startup must not orphan children — they'd hold the demo ports

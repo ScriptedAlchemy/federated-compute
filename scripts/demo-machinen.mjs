@@ -19,7 +19,6 @@ import { machinenDriver } from '../packages/runtime-plugin/dist/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUEST_BUNDLE = path.join(ROOT, 'apps/remote/dist/index.js');
-const TOKEN = process.env.MACHINEN_TOKEN ?? 'vm-demo-secret';
 
 if (!existsSync(GUEST_BUNDLE)) {
   console.error(`guest bundle missing at ${GUEST_BUNDLE} — run \`pnpm --filter remote build\` first`);
@@ -42,7 +41,7 @@ try {
   hostA = createMachines({
     driver,
     bootTimeoutMs: 180_000,
-    remotes: { compute_machine: `machinen://${GUEST_BUNDLE}?token=${TOKEN}` },
+    remotes: { compute_machine: `machinen://${GUEST_BUNDLE}` },
   });
 
   let t0 = Date.now();
@@ -71,7 +70,7 @@ try {
   hostB = createMachines({
     driver: machinenDriver({ snapshotDir }),
     bootTimeoutMs: 180_000,
-    remotes: { compute_machine: `machinen://${snap.snapDir}?token=${TOKEN}` },
+    remotes: { compute_machine: `machinen://${snap.snapDir}` },
   });
 
   t0 = Date.now();

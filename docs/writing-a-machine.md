@@ -3,9 +3,8 @@
 A machine is any process, in any language, that speaks the
 [guest protocol v3](guest-protocol.md): it serves its typed manifest at
 `GET /mf-manifest.json`, answers liveness probes at `GET /mf/health`, and
-executes calls posted to `POST /mf/call` — with bearer-token auth on
-everything except health, JSON envelopes for results and errors, and NDJSON
-for streaming functions. That's the whole contract: implement those three
+executes calls posted to `POST /mf/call` — with JSON envelopes for results
+and errors, and NDJSON for streaming functions. That's the whole contract: implement those three
 endpoints and a host can attach, negotiate versions, and import your
 functions as typed bindings. See [guest-protocol.md](guest-protocol.md) for
 the full wire contract (error envelopes, body caps, status codes, graceful
@@ -48,7 +47,6 @@ const guest = createGuestRuntime({
 
 const server = await serveGuest(guest, {
   port: Number(process.env.PORT ?? 3801),
-  token: process.env.MACHINEN_TOKEN || undefined, // bearer auth when set
 });
 console.log(`machine listening on ${server.port}`);
 ```
@@ -73,16 +71,13 @@ the Java reference does each step:
 1. Serve `GET /mf-manifest.json` — `protocol: 3`, semver `version`, full
    signatures (`GuestServer.handleManifest` builds it from
    `runtime/Exposes.manifestExposes()`).
-2. Enforce bearer auth on everything except `GET /mf/health`, with a
-   constant-time token compare (`GuestServer` hashes both sides before
-   comparing).
-3. Dispatch `POST /mf/call` — unary JSON `{ ok, result }` / error envelopes
+2. Dispatch `POST /mf/call` — unary JSON `{ ok, result }` / error envelopes
    with the protocol's wording (`GuestServer.handleCall` →
    `Exposes.call`); NDJSON streaming is only needed if you expose
    `stream` functions (the Java and Python references expose none).
-4. Optionally implement `GET/POST /mf/state` for app-state snapshots
+3. Optionally implement `GET/POST /mf/state` for app-state snapshots
    (`state/MachineState.java`).
-5. Add your machine as a conformance target — see
+4. Add your machine as a conformance target — see
    [Conformance](#conformance) below.
 
 ## Python
@@ -92,14 +87,12 @@ package using only the standard library. The same checklist maps onto it:
 
 1. Manifest: `protocol.build_manifest()` renders `path -> fn -> signature`
    maps from `registry.Registry.manifest()`.
-2. Auth: `server.py`'s `GuestHandler._unauthorized` does the hashed
-   constant-time bearer check; `/mf/health` is served before it.
-3. Calls: `GuestHandler.do_POST` routes `/mf/call` to
+2. Calls: `GuestHandler.do_POST` routes `/mf/call` to
    `Registry.dispatch`, answering the protocol's envelopes (including the
    canonical 400 ParseError and 413 PayloadError).
-4. State: `state.py`'s `CounterState.dehydrate` / `rehydrate` back
+3. State: `state.py`'s `CounterState.dehydrate` / `rehydrate` back
    `GET/POST /mf/state`.
-5. Conformance: registered as the `python guest` target.
+4. Conformance: registered as the `python guest` target.
 
 ## Type distribution
 
@@ -117,10 +110,9 @@ and the Python script today; the Node implementation is exercised by the
 same assertions in the plugin's own guest tests) and asserts:
 
 - a protocol-v3 manifest with a semver version and typed signatures
-- an unauthenticated health endpoint
+- a live health endpoint
 - calls round-tripping JSON values
 - typed error envelopes for unknown functions
-- 401s without the bearer token
 - the `/mf-types.ts` static-artifact pattern (200 with content, or 404)
 - state round-trips via `/mf/state`
 - the canonical 400 ParseError for malformed and non-object bodies, with no

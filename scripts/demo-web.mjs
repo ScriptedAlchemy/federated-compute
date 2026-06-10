@@ -11,10 +11,9 @@ import { startWanLinks } from './latency-proxy.mjs';
 import { HOST_PORT, PORTS, remoteEnv, startMachines, WAN_PORTS } from './machines.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const token = process.env.MACHINEN_TOKEN ?? 'dev-secret';
 const smoke = process.argv.includes('--smoke');
 
-const { stop } = await startMachines({ token });
+const { stop } = await startMachines();
 // Simulated WAN links into the data region: BOTH paths cross it — querying
 // the db directly, and calling the co-located analytics machine.
 let wan;
@@ -29,7 +28,6 @@ try {
 const host = spawn('node', [path.join(ROOT, 'apps/host/dist/server.js')], {
   env: {
     ...process.env,
-    MACHINEN_TOKEN: token,
     // Everything in the data region is reached THROUGH the WAN links.
     ...remoteEnv(Object.keys(PORTS), { wan: Object.keys(WAN_PORTS) }),
     REGION_LINKS: wan.regionLinks,

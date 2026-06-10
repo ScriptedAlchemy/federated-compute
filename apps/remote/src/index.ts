@@ -5,11 +5,10 @@ const port = Number(process.env.PORT ?? 3801);
 // Loopback by default; set HOST=0.0.0.0 when running inside a real machinen
 // VM so the gvproxy port-forward can reach the server from the host.
 const hostname = process.env.HOST ?? '127.0.0.1';
-const token = process.env.MACHINEN_TOKEN || undefined;
 
 const guest = createGuestRuntime({ name: 'compute_machine', version: '1.0.0', exposes, state });
 
-serveGuest(guest, { port, hostname, token }).then((server) => {
+serveGuest(guest, { port, hostname }).then((server) => {
   console.log(`[remote] machine guest listening on ${hostname}:${server.port}`);
 
   const shutdown = async (signal: string) => {

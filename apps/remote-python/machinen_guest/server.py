@@ -1,9 +1,7 @@
-"""HTTP server for the guest protocol: routing, auth, and JSON envelopes."""
+"""HTTP server for the guest protocol: routing and JSON envelopes."""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +24,6 @@ TYPES_FILE = Path(__file__).resolve().parent.parent / "mf-types.ts"
 @dataclass(frozen=True)
 class ServerConfig:
     port: int
-    token: str | None
 
 
 def _make_handler(
@@ -47,22 +44,6 @@ def _make_handler(
         def _not_found(self) -> None:
             self.send_response(404)
             self.end_headers()
-
-        def _unauthorized(self) -> bool:
-            if config.token is None:
-                return False
-            # Constant time: compare SHA-256 digests, never the raw strings.
-            expected = hashlib.sha256(f"Bearer {config.token}".encode()).digest()
-            presented = hashlib.sha256(
-                (self.headers.get("authorization") or "").encode()
-            ).digest()
-            if hmac.compare_digest(expected, presented):
-                return False
-            self._send(
-                {"ok": False, "error": {"message": "unauthorized", "type": "AuthError"}},
-                status=401,
-            )
-            return True
 
         def _send_parse_error(self) -> None:
             # Canonical malformed-request answer: constant message, never an
@@ -110,8 +91,6 @@ def _make_handler(
             if self.path == "/mf/health":
                 self._send({"ok": True, "name": NAME})
                 return
-            if self._unauthorized():
-                return
             if self.path == "/mf-manifest.json":
                 self._send(registry.manifest())
             elif self.path == "/mf-types.ts":
@@ -130,8 +109,6 @@ def _make_handler(
                 self._not_found()
 
         def do_POST(self) -> None:
-            if self._unauthorized():
-                return
             if self.path not in ("/mf/call", "/mf/state"):
                 self._not_found()
                 return

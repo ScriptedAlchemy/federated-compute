@@ -137,15 +137,9 @@ export function generateBindings(manifest: MachineExposeManifest): string {
 }
 
 /** Fetch and validate a machine's protocol-3 manifest. */
-export async function fetchMachineManifest(
-  machineUrl: string,
-  opts: { token?: string } = {},
-): Promise<MachineExposeManifest> {
+export async function fetchMachineManifest(machineUrl: string): Promise<MachineExposeManifest> {
   const base = machineUrl.replace(/\/$/, '');
-  const headers: Record<string, string> = opts.token
-    ? { authorization: `Bearer ${opts.token}` }
-    : {};
-  const res = await fetch(`${base}/mf-manifest.json`, { headers });
+  const res = await fetch(`${base}/mf-manifest.json`);
   if (!res.ok) {
     throw new Error(`bindgen: manifest request failed with ${res.status} for ${machineUrl}`);
   }
@@ -165,17 +159,11 @@ export async function fetchMachineManifest(
  * the machine doesn't serve one. Network only — the host never reads another
  * repo's disk.
  */
-export async function fetchBindingsSource(
-  machineUrl: string,
-  opts: { token?: string } = {},
-): Promise<string> {
+export async function fetchBindingsSource(machineUrl: string): Promise<string> {
   const base = machineUrl.replace(/\/$/, '');
-  const headers: Record<string, string> = opts.token
-    ? { authorization: `Bearer ${opts.token}` }
-    : {};
 
-  const published = await fetch(`${base}/mf-types.ts`, { headers });
+  const published = await fetch(`${base}/mf-types.ts`);
   if (published.ok) return await published.text();
 
-  return generateBindings(await fetchMachineManifest(machineUrl, opts));
+  return generateBindings(await fetchMachineManifest(machineUrl));
 }

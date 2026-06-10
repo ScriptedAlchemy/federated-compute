@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import http from 'node:http';
 import { generateBindings, isJsReservedWord } from './bindgen.js';
@@ -153,8 +152,6 @@ export interface ServeGuestOptions {
   port: number;
   /** Loopback by default — machines should not be reachable off-host unless asked. */
   hostname?: string;
-  /** When set, requests must carry `Authorization: Bearer <token>`. */
-  token?: string;
   /**
    * Include guest stack traces in error envelopes. Default false: stacks
    * reveal file paths and internals, so sending them is a deliberate choice.
@@ -172,13 +169,6 @@ function errorBody(error: unknown, exposeStacks: boolean) {
       ...(exposeStacks && err?.stack ? { stack: err.stack } : {}),
     },
   };
-}
-
-/** Constant-time bearer-token check (hashing first equalizes lengths). */
-function authorized(header: string | undefined, token: string): boolean {
-  const expected = createHash('sha256').update(`Bearer ${token}`).digest();
-  const presented = createHash('sha256').update(header ?? '').digest();
-  return timingSafeEqual(expected, presented);
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -250,11 +240,6 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
       if (req.method === 'GET' && req.url === '/mf/health') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, name: guestName }));
-        return;
-      }
-      if (opts.token && !authorized(req.headers.authorization, opts.token)) {
-        res.writeHead(401, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized', type: 'AuthError' } }));
         return;
       }
       if (req.method === 'GET' && req.url === '/mf-manifest.json') {

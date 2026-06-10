@@ -14,18 +14,15 @@ import {
 /**
  * End-user facade. Importing a machine function should feel like importing a
  * local function — no instance wiring, no loadRemote, no plugin setup at call
- * sites. Addresses and auth resolve from config or env:
+ * sites. Addresses resolve from config or env:
  *
  *   MACHINEN_REMOTE_<NAME>  machine address (e.g. machinen+http://host:port)
- *   MACHINEN_TOKEN          bearer token, appended automatically
  */
 export interface MachinesOptions {
   /** Machine addresses by remote name. Falls back to MACHINEN_REMOTE_* env vars. */
   remotes?: Record<string, string>;
   /** Defaults to httpAttachDriver() — attach to deployed machines. */
   driver?: MachineDriver;
-  /** Defaults to the MACHINEN_TOKEN env var. */
-  token?: string;
   /**
    * Semver ranges by remote name. Overrides per-module pins from generated
    * bindings, so version policy survives paths (like warm()) that register
@@ -150,8 +147,6 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
       );
     }
     const spec = parseMachineEntry(name, base);
-    const token = options.token ?? process.env.MACHINEN_TOKEN;
-    if (token && !spec.auth?.token) spec.auth = { token };
     // Priority: explicit ?version= on the entry > client options.versions
     // > module pin > config file pin.
     const version = options.versions?.[name] ?? opts?.version ?? fromConfig?.version;

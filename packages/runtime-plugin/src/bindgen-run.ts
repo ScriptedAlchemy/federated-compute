@@ -30,8 +30,6 @@ export interface BindgenRunResult {
 export interface BindgenRunOptions {
   /** Diff against disk instead of writing; any difference or error fails the run. */
   check?: boolean;
-  /** Overrides per-entry ?token= and the MACHINEN_TOKEN env var. */
-  token?: string;
 }
 
 interface GeneratedMachine {
@@ -83,8 +81,7 @@ export async function runBindgenFromConfig(
           if (!spec.url) {
             throw new Error(`bindgen: entry for "${name}" is not an attachable machine URL`);
           }
-          const token = options.token ?? spec.auth?.token ?? process.env.MACHINEN_TOKEN;
-          const manifest = await fetchMachineManifest(spec.url, { token });
+          const manifest = await fetchMachineManifest(spec.url);
           return {
             name,
             file,

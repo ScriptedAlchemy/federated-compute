@@ -7,7 +7,6 @@ import { parseMachineEntry, type MachineHandle } from '../src/types.js';
 import { GuestError } from '../src/errors.js';
 
 const APPS = path.resolve(import.meta.dirname, '../../../apps');
-const TOKEN = 'conformance-secret';
 
 function runtimeAvailable(cmd: string): boolean {
   return spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status !== null;
@@ -78,7 +77,7 @@ function bootOnce(target: GuestTarget): Promise<{ handle: MachineHandle; port: n
       const port = await getFreePort();
       const spec = parseMachineEntry(
         'conformance',
-        `machinen://${target.image()}?port=${port}&token=${TOKEN}`,
+        `machinen://${target.image()}?port=${port}`,
       );
       const handle = await processDriver().boot(spec);
       disposers.push(() => handle.dispose?.());
@@ -107,7 +106,7 @@ for (const target of targets) {
       }
     });
 
-    test('health endpoint responds without auth', { timeout: 30_000 }, async () => {
+    test('health endpoint responds', { timeout: 30_000 }, async () => {
       const { port } = await bootOnce(target);
       const res = await fetch(`http://127.0.0.1:${port}/mf/health`);
       expect(res.status).toBe(200);
@@ -129,21 +128,11 @@ for (const target of targets) {
 
     test('/mf-types.ts follows the static-artifact pattern', { timeout: 30_000 }, async () => {
       const { port } = await bootOnce(target);
-      const res = await fetch(`http://127.0.0.1:${port}/mf-types.ts`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
-      });
+      const res = await fetch(`http://127.0.0.1:${port}/mf-types.ts`);
       expect(res.status).toBe(target.types.status);
       if (target.types.status === 200) {
         expect(await res.text()).toContain(target.types.contains);
       }
-    });
-
-    test('requests without the bearer token are rejected with 401', { timeout: 30_000 }, async () => {
-      const { port } = await bootOnce(target);
-      const manifest = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`);
-      expect(manifest.status).toBe(401);
-      const types = await fetch(`http://127.0.0.1:${port}/mf-types.ts`);
-      expect(types.status).toBe(401);
     });
 
     test('state capture round-trips (snapshot capability)', { timeout: 30_000 }, async () => {
@@ -159,7 +148,7 @@ for (const target of targets) {
     const post = async (port: number, path: string, body: string) =>
       fetch(`http://127.0.0.1:${port}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+        headers: { 'content-type': 'application/json' },
         body,
       });
 

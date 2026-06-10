@@ -21,7 +21,6 @@ public final class Main {
 
   public static void main(String[] args) throws Exception {
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "3802"));
-    String token = System.getenv("MACHINEN_TOKEN");
 
     MachineState state = new MachineState();
     Exposes exposes = new Exposes(List.of(
@@ -30,7 +29,7 @@ public final class Main {
         new CounterModule(state),
         new JvmModule()));
 
-    GuestServer server = new GuestServer(port, token, exposes, state);
+    GuestServer server = new GuestServer(port, exposes, state);
     server.start();
     System.out.println("[remote-java] machine guest listening on 127.0.0.1:" + port);
 

@@ -23,7 +23,7 @@ describe.skipIf(!hasPython)('boot once, run everywhere (process-driver snapshot/
     const portA = await getFreePort();
     const specA = parseMachineEntry(
       'py_machine',
-      `machinen://${PYTHON_GUEST}?port=${portA}&token=snap-secret`,
+      `machinen://${PYTHON_GUEST}?port=${portA}`,
     );
     const machineA = await driver.boot(specA);
     disposers.push(() => machineA.dispose?.());
@@ -46,7 +46,7 @@ describe.skipIf(!hasPython)('boot once, run everywhere (process-driver snapshot/
     const portB = await getFreePort();
     const specB = parseMachineEntry(
       'py_machine',
-      `machinen://${snapshot.snapFile}?port=${portB}&token=snap-secret`,
+      `machinen://${snapshot.snapFile}?port=${portB}`,
     );
     const machineB = await driver.boot(specB);
     disposers.push(() => machineB.dispose?.());

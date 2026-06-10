@@ -1,7 +1,7 @@
-// End-user view: machine functions are just imports. Addresses and auth
-// resolve invisibly from MACHINEN_REMOTE_* / MACHINEN_TOKEN env vars; the
-// federation instance, driver, retries, circuit breaker, and version
-// negotiation all live behind these imports.
+// End-user view: machine functions are just imports. Addresses resolve
+// invisibly from MACHINEN_REMOTE_* env vars; the federation instance,
+// driver, retries, circuit breaker, and version negotiation all live
+// behind these imports.
 import { math, text, strings, compute, stats, data } from './generated';
 import { getMachines } from '@federated-compute/machinen-plugin/client';
 

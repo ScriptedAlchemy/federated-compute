@@ -15,19 +15,19 @@ import { createMachines, machinenDriver } from '@federated-compute/machinen-plug
 const machines = createMachines({
   driver: machinenDriver(),            // real VMs from here on
   bootTimeoutMs: 180_000,
-  remotes: { compute_machine: `machinen://${bundlePath}?token=${token}` },
+  remotes: { compute_machine: `machinen://${bundlePath}` },
 });
 await machines.machine('compute_machine').counter.increment(); // runs inside a microVM
 
 const snap = await machines.plugin.snapshotMachine('compute_machine'); // whole-VM vmstate bundle
 // later, anywhere: an entry pointing at the bundle dir restores the VM mid-heap
-// remotes: { compute_machine: `machinen://${snap.snapDir}?token=${token}` }
+// remotes: { compute_machine: `machinen://${snap.snapDir}` }
 ```
 
 Boot model: the driver boots the machinen debian base, installs node inside
 the guest over vsock exec (~5s; pass `image:` with node prebaked to skip),
 `vm.writeFile`s the guest bundle plus a launcher carrying
-`PORT`/`HOST`/`MACHINEN_TOKEN`, starts it, and serves all calls through a
+`PORT`/`HOST`, starts it, and serves all calls through a
 gvproxy host→guest port forward — the handle is the same `httpMachineHandle`
 the other drivers use. `handle.snapshot()` freezes the whole VM (RAM +
 rootdisk + vCPU state, ~2.5GB bundle); booting a `machinen://<snapDir>` entry
@@ -36,9 +36,7 @@ restores it and the guest process resumes mid-heap. `@machinen/runtime` is an
 pull the ~18MB native package, and the error when it's missing says exactly
 what to install.
 
-Security note: whole-VM snapshot bundles are credential-bearing artifacts —
-the rootdisk and RAM dump include the launcher token and process memory, so
-treat bundles like secrets. The amd64 reseed workaround performs a *real*
+The amd64 reseed workaround performs a *real*
 reseed: the shim feeds the host-provided seed to the guest CSPRNG on restore,
 so VMs restored from one bundle do not share RNG/UUID/key state.
 

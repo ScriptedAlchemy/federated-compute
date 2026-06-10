@@ -15,7 +15,7 @@ import { getFreePort } from './process.js';
  *   2. `vm.exec` an apt-get install of node (~5s; skipped when `opts.image`
  *      ships node prebaked),
  *   3. `vm.writeFile` the guest bundle + a launcher script carrying
- *      PORT/HOST/MACHINEN_TOKEN, start it detached inside the guest,
+ *      PORT/HOST, start it detached inside the guest,
  *   4. talk guest protocol v3 over a gvproxy host->guest port forward —
  *      the returned handle is `httpMachineHandle` against the forward.
  *
@@ -158,7 +158,7 @@ export interface MachinenDriverOptions {
    * debian base (node installed at boot, ~5s).
    */
   image?: string;
-  /** Extra env baked into the guest launcher (merged over PORT/HOST/token). */
+  /** Extra env baked into the guest launcher (merged over PORT/HOST). */
   env?: Record<string, string>;
   /** Deadline for the guest to answer /mf/health after VM boot/restore. Default 60s. */
   guestReadyTimeoutMs?: number;
@@ -332,7 +332,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     guestPort: number,
     image: string,
   ): MachineHandle {
-    const handle = httpMachineHandle(`http://127.0.0.1:${hostPort}`, { token: spec.auth?.token });
+    const handle = httpMachineHandle(`http://127.0.0.1:${hostPort}`);
 
     const snapshot = async (): Promise<MachinenSnapshotDescriptor> => {
       // amd64 0.4.0 ships an aarch64 /sbin/machinen-vmstate-reseed in the
@@ -436,7 +436,6 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       const env: Record<string, string> = {
         HOST: '0.0.0.0', // gvproxy forwards arrive over the guest NIC, not loopback
         PORT: String(guestPort),
-        ...(spec.auth?.token ? { MACHINEN_TOKEN: spec.auth.token } : {}),
         ...(opts.env ?? {}),
       };
       for (const key of Object.keys(env)) assertValidEnvKey(key);

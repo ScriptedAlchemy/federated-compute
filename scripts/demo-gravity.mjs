@@ -4,10 +4,9 @@ import { createMachines } from '../packages/runtime-plugin/dist/client.js';
 import { startWanLinks } from './latency-proxy.mjs';
 import { startMachines, wanEntry } from './machines.mjs';
 
-const token = 'gravity-secret';
 const REGION_LATENCY = Number(process.env.REGION_LATENCY ?? 75);
 
-const { stop } = await startMachines({ token });
+const { stop } = await startMachines();
 // Both paths into the data region cross the WAN — the difference is HOW OFTEN.
 let wan;
 try {
@@ -19,7 +18,6 @@ try {
 }
 
 const machines = createMachines({
-  token,
   remotes: {
     db_machine: wanEntry('db_machine'),
     analytics_machine: wanEntry('analytics_machine'),

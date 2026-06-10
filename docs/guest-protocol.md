@@ -9,31 +9,13 @@ manifest-first contract (`mf-manifest.json` analog), semver version
 negotiation (`requiredVersion` analog), and type distribution (DTS analog via
 `machinen-bindgen`).
 
-## Authentication
-
-If the machine was deployed with a token (`MACHINEN_TOKEN` env var by
-convention), every request except `/mf/health` must carry
-`Authorization: Bearer <token>`. Unauthenticated requests get `401`. Guests
-must bind loopback by default; only deliberate deployment exposes them
-further. Guests must compare tokens in constant time: hash both sides and
-compare digests (Node reference guest: `timingSafeEqual` over SHA-256; Java:
-`MessageDigest.isEqual` over SHA-256; Python: `hmac.compare_digest` over
-SHA-256).
-
-On the host side the token travels out-of-band: `parseMachineEntry` strips
-`?token=` into `spec.auth` so cache keys, hook payloads, and error messages
-never carry credentials. Hosts surface a guest's `401` as `MachineAuthError`
-— never retried and never treated as a machine crash.
-
-Security note for whole-VM snapshots: `machinenDriver()` bundles are
-credential-bearing (rootdisk + RAM can include launcher tokens and process
-memory) — treat them like secrets. Its amd64 reseed workaround performs a
-real reseed (the shim feeds the host seed to the guest CSPRNG on restore),
-so VMs restored from one bundle do not share RNG/UUID/key state.
+The protocol has no authentication: machines serve every endpoint
+unauthenticated. Guests must bind loopback by default; only deliberate
+deployment exposes them further.
 
 ## `GET /mf/health`
 
-Liveness probe — no auth, no side effects. Used by drivers for boot-waiting
+Liveness probe — no side effects. Used by drivers for boot-waiting
 and by orchestrators (k8s probes, load balancers).
 
 ```json
@@ -100,8 +82,7 @@ artifact on the fly. Machines without the artifact answer 404 and stay fully
 supported: consumers' bindgen (`machinen-bindgen`, `fetchBindingsSource`)
 falls back to rendering bindings from the manifest, which carries complete
 signatures. Either way the artifact is downloaded from the deployed
-machine's URL — never read from its source tree. Auth matches the manifest:
-the bearer token is required when one is configured.
+machine's URL — never read from its source tree.
 
 ## `GET /mf/state` and `POST /mf/state` (optional capability)
 
@@ -182,8 +163,7 @@ breaker, crash hooks, and optional automatic restart.
 A 4xx status is a deliberate answer from a live guest, not a transport
 failure. Hosts must not retry, restart, or crash-account it:
 
-- `401` → `MachineAuthError` (bad/missing bearer token).
-- Other 4xx (e.g. `413` payload too large) → `MachineRequestError` carrying
+- 4xx (e.g. `413` payload too large) → `MachineRequestError` carrying
   the status.
 - Only 5xx and network-level errors (connection refused/reset, timeouts) are
   transport failures and flow through the retry/breaker/restart policy.
@@ -226,7 +206,7 @@ scope:
 
 - Bind `127.0.0.1` unless deployment explicitly exposes the machine.
 - Shut down gracefully on SIGTERM (stop accepting, drain, exit).
-- Keep `/mf/health` cheap and auth-free.
+- Keep `/mf/health` cheap.
 
 ## Conformance
 

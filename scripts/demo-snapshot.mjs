@@ -8,7 +8,6 @@ import { createMachines } from '../packages/runtime-plugin/dist/client.js';
 import { processDriver } from '../packages/runtime-plugin/dist/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const token = 'snap-secret';
 
 const images = {
   compute_machine: path.join(ROOT, 'apps/remote/dist/index.js'),
@@ -20,7 +19,7 @@ console.log('=== Scenario 1: boot once (cold boot from images) ===');
 const hostA = createMachines({
   driver: processDriver({ snapshotDir: path.join(ROOT, '.machinen/snapshots') }),
   remotes: Object.fromEntries(
-    Object.entries(images).map(([name, image]) => [name, `machinen://${image}?token=${token}`]),
+    Object.entries(images).map(([name, image]) => [name, `machinen://${image}`]),
   ),
 });
 
@@ -43,7 +42,7 @@ const hostB = createMachines({
   remotes: Object.fromEntries(
     Object.entries(snapshots).map(([name, snap]) => [
       name,
-      `machinen://${snap.snapFile}?token=${token}`,
+      `machinen://${snap.snapFile}`,
     ]),
   ),
 });
