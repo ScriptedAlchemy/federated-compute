@@ -26,6 +26,69 @@
   }
   header h1 .accent { color: var(--db); text-shadow: 0 0 18px rgba(88, 166, 255, .5); }
 
+  /* Page tabs: the two halves of the demo. */
+  header nav { display: flex; gap: 8px; }
+  header nav a.tab-active {
+    color: var(--ink); border-color: var(--panel-edge-2);
+    background: rgba(255, 255, 255, .03);
+  }
+  header nav a .tno { color: var(--ink-faint); margin-right: 6px; }
+
+  /* Actor chips: who is acting at each hop. */
+  .actor {
+    display: inline-flex; align-items: center;
+    font-family: var(--display); font-size: 9px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 6px; white-space: nowrap;
+  }
+  .actor.browser { color: var(--ink-dim); background: rgba(116, 131, 154, .12); border: 1px solid rgba(116, 131, 154, .25); }
+  .actor.host { color: var(--local); background: rgba(63, 185, 80, .1); border: 1px solid rgba(63, 185, 80, .3); }
+  .actor.machine { color: var(--db); background: rgba(88, 166, 255, .1); border: 1px solid rgba(88, 166, 255, .3); }
+
+  /* Wire trace: what actually crossed each boundary. */
+  details.wiretrace {
+    margin-top: 12px;
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well);
+  }
+  details.wiretrace summary {
+    cursor: pointer; list-style: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim);
+    user-select: none;
+  }
+  details.wiretrace summary::before { content: '▸'; color: var(--ink-faint); transition: transform .15s; }
+  details.wiretrace[open] summary::before { transform: rotate(90deg); }
+  details.wiretrace summary .wcount { margin-left: auto; color: var(--ink-faint); letter-spacing: 0; text-transform: none; }
+  .wirebody { padding: 4px 12px 10px; border-top: 1px dashed var(--panel-edge); }
+  .whop {
+    display: grid; grid-template-columns: 118px 1fr; gap: 10px;
+    padding: 5px 0; font-size: 10.5px; align-items: baseline;
+  }
+  .whop + .whop { border-top: 1px solid #10161e; }
+  .whop .wchain { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .whop .wdetail { color: var(--ink-dim); word-break: break-all; line-height: 1.6; }
+  .whop .wdetail b { color: var(--ink); font-weight: 500; }
+  .whop .wdetail code { color: var(--db); }
+  .whop .wdetail .wreq { color: #f0883e; }
+  .whop .wdetail .wres { color: var(--local); }
+  .whop .wdetail .wms { font-family: var(--display); font-weight: 700; color: var(--local); }
+  .wskip { color: var(--ink-faint); font-size: 10.5px; padding: 6px 0; text-align: center; }
+
+  /* The code each scenario actually runs, verbatim from the host. */
+  code.card-code {
+    display: block; background: var(--well); border: 1px solid var(--panel-edge);
+    border-left: 2px solid var(--acc, var(--panel-edge-2));
+    border-radius: 5px; padding: 9px 12px;
+    font-size: 10.5px; line-height: 1.65; white-space: pre; overflow-x: auto;
+    color: var(--ink-dim); margin-bottom: 13px;
+  }
+  code.card-code .kw { color: var(--java, #f0883e); }
+  code.card-code .str { color: var(--local); }
+  code.card-code .cm { color: var(--ink-faint); }
+  code.card-code .hl { color: var(--acc); }
+
   main {
     max-width: 1180px; margin: 0 auto;
     padding: 28px 40px 72px;
@@ -256,7 +319,10 @@
 <header class="reveal" style="--d:0">
   <h1>data <span class="accent">gravity</span></h1>
   <span class="sub">move the code to the data, not the data to the code</span>
-  <nav><a href="/">← machine control</a></nav>
+  <nav>
+    <a href="/"><span class="tno">01</span>federation console</a>
+    <a href="/gravity" class="tab-active" aria-current="page"><span class="tno">02</span>data gravity</a>
+  </nav>
 </header>
 
 <main>
@@ -301,25 +367,39 @@
     <section class="panel scenario wan-side reveal" style="--d:2">
       <span class="badge" aria-hidden="true">01</span>
       <h3>Query across regions</h3>
-      <p class="desc">The host runs the N+1 itself through its db bindings. Every query is a WAN round-trip: <span class="acc">1 + N crossings</span>.</p>
+      <p class="desc">The host runs the N+1 itself. Every query is a WAN round-trip: <span class="acc">1 + N crossings</span>.</p>
+      <code class="card-code"><span class="kw">const</span> db = <span class="kw">await</span> host.loadRemote(<span class="str">'db_machine/db'</span>);  <span class="cm">// entry crosses the WAN</span>
+<span class="kw">const</span> users = <span class="kw">await</span> db.listUsers();              <span class="cm">// 1 crossing</span>
+<span class="kw">for</span> (<span class="kw">const</span> u <span class="kw">of</span> users)
+  <span class="kw">await</span> db.ordersFor(u.id);                      <span class="hl">// + N crossings</span></code>
       <div class="xdots" id="remote-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
       <button id="run-remote">Run report (cross-region)</button>
       <div class="resultline">
         <span class="stat" id="remote-ms">—</span>
         <span class="substat" id="remote-detail"></span>
       </div>
+      <details class="wiretrace" id="remote-wire" hidden>
+        <summary>what just happened on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
     </section>
 
     <section class="panel scenario colo reveal" style="--d:3">
       <span class="badge" aria-hidden="true">02</span>
       <h3>The code goes to the data</h3>
-      <p class="desc">One federated call to <span class="acc">analytics_machine.topSpenders()</span> — co-located with the database, it runs the same N+1 locally: <span class="acc">1 crossing</span>.</p>
+      <p class="desc">One federated call to <span class="acc">analytics_machine</span> — co-located with the database, it runs the same N+1 locally: <span class="acc">1 crossing</span>.</p>
+      <code class="card-code"><span class="kw">const</span> analytics = <span class="kw">await</span> host.loadRemote(<span class="str">'analytics_machine/analytics'</span>);
+<span class="kw">await</span> analytics.topSpenders(5);                  <span class="hl">// 1 crossing — the N+1 runs next to the db</span></code>
       <div class="xdots" id="colo-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
       <button id="run-colo">Run report (co-located)</button>
       <div class="resultline">
         <span class="stat" id="colo-ms">—</span>
         <span class="substat" id="colo-detail"></span>
       </div>
+      <details class="wiretrace" id="colo-wire" hidden>
+        <summary>what just happened on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
     </section>
   </div>
 
@@ -356,12 +436,11 @@
       distributed-systems performance bug there is (the N+1 problem, at region scale).
     </p>
     <p class="lede">
-      <b>Federation makes topology a config change.</b> The consumer imports
-      <span style="color: var(--local)">analytics.topSpenders()</span> the same way it imports
-      <span style="color: var(--wan)">db.ordersFor()</span> — typed functions pulled from machine
-      manifests. Moving the computation from "here" to "next to the data" changed an
-      <b>address in an env var</b>, not a line of consumer code. The analytics machine itself is a
-      consumer too: it reaches db_machine through the very same bindings, just resolved to a
+      <b>Federation makes topology a config change.</b> Both scenarios are plain
+      <span style="color: var(--local)">host.loadRemote()</span> calls — same runtime, same plugin,
+      same code shape. Moving the computation from "here" to "next to the data" changed which
+      <b>remote entry</b> the host calls, not how it calls it. The analytics machine itself is a
+      consumer too: it reaches db_machine through its own federation entry, just resolved to a
       local address. Machines federating machines.
     </p>
     <p class="lede">
@@ -427,6 +506,56 @@ function setFlow(kind) {
   if (kind) link.classList.add('busy', kind);
 }
 
+/* ---------- wire traces: render the host-captured hook events ---------- */
+const chainHtml = (...actors) => actors
+  .map((a) => `<span class="actor ${a[0]}">${a[1]}</span>`)
+  .join('<span style="color:var(--ink-faint)">→</span>');
+
+function wireHopHtml(e) {
+  if (e.type === 'attach') {
+    return `<div class="whop">
+      <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
+      <span class="wdetail"><b>attach</b> — resolved entry <code>${esc(e.entry)}</code>,
+        fetched <code>GET ${esc(e.url ?? '')}/mf-manifest.json</code>, negotiated version
+        <b>${esc(e.version ?? '?')}</b>${e.requires ? ` against required <b>${esc(e.requires)}</b>` : ''}</span>
+    </div>`;
+  }
+  if (e.type === 'call') {
+    return `<div class="whop">
+      <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
+      <span class="wdetail"><b>rpc</b> <code>POST ${esc(e.url ?? '')}/mf/call</code>
+        <span class="wreq">${esc(`{"module":"${e.module}","fn":"${e.fn}","args":${e.args}}`)}</span>
+        → <span class="wres">${esc(e.result)}</span> <span class="wms">${e.ms.toFixed(1)}ms</span></span>
+    </div>`;
+  }
+  return '';
+}
+
+/** Fill a scenario's collapsible trace; cap rendered RPCs so 26 hops stay readable. */
+function renderWire(detailsId, apiLabel, wire, capNote) {
+  const details = $(detailsId);
+  details.hidden = false;
+  const body = details.querySelector('.wirebody');
+  const browserHop = `<div class="whop">
+    <span class="wchain">${chainHtml(['browser', 'browser'], ['host', 'host'])}</span>
+    <span class="wdetail"><b>http</b> <code>${esc(apiLabel)}</code> — the browser never runs
+      federation; loadRemote executes inside the host process</span>
+  </div>`;
+  const events = wire ?? [];
+  const CAP = 6;
+  let hops;
+  if (events.length > CAP) {
+    const skipped = events.length - CAP + 1;
+    hops = events.slice(0, CAP - 1).map(wireHopHtml).join('') +
+      `<div class="wskip">… ${skipped} more identical RPCs${capNote ? ` — ${esc(capNote)}` : ''} …</div>` +
+      wireHopHtml(events[events.length - 1]);
+  } else {
+    hops = events.map(wireHopHtml).join('');
+  }
+  body.innerHTML = browserHop + (hops || '<div class="wskip">no machine traffic — containers were already cached</div>');
+  details.querySelector('.wcount').textContent = `${1 + events.length} hops`;
+}
+
 function renderDots(el, count, cap = 14) {
   // API-derived: force a number so the interpolations below cannot carry markup.
   const n = Number(count) || 0;
@@ -475,6 +604,7 @@ $('run-remote').onclick = async () => {
     countUp($('remote-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
     $('remote-detail').textContent = `${r.dbQueries} queries · ${r.wanCalls} WAN crossings`;
     renderDots($('remote-dots'), r.wanCalls);
+    renderWire('remote-wire', 'POST /api/report/remote', r.wire, 'every one of them crossed the WAN');
     renderSpenders(r.spenders); renderCompare();
   } finally {
     setFlow(null);
@@ -496,6 +626,7 @@ $('run-colo').onclick = async () => {
     countUp($('colo-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
     $('colo-detail').textContent = `${r.dbQueries} queries inside the data region (${r.machineMs.toFixed(0)}ms) · ${r.wanCalls} WAN crossing`;
     renderDots($('colo-dots'), r.wanCalls);
+    renderWire('colo-wire', 'POST /api/report/colocated', r.wire, '');
     renderSpenders(r.spenders); renderCompare();
   } finally {
     setFlow(null);
