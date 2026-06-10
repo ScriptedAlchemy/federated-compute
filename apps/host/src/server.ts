@@ -5,11 +5,22 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getMachines } from '@federated-compute/machinen-plugin/client';
-import { math, text, counter as nodeCounter } from './generated/compute_machine';
-import { strings, counter as javaCounter } from './generated/java_machine';
-import { stats, data, counter as pyCounter } from './generated/python_machine';
-import { db } from './generated/db_machine';
-import { analytics } from './generated/analytics_machine';
+import {
+  math,
+  text,
+  strings,
+  stats,
+  data,
+  db,
+  analytics,
+  compute_machine,
+  java_machine,
+  python_machine,
+} from './generated';
+
+const nodeCounter = compute_machine.counter;
+const javaCounter = java_machine.counter;
+const pyCounter = python_machine.counter;
 
 const PORT = Number(process.env.HOST_PORT ?? 3800);
 // All simulated WAN links into the data region (db + analytics paths).

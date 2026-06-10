@@ -14,7 +14,7 @@ const token = process.env.MACHINEN_TOKEN ?? 'bindgen-secret';
 const { stop } = await startMachines({ token });
 try {
   const code = await new Promise((resolve) => {
-    const child = spawn('pnpm', ['--filter', 'host', 'bindgen'], {
+    const child = spawn('pnpm', ['--filter', 'host', 'bindgen', ...process.argv.slice(2)], {
       cwd: ROOT,
       env: {
         ...process.env,
