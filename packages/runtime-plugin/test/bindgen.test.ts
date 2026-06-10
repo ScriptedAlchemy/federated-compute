@@ -194,6 +194,17 @@ describe('barrel generation', () => {
     expect(src).not.toMatch(/export \{[^}]*\bcounter\b[^}]*\}/);
   });
 
+  test('flat re-exports never collide with machine namespace exports', () => {
+    const src = generateBarrel([
+      { name: 'math', exportNames: ['solve'] },
+      { name: 'compute_machine', exportNames: ['math'] },
+    ]);
+    expect(src).toContain("export * as math from './math';");
+    expect(src).toContain("export { solve } from './math';");
+    // 'math' flat re-export would duplicate the namespace export.
+    expect(src).not.toMatch(/export \{[^}]*\bmath\b[^}]*\}/);
+  });
+
   test('is deterministic regardless of input order', () => {
     const a = generateBarrel([
       { name: 'b_machine', exportNames: ['beta'] },

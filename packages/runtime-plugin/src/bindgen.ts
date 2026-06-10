@@ -29,13 +29,17 @@ function renderFunction(name: string, sig: FunctionSignature): string {
   return `  ${name}(${params}): ${returns};`;
 }
 
-function identifier(exposePath: string): string {
-  const id = stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
-  // Foreign manifests may not have gone through guest-side validation, so a
-  // reserved word ('./delete' -> delete) or leading digit ('./3d' -> 3d)
-  // must still emit a legal export name.
+// Foreign manifests may not have gone through guest-side validation, so a
+// reserved word ('delete') or leading digit ('3d') must still emit a legal
+// export name.
+function legalIdentifier(raw: string): string {
+  const id = raw.replace(/[^a-zA-Z0-9_$]/g, '_');
   if (/^\d/.test(id)) return `_${id}`;
   return isJsReservedWord(id) ? `${id}_` : id;
+}
+
+function identifier(exposePath: string): string {
+  return legalIdentifier(stripExposePrefix(exposePath));
 }
 
 /** Sorted, legal binding export names for a manifest's exposes (matches generateBindings). */
@@ -47,9 +51,7 @@ export function bindingExportNames(manifest: MachineExposeManifest): string[] {
 
 /** Machine names from foreign manifests must still be legal `export * as` identifiers. */
 function namespaceIdentifier(machineName: string): string {
-  const id = machineName.replace(/[^a-zA-Z0-9_$]/g, '_');
-  if (/^\d/.test(id)) return `_${id}`;
-  return isJsReservedWord(id) ? `${id}_` : id;
+  return legalIdentifier(machineName);
 }
 
 /**
@@ -58,6 +60,7 @@ function namespaceIdentifier(machineName: string): string {
  */
 export function generateBarrel(machines: { name: string; exportNames: string[] }[]): string {
   const sorted = [...machines].sort((a, b) => a.name.localeCompare(b.name));
+  const namespaceNames = new Set(sorted.map((machine) => namespaceIdentifier(machine.name)));
   const counts = new Map<string, number>();
   for (const machine of sorted) {
     for (const exportName of machine.exportNames) {
@@ -72,7 +75,11 @@ export function generateBarrel(machines: { name: string; exportNames: string[] }
     lines.push(`export * as ${namespaceIdentifier(machine.name)} from './${machine.name}';`);
   }
   for (const machine of sorted) {
-    const unique = machine.exportNames.filter((exportName) => counts.get(exportName) === 1);
+    // A flat re-export must be unique across machines and must not shadow a
+    // namespace export — both would be duplicate exports of the same name.
+    const unique = machine.exportNames.filter(
+      (exportName) => counts.get(exportName) === 1 && !namespaceNames.has(exportName),
+    );
     if (unique.length) lines.push(`export { ${unique.join(', ')} } from './${machine.name}';`);
   }
   lines.push('');
