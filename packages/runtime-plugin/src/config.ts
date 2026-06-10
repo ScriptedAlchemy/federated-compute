@@ -56,6 +56,11 @@ export function parseMachinenConfig(
   }
   const machines: Record<string, MachinenConfigMachine> = {};
   for (const [name, value] of Object.entries(json.machines)) {
+    // The barrel is written as <outDir>/index.ts; a machine named "index"
+    // would be overwritten by it and make the barrel import itself.
+    if (name === 'index') {
+      fail(file, 'machines.index: "index" is reserved for the generated barrel');
+    }
     if (!isPlainObject(value)) fail(file, `machines.${name} must be an object`);
     const { url, version } = value;
     if (typeof url !== 'string' || url.length === 0) {

@@ -79,6 +79,15 @@ describe('loadMachinenConfig', () => {
     expect(() => loadMachinenConfig(root)).toThrow(/machinen\.config\.json.*invalid JSON/);
   });
 
+  test('rejects a machine named "index" (reserved for the generated barrel)', () => {
+    const root = tmpdir();
+    writeFileSync(
+      path.join(root, 'machinen.config.json'),
+      JSON.stringify({ machines: { index: { url: 'machinen+http://127.0.0.1:3801' } } }),
+    );
+    expect(() => loadMachinenConfig(root)).toThrow(/machines\.index.*reserved for the generated barrel/);
+  });
+
   test('rejects a missing machines object', () => {
     const root = tmpdir();
     writeFileSync(path.join(root, 'machinen.config.json'), '{}');
