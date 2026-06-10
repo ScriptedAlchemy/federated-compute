@@ -75,6 +75,7 @@ jobs:
             echo '```'
             echo "arch:     $(uname -m)"
             echo "kernel:   $(uname -r)"
+            echo "cpu:      $(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -1)"
             echo "cpus:     $(nproc)"
             if [ -e /dev/kvm ]; then
               echo "kvm:      $(ls -l /dev/kvm)"
@@ -154,6 +155,21 @@ jobs:
             exit 0
           fi
           echo "machinen assets:" && cat machinen-install.json
+
+          # Machinen's own documented smoke test. If machinen cannot boot its
+          # own base image on this hardware (e.g. guest kernel stalls on the
+          # runner's AMD EPYC hosts), that is a machinen-availability problem,
+          # not a failure of our protocol — report it honestly and skip.
+          echo "running machinen smoke boot..."
+          if ! timeout 180 npx machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
+              > smoke.log 2>&1 || ! grep -q MACHINEN_SMOKE_OK smoke.log; then
+            tail -30 smoke.log
+            reason="machinen's own smoke test (npx machinen boot -- /bin/sh) cannot boot a guest on this runner's hardware ($(uname -m))"
+            echo "machinen_available=false" >> "$GITHUB_OUTPUT"
+            echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "smoke boot OK"
 
           echo "machinen_available=true" >> "$GITHUB_OUTPUT"
 
