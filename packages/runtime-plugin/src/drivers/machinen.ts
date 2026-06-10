@@ -37,12 +37,15 @@ import { getFreePort } from './process.js';
 
 const DEFAULT_GUEST_PORT = 3801;
 const DEFAULT_MEMORY_MIB = 2048;
+const DEFAULT_BOOT_TIMEOUT_MS = 120_000;
 const GUEST_DIR = '/opt/federated';
 const GUEST_BUNDLE = `${GUEST_DIR}/guest.mjs`;
 const GUEST_LAUNCHER = `${GUEST_DIR}/run.sh`;
+const GUEST_LOG = '/var/log/federated-guest.log';
 const RESEED_BINARY = '/sbin/machinen-vmstate-reseed';
 /** Written into every snapshot bundle so a restore knows the guest port. */
 const SNAP_MARKER = 'federated-machine.json';
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // Minimal structural types for the @machinen/runtime surface this driver
 // uses. Locally declared (not `import type` from the package) so the
@@ -73,6 +76,7 @@ interface MachinenVm {
 interface MachinenRuntime {
   boot(opts: Record<string, unknown>): Promise<MachinenVm>;
   restore(opts: Record<string, unknown>): Promise<MachinenVm>;
+  kill?(name: string): Promise<void> | void;
   resolveBaseRootfs(explicit?: string, cwd?: string): string;
   resolveBaseKernel(explicit?: string, cwd?: string): string;
   resolveBaseDtb(explicit?: string, cwd?: string): string | undefined;
@@ -122,6 +126,8 @@ export interface MachinenDriverOptions {
   env?: Record<string, string>;
   /** Deadline for the guest to answer /mf/health after VM boot/restore. Default 60s. */
   guestReadyTimeoutMs?: number;
+  /** Deadline for the VMM boot/restore call itself. Default 120s. */
+  bootTimeoutMs?: number;
   /** Startup progress lines (one per phase). Default: process.stderr. */
   log?: (line: string) => void;
 }
@@ -134,7 +140,7 @@ let runtimePromise: Promise<MachinenRuntime> | undefined;
  * able to install and run this package without it. It is declared as an
  * optional peerDependency — installing it is the explicit opt-in to VMs.
  */
-async function loadRuntime(): Promise<MachinenRuntime> {
+export async function loadRuntime(): Promise<MachinenRuntime> {
   runtimePromise ??= import('@machinen/runtime').then(
     (mod) => mod as unknown as MachinenRuntime,
     (error: unknown) => {
@@ -155,14 +161,102 @@ export async function isMachinenSnapshotDir(candidate: string): Promise<boolean>
   try {
     const info = await stat(candidate);
     if (!info.isDirectory()) return false;
-    return existsSync(path.join(candidate, 'meta.json'));
+    return existsSync(path.join(candidate, 'meta.json')) && existsSync(path.join(candidate, 'state.vmstate'));
   } catch {
     return false;
   }
 }
 
-function shellSingleQuote(value: string): string {
+export function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function guestPortFor(spec: MachineSpec): number {
+  return Number(spec.params.get('port')) || DEFAULT_GUEST_PORT;
+}
+
+export function resolveGuestPort(spec: MachineSpec, marker?: Pick<SnapMarker, 'guestPort'>): number {
+  return marker?.guestPort ?? guestPortFor(spec);
+}
+
+function assertValidEnvKey(key: string): void {
+  if (!ENV_KEY_RE.test(key)) {
+    throw new Error(
+      `[machinen-plugin] invalid env key "${key}": keys must match ${ENV_KEY_RE.source}`,
+    );
+  }
+}
+
+async function checkedExec(
+  vm: MachinenVm,
+  cmd: string,
+  what: string,
+  opts?: { execTimeoutMs?: number },
+): Promise<MachinenExecResult> {
+  const result = await vm.exec(cmd, opts);
+  if (result.exitCode !== 0) {
+    const details = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join('\n');
+    throw new Error(
+      `[machinen-plugin] ${what} failed with exit code ${result.exitCode}` +
+        (details ? `:\n${details}` : ''),
+    );
+  }
+  return result;
+}
+
+class GuestHealthTimeoutError extends Error {}
+
+async function withGuestLogOnHealthTimeout(vm: MachinenVm, error: unknown): Promise<Error> {
+  if (!(error instanceof GuestHealthTimeoutError)) return error as Error;
+  try {
+    const result = await vm.exec(`tail -50 ${GUEST_LOG}`, { execTimeoutMs: 5_000 });
+    const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n');
+    const suffix = output || `(no output; tail exited ${result.exitCode})`;
+    return new Error(`${error.message}\nGuest log tail (${GUEST_LOG}):\n${suffix}`);
+  } catch (tailError) {
+    return new Error(
+      `${error.message}\nGuest log tail (${GUEST_LOG}) unavailable: ${(tailError as Error).message}`,
+    );
+  }
+}
+
+async function killByNameIfSupported(runtime: MachinenRuntime, name: string): Promise<void> {
+  if (typeof runtime.kill !== 'function') return;
+  await runtime.kill(name);
+}
+
+async function withVmStartTimeout(
+  start: Promise<MachinenVm>,
+  runtime: MachinenRuntime,
+  name: string,
+  what: string,
+  timeoutMs: number,
+): Promise<MachinenVm> {
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  const guardedStart = start.then(
+    (vm) => {
+      if (timedOut) void vm.kill().catch(() => {});
+      return vm;
+    },
+    (error: unknown) => {
+      if (!timedOut) throw error;
+      return undefined;
+    },
+  );
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      void killByNameIfSupported(runtime, name).catch(() => {});
+      reject(new Error(`[machinen-plugin] ${what} "${name}" did not complete within ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return (await Promise.race([guardedStart, timeout])) as MachinenVm;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 let bootCounter = 0;
@@ -183,16 +277,25 @@ async function waitForGuest(
     if (await health()) return Date.now() - started;
     await sleep(250);
   }
-  throw new Error(`[machinen-plugin] ${what}: guest did not answer /mf/health within ${timeoutMs}ms`);
+  throw new GuestHealthTimeoutError(
+    `[machinen-plugin] ${what}: guest did not answer /mf/health within ${timeoutMs}ms`,
+  );
 }
 
 export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver {
   const snapshotDir = opts.snapshotDir ?? path.join('.machinen', 'vm-snapshots');
   const guestReadyTimeoutMs = opts.guestReadyTimeoutMs ?? 60_000;
+  const bootTimeoutMs = opts.bootTimeoutMs ?? Math.max(DEFAULT_BOOT_TIMEOUT_MS, guestReadyTimeoutMs);
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  for (const key of Object.keys(opts.env ?? {})) assertValidEnvKey(key);
 
-  function buildHandle(spec: MachineSpec, vm: MachinenVm, hostPort: number, image: string): MachineHandle {
-    const guestPort = guestPortFor(spec);
+  function buildHandle(
+    spec: MachineSpec,
+    vm: MachinenVm,
+    hostPort: number,
+    guestPort: number,
+    image: string,
+  ): MachineHandle {
     const handle = httpMachineHandle(`http://127.0.0.1:${hostPort}`, { token: spec.auth?.token });
 
     const snapshot = async (): Promise<MachinenSnapshotDescriptor> => {
@@ -200,8 +303,9 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       // debian rootfs; the restored guest runs it and dies with
       // BOOT_VMSTATE_RESEED_FAILED ("Exec format error"). Stub it before
       // every snapshot so the state we freeze contains a working no-op.
+      // TODO(reseed): reconcile with CRIU-engine approach in machinen-e2e.
       await vm.writeFile(RESEED_BINARY, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      await vm.exec(`chmod +x ${RESEED_BINARY}`);
+      await checkedExec(vm, `chmod +x ${RESEED_BINARY}`, 'prepare vmstate reseed stub');
 
       await mkdir(snapshotDir, { recursive: true });
       const outDir = path.resolve(snapshotDir, `${spec.remoteName}-${Date.now().toString(36)}`);
@@ -237,10 +341,6 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     };
   }
 
-  function guestPortFor(spec: MachineSpec): number {
-    return Number(spec.params.get('port')) || DEFAULT_GUEST_PORT;
-  }
-
   async function bootFresh(spec: MachineSpec, bundlePath: string): Promise<MachineHandle> {
     const runtime = await loadRuntime();
     const bundle = await readFile(bundlePath);
@@ -252,28 +352,37 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
 
     const t0 = Date.now();
     log(`[machinen] ${spec.remoteName}: booting VM "${name}" (${memory} MiB, 127.0.0.1:${hostPort} -> guest:${guestPort})`);
-    const vm = await runtime.boot({
-      image,
-      ...baseBootAssets(runtime),
-      // The supervised cmd just keeps PID 1's workload alive; the actual
-      // guest server is started via exec below so the same base image works
-      // before node is installed. Whole-VM snapshots capture it regardless.
-      cmd: ['/bin/sh', '-c', 'exec sleep infinity'],
+    const vm = await withVmStartTimeout(
+      runtime.boot({
+        image,
+        ...baseBootAssets(runtime),
+        // The supervised cmd just keeps PID 1's workload alive; the actual
+        // guest server is started via exec below so the same base image works
+        // before node is installed. Whole-VM snapshots capture it regardless.
+        cmd: ['/bin/sh', '-c', 'exec sleep infinity'],
+        name,
+        // Explicit memory always (amd64 KVM APIC-page collision in auto-sizing).
+        memory,
+        portForward: [{ hostPort, guestPort }],
+        timeoutMs: bootTimeoutMs,
+      }),
+      runtime,
       name,
-      // Explicit memory always (amd64 KVM APIC-page collision in auto-sizing).
-      memory,
-      portForward: [{ hostPort, guestPort }],
-      timeoutMs: null,
-    });
+      'boot',
+      bootTimeoutMs,
+    );
 
     try {
       const booted = Date.now();
       if (!opts.image) {
         // provision() stalls on amd64 0.4.0 (vsock exec inside provision
         // times out at 300s); boot-then-exec does the same install in ~5s.
-        await vm.exec('apt-get update && apt-get install -y --no-install-recommends nodejs ca-certificates', {
-          execTimeoutMs: 240_000,
-        });
+        await checkedExec(
+          vm,
+          'apt-get update && apt-get install -y --no-install-recommends nodejs ca-certificates',
+          'install node in guest',
+          { execTimeoutMs: 240_000 },
+        );
         log(`[machinen] ${spec.remoteName}: node installed in guest (${Date.now() - booted}ms)`);
       }
 
@@ -284,16 +393,21 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
         ...(spec.auth?.token ? { MACHINEN_TOKEN: spec.auth.token } : {}),
         ...(opts.env ?? {}),
       };
+      for (const key of Object.keys(env)) assertValidEnvKey(key);
       const launcher = [
         '#!/bin/sh',
         ...Object.entries(env).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}`),
         `exec node ${GUEST_BUNDLE} >>/var/log/federated-guest.log 2>&1`,
         '',
       ].join('\n');
-      await vm.writeFile(GUEST_LAUNCHER, launcher, { mode: 0o755 });
-      await vm.exec(`chmod +x ${GUEST_LAUNCHER} && nohup ${GUEST_LAUNCHER} >/dev/null 2>&1 & sleep 0.2; true`);
+      await vm.writeFile(GUEST_LAUNCHER, launcher, { mode: 0o600 });
+      await checkedExec(
+        vm,
+        `nohup /bin/sh ${GUEST_LAUNCHER} >/dev/null 2>&1 & sleep 0.2; true`,
+        'start guest launcher',
+      );
 
-      const handle = buildHandle(spec, vm, hostPort, image);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, image);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `boot of "${spec.remoteName}"`,
@@ -302,8 +416,9 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       log(`[machinen] ${spec.remoteName}: guest healthy ${readyMs}ms after start (${Date.now() - t0}ms total)`);
       return handle;
     } catch (error) {
+      const enriched = await withGuestLogOnHealthTimeout(vm, error);
       await vm.kill().catch(() => {});
-      throw error;
+      throw enriched;
     }
   }
 
@@ -315,7 +430,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     } catch {
       // Bundle produced outside this driver — fall back to entry params.
     }
-    const guestPort = marker?.guestPort ?? guestPortFor(spec);
+    const guestPort = resolveGuestPort(spec, marker);
     const hostPort = await getFreePort();
     const name = vmName(spec.remoteName);
 
@@ -323,16 +438,22 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     log(`[machinen] ${spec.remoteName}: restoring VM "${name}" from ${snapDir} (127.0.0.1:${hostPort} -> guest:${guestPort})`);
     // No explicit memory here: the vmstate bundle dictates the guest RAM
     // topology and a mismatched override is refused at restore.
-    const vm = await runtime.restore({
-      snapDir,
-      ...baseBootAssets(runtime),
+    const vm = await withVmStartTimeout(
+      runtime.restore({
+        snapDir,
+        ...baseBootAssets(runtime),
+        name,
+        portForward: [{ hostPort, guestPort }],
+        timeoutMs: bootTimeoutMs,
+      }),
+      runtime,
       name,
-      portForward: [{ hostPort, guestPort }],
-      timeoutMs: null,
-    });
+      'restore',
+      bootTimeoutMs,
+    );
 
     try {
-      const handle = buildHandle(spec, vm, hostPort, marker?.image ?? snapDir);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, marker?.image ?? snapDir);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `restore of "${spec.remoteName}"`,
@@ -341,8 +462,9 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       log(`[machinen] ${spec.remoteName}: restored guest healthy in ${Date.now() - t0}ms (poll ${readyMs}ms)`);
       return handle;
     } catch (error) {
+      const enriched = await withGuestLogOnHealthTimeout(vm, error);
       await vm.kill().catch(() => {});
-      throw error;
+      throw enriched;
     }
   }
 

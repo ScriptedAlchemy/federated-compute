@@ -287,9 +287,14 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
         if (req.method === 'POST') {
           const body = await readJsonBody(req, res);
           if (!body) return;
-          guest.state.rehydrate(body.state);
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true }));
+          try {
+            guest.state.rehydrate(body.state);
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+          } catch (error) {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(errorBody(error, exposeStacks)));
+          }
           return;
         }
       }

@@ -352,6 +352,33 @@ describe('guest state capture (process-driver snapshots)', () => {
     const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
     await expect(handle.getState!()).rejects.toThrow(/state/i);
   });
+
+  test('rehydrate failures answer 200 with the guest error envelope', async () => {
+    const guest = createGuestRuntime({
+      name: 'broken_state_guest',
+      exposes: { './counter': { current: () => 0 } },
+      state: {
+        dehydrate: () => ({}),
+        rehydrate: () => {
+          throw new TypeError('corrupt snapshot');
+        },
+      },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/mf/state`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: { counter: 'bad' } }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { message: 'corrupt snapshot', type: 'TypeError' },
+    });
+  });
 });
 
 describe('guest runtime naming validation', () => {

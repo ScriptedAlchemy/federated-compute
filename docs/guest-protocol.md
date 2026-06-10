@@ -25,6 +25,11 @@ On the host side the token travels out-of-band: `parseMachineEntry` strips
 never carry credentials. Hosts surface a guest's `401` as `MachineAuthError`
 — never retried and never treated as a machine crash.
 
+Security note for whole-VM snapshots: `machinenDriver()` bundles are
+credential-bearing (rootdisk + RAM can include launcher tokens and process
+memory). Its current amd64 reseed-stub workaround also freezes guest entropy
+across restores, so VMs restored from one bundle can share RNG/UUID/key state.
+
 ## `GET /mf/health`
 
 Liveness probe — no auth, no side effects. Used by drivers for boot-waiting
