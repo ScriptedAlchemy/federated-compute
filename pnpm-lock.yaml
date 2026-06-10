@@ -33,6 +33,10 @@ importers:
       '@federated-compute/machinen-plugin':
         specifier: workspace:*
         version: link:../../packages/runtime-plugin
+    devDependencies:
+      '@rsbuild/core':
+        specifier: ^2.0.9
+        version: 2.0.11
 
   apps/machine-db:
     dependencies:

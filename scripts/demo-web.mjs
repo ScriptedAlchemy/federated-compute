@@ -227,9 +227,10 @@ async function runSmoke(base) {
   console.log('[smoke] lifecycle pull b -> image cache HIT');
 
   const bumpA = await postJson(base, '/api/lifecycle/counter', { target: 'a' });
-  expect(bumpA.value === 5, `clone a increment: ${JSON.stringify(bumpA.value)}`);
+  expect(bumpA.targetValue === 5 && bumpA.value === 4,
+    `clone a increment must not touch the origin: ${JSON.stringify({ target: bumpA.targetValue, origin: bumpA.value })}`);
   const bumpOrigin = await postJson(base, '/api/lifecycle/counter', { target: 'origin' });
-  expect(bumpOrigin.value === 5 && bumpOrigin.clones.b.value === 4,
+  expect(bumpOrigin.value === 5 && bumpOrigin.clones.a.value === 5 && bumpOrigin.clones.b.value === 4,
     'origin/clone counters should diverge independently');
   console.log('[smoke] lifecycle counters diverge: origin 5, clone a 5, clone b 4');
 

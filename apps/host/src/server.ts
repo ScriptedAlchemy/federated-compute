@@ -685,7 +685,15 @@ async function handleLifecycleCounter(req: http.IncomingMessage, res: http.Serve
   const value = await counter.increment();
   if (target === 'origin') lifecycle.value = value;
   else lifecycle.clones[target]!.value = value;
-  json(res, 200, { ...lifecycleBody(), target, value, loadRemote: `${remote}/counter`, wire: wire() });
+  // `targetValue`, not `value`: lifecycleBody() already carries the origin's
+  // counter under `value` and must not be shadowed.
+  json(res, 200, {
+    ...lifecycleBody(),
+    target,
+    targetValue: value,
+    loadRemote: `${remote}/counter`,
+    wire: wire(),
+  });
 }
 // ----------------------------------------------------------------------------
 
