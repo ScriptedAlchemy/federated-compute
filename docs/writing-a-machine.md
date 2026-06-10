@@ -78,7 +78,7 @@ the Java reference does each step:
    comparing).
 3. Dispatch `POST /mf/call` — unary JSON `{ ok, result }` / error envelopes
    with the protocol's wording (`GuestServer.handleCall` →
-   `Exposes.dispatch`); NDJSON streaming is only needed if you expose
+   `Exposes.call`); NDJSON streaming is only needed if you expose
    `stream` functions (the Java and Python references expose none).
 4. Optionally implement `GET/POST /mf/state` for app-state snapshots
    (`state/MachineState.java`).
