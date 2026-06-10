@@ -1,4 +1,5 @@
 import { createInstance } from '@module-federation/runtime';
+import { loadMachinenConfig, type MachinenConfig } from './config.js';
 import { httpAttachDriver } from './drivers/http.js';
 import { machinenPlugin, type MachinenPlugin } from './plugin.js';
 import type { CallPolicy, MachineMetrics } from './policy.js';
@@ -36,6 +37,12 @@ export interface MachinesOptions {
   restartOnCrash?: boolean;
   /** Timeout for boot + manifest fetch. Default 30s; raise for VM drivers that cold-boot. */
   bootTimeoutMs?: number;
+  /**
+   * Where to start searching for machinen.config.json (walks upward).
+   * Default: process.cwd(). The config is the lowest-precedence source of
+   * machine addresses and version pins: options > MACHINEN_REMOTE_* env > config.
+   */
+  configDir?: string;
 }
 
 export interface MachineModuleOptions {
@@ -120,18 +127,34 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   const modules = new Map<string, Promise<AnyModule>>();
   const callables = new Map<string, AnyFn>();
 
+  let configLoaded = false;
+  let machinenConfig: MachinenConfig | undefined;
+  function configFile(): MachinenConfig | undefined {
+    if (!configLoaded) {
+      machinenConfig = loadMachinenConfig(options.configDir);
+      configLoaded = true;
+    }
+    return machinenConfig;
+  }
+
   function resolveEntry(name: string, opts?: MachineModuleOptions): string {
-    const base = options.remotes?.[name] ?? process.env[envKeyFor(name)];
+    const fromConfig = configFile()?.machines[name];
+    const base = options.remotes?.[name] ?? process.env[envKeyFor(name)] ?? fromConfig?.url;
     if (!base) {
+      const searched = configFile()
+        ? `add it to ${configFile()!.path}`
+        : 'add a machinen.config.json (none found from the working directory upward)';
       throw new Error(
-        `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }) or set ${envKeyFor(name)}.`,
+        `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }), ` +
+          `set ${envKeyFor(name)} (e.g. machinen+http://127.0.0.1:3801), or ${searched}.`,
       );
     }
     const spec = parseMachineEntry(name, base);
     const token = options.token ?? process.env.MACHINEN_TOKEN;
     if (token && !spec.auth?.token) spec.auth = { token };
-    // Priority: explicit ?version= on the entry > client options.versions > module pin.
-    const version = options.versions?.[name] ?? opts?.version;
+    // Priority: explicit ?version= on the entry > client options.versions
+    // > module pin > config file pin.
+    const version = options.versions?.[name] ?? opts?.version ?? fromConfig?.version;
     if (version && !spec.params.has('version')) spec.params.set('version', version);
     return formatMachineEntry(spec);
   }
@@ -216,7 +239,8 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     },
 
     async warm(remoteNames) {
-      const names = remoteNames ?? Object.keys(options.remotes ?? {});
+      const names =
+        remoteNames ?? Object.keys(options.remotes ?? configFile()?.machines ?? {});
       await plugin.warm(names.map((name) => ({ name, entry: ensureRegistered(name) })));
     },
 

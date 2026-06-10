@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   configureMachines,
   createMachines,
@@ -8,7 +11,7 @@ import {
   resetMachines,
 } from '../src/client.js';
 import { MachineVersionError } from '../src/errors.js';
-import { createGuestRuntime } from '../src/guest.js';
+import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
 import { inProcessDriver } from '../src/drivers/in-process.js';
 import type { MachineDriver } from '../src/types.js';
 
@@ -186,6 +189,84 @@ describe('client-level version pinning', () => {
 
     await expect(client.machine(name, { version: '^1.0.0' }).math.add(1, 2)).rejects.toThrow(
       MachineVersionError,
+    );
+  });
+});
+
+describe('createMachines + machinen.config.json', () => {
+  const servers: GuestServer[] = [];
+  const configDirs: string[] = [];
+  function writeConfig(contents: object): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'machinen-client-config-'));
+    configDirs.push(dir);
+    writeFileSync(path.join(dir, 'machinen.config.json'), JSON.stringify(contents));
+    return dir;
+  }
+  afterAll(async () => {
+    await Promise.all(servers.map((s) => s.close()));
+    for (const dir of configDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('resolves a machine address from the config file with zero remotes', async () => {
+    const guest = createGuestRuntime({
+      name: 'cfg_machine',
+      version: '1.0.0',
+      exposes: { './math': { add: { handler: (a: number, b: number) => a + b, returns: 'number' } } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const configDir = writeConfig({
+      machines: { cfg_machine: { url: `machinen+http://127.0.0.1:${server.port}` } },
+    });
+
+    const machines = createMachines({ configDir });
+    await expect(machines.machine('cfg_machine').math.add(20, 22)).resolves.toBe(42);
+  });
+
+  test('env var overrides the config file address', async () => {
+    const guest = createGuestRuntime({
+      name: 'env_machine',
+      version: '1.0.0',
+      exposes: { './math': { add: { handler: (a: number, b: number) => a + b, returns: 'number' } } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    // Config points at a dead port; env points at the live guest.
+    const configDir = writeConfig({
+      machines: { env_machine: { url: 'machinen+http://127.0.0.1:9' } },
+    });
+    process.env.MACHINEN_REMOTE_ENV_MACHINE = `machinen+http://127.0.0.1:${server.port}`;
+    try {
+      const machines = createMachines({ configDir });
+      await expect(machines.machine('env_machine').math.add(1, 2)).resolves.toBe(3);
+    } finally {
+      delete process.env.MACHINEN_REMOTE_ENV_MACHINE;
+    }
+  });
+
+  test('config version pin is enforced (attach rejects incompatible machines)', async () => {
+    const guest = createGuestRuntime({
+      name: 'old_machine',
+      version: '1.0.0',
+      exposes: { './math': { add: { handler: (a: number, b: number) => a + b, returns: 'number' } } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const configDir = writeConfig({
+      machines: {
+        old_machine: { url: `machinen+http://127.0.0.1:${server.port}`, version: '^2.0.0' },
+      },
+    });
+
+    const machines = createMachines({ configDir });
+    await expect(machines.machine('old_machine').math.add(1, 1)).rejects.toThrow(/version/i);
+  });
+
+  test('missing-address error mentions options, env key, and the config file', async () => {
+    const configDir = writeConfig({ machines: {} });
+    const machines = createMachines({ configDir });
+    await expect(machines.machine('ghost_machine').math.add(1, 1)).rejects.toThrow(
+      /MACHINEN_REMOTE_GHOST_MACHINE.*machinen\.config\.json/s,
     );
   });
 });
