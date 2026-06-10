@@ -18,11 +18,25 @@ export const PORTS = {
   analytics_machine: 3805,
 };
 
+// Deploy-by-pull infrastructure (web demo): the analytics ORIGIN runs in
+// us-east and publishes its image; the eu-west region agent pulls it through
+// the WAN and boots the clone at PORTS.analytics_machine — so the host's
+// existing WAN entry (3898 -> 3805) routes to the deployed clone unchanged.
+export const ANALYTICS_ORIGIN_PORT = 3806;
+export const REGION_AGENT_PORT = 3810;
+// Page 01 lifecycle origin: the host boots snap_machine at this fixed port so
+// its machinen+pull+ entries are static (`?port=` on the image entry).
+export const LIFECYCLE_PORT = 3811;
+
 // Simulated WAN links into the data region (latency proxies in front of these).
 export const WAN_PORTS = {
   db_machine: 3899,
   analytics_machine: 3898,
 };
+// WAN link: host -> region agent control API (the deploy command crosses once).
+export const WAN_AGENT_PORT = 3897;
+// WAN link: region agent -> analytics origin (the artifact pays WAN latency).
+export const WAN_ORIGIN_PORT = 3896;
 
 /** Machine entry at its real (same-region) address. */
 export function localEntry(name) {
@@ -49,8 +63,13 @@ const COMMANDS = {
   java_machine: ['java', '-jar', path.join(ROOT, 'apps/remote-java/dist/java-machine.jar')],
   python_machine: ['python3', path.join(ROOT, 'apps/remote-python/main.py')],
   db_machine: ['node', path.join(ROOT, 'apps/machine-db/src/index.mjs')],
-  analytics_machine: ['node', path.join(ROOT, 'apps/machine-analytics/src/index.mjs')],
+  analytics_machine: ['node', path.join(ROOT, 'apps/machine-analytics/dist/index.js')],
 };
+
+/** Command line for a machine's guest program (also used for the origin copy). */
+export function commandFor(name) {
+  return COMMANDS[name];
+}
 
 const ENV = {
   // The java guest's build publishes its static /mf-types.ts artifact here.
@@ -92,9 +111,26 @@ async function waitForManifest(port, name, child) {
   throw new Error(`machine ${name} did not become ready on :${port}`);
 }
 
-export async function startMachines() {
+/** Spawn one guest process and wait until it serves the protocol. */
+export async function startGuest({ name, command, port, env }) {
+  const [cmd, ...args] = command;
+  const child = spawn(cmd, args, {
+    env: { ...process.env, PORT: String(port), ...(env ?? {}) },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+  try {
+    const manifest = await waitForManifest(port, name, child);
+    return { name, port, child, manifest, stop: () => child.kill() };
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+}
+
+export async function startMachines({ exclude = [] } = {}) {
+  const wanted = MACHINES.filter((machine) => !exclude.includes(machine.name));
   const started = [];
-  for (const machine of MACHINES) {
+  for (const machine of wanted) {
     const [cmd, ...args] = machine.command;
     const child = spawn(cmd, args, {
       env: {

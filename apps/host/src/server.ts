@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { once } from 'node:events';
 import http from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
 import {
@@ -78,6 +78,8 @@ type WireEvent =
       version?: string;
       requires?: string;
       runtime?: string;
+      /** Set when this boot came from a pulled artifact (provenance). */
+      pulledFrom?: string;
     }
   | {
       type: 'call';
@@ -89,7 +91,19 @@ type WireEvent =
       result: string;
       ms: number;
     }
-  | { type: 'snapshot'; machine: string; snapFile: string };
+  | { type: 'snapshot'; machine: string; snapFile: string }
+  | {
+      /** A pull entry resolved: the artifact moved (or the cache answered). */
+      type: 'artifact';
+      machine: string;
+      origin?: string;
+      entry: string;
+      artifact: string;
+      bytes: number;
+      digest?: string;
+      cacheHit: boolean;
+      ms: number;
+    };
 
 const wireStore = new AsyncLocalStorage<WireEvent[]>();
 
@@ -104,7 +118,7 @@ function clip(value: unknown, max = 140): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-/** Record attach/call/snapshot hook events into the current request's wire. */
+/** Record attach/call/snapshot/artifact hook events into the current request's wire. */
 function recordWire(p: MachinenPlugin): void {
   p.machineHooks.onMachineReady.on(({ spec, manifest }) => {
     wireStore.getStore()?.push({
@@ -115,6 +129,20 @@ function recordWire(p: MachinenPlugin): void {
       version: manifest.version,
       requires: spec.params.get('version') ?? undefined,
       runtime: manifest.metaData?.runtime,
+      pulledFrom: spec.pulledFrom,
+    });
+  });
+  p.machineHooks.onArtifactFetched.on(({ spec, resolution }) => {
+    wireStore.getStore()?.push({
+      type: 'artifact',
+      machine: spec.remoteName,
+      origin: spec.url,
+      entry: spec.entry,
+      artifact: resolution.artifact,
+      bytes: resolution.bytesFetched,
+      digest: resolution.descriptor.digest,
+      cacheHit: resolution.fromCache,
+      ms: resolution.durationMs,
     });
   });
   p.machineHooks.afterCall.on(({ spec, module, fn, args, result, durationMs }) => {
@@ -146,11 +174,13 @@ interface MachineStatus {
   runtime?: string;
   version?: string;
   attachedAt?: number;
+  /** Artifact kinds the machine's manifest publishes (pull capability). */
+  artifacts?: string[];
 }
 
 interface ActivityEvent {
   ts: number;
-  kind: 'ready' | 'call' | 'error' | 'crash' | 'circuit' | 'snapshot' | 'restore';
+  kind: 'ready' | 'call' | 'error' | 'crash' | 'circuit' | 'snapshot' | 'restore' | 'pull';
   detail: string;
 }
 
@@ -195,6 +225,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// The host-side artifact cache, as the resolver actually used it. Counters
+// accumulate from onArtifactFetched hook events only — no synthetic data.
+const cacheStats = {
+  paths: new Set<string>(),
+  hits: 0,
+  misses: 0,
+  bytes: 0,
+  reset() {
+    this.paths.clear();
+    this.hits = 0;
+    this.misses = 0;
+    this.bytes = 0;
+  },
+};
+
 /** Feed a plugin's lifecycle hooks into the dashboard's activity log. */
 function logHooks(p: MachinenPlugin): void {
   p.machineHooks.onMachineReady.on(({ spec, manifest }) => {
@@ -204,9 +249,24 @@ function logHooks(p: MachinenPlugin): void {
         runtime: manifest.metaData?.runtime,
         version: manifest.version,
         attachedAt: Date.now(),
+        artifacts: manifest.artifacts ? Object.keys(manifest.artifacts) : undefined,
       });
     }
     logEvent('ready', `${spec.remoteName} attached (${manifest.metaData?.runtime})`);
+  });
+  p.machineHooks.onArtifactFetched.on(({ spec, resolution }) => {
+    cacheStats.paths.add(resolution.localPath);
+    if (resolution.fromCache) cacheStats.hits++;
+    else cacheStats.misses++;
+    cacheStats.bytes += resolution.bytesFetched;
+    logEvent(
+      'pull',
+      `${spec.remoteName} pulled ${resolution.artifact} from ${spec.url} — ` +
+        (resolution.fromCache
+          ? `image cache HIT, ${resolution.bytesFetched} bytes moved`
+          : `${resolution.bytesFetched} bytes fetched`) +
+        ` in ${resolution.durationMs}ms`,
+    );
   });
   p.machineHooks.afterCall.on(({ spec, module, fn, durationMs }) => {
     logEvent('call', `${spec.remoteName} ${module}#${fn} ${durationMs.toFixed(1)}ms`);
@@ -274,6 +334,13 @@ function handleDashboard(_req: http.IncomingMessage, res: http.ServerResponse) {
       ...machineStatus.get(name),
       metrics: metrics[name] ?? null,
     })),
+    lifecycle: lifecycleBody(),
+    cache: {
+      artifacts: cacheStats.paths.size,
+      hits: cacheStats.hits,
+      misses: cacheStats.misses,
+      bytes: cacheStats.bytes,
+    },
     events: events.latest(40),
   });
 }
@@ -393,116 +460,271 @@ async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse
   json(res, 200, { value, loadRemote: `${machine}/counter`, wire: wire() });
 }
 
-// ---- snapshot story ---------------------------------------------------------
+// ---- machine lifecycle story ------------------------------------------------
 // The five machines above are attached deployments (httpAttachDriver), so the
-// host can't freeze them. The snapshot card boots its OWN machine from an
+// host can't freeze them. The lifecycle card boots its OWN machine from an
 // image via the process driver — the same federation runtime shape, but the
 // driver owns the process, so plugin.snapshotMachine() and restore-from-.snap
-// work. scripts/demo-snapshot.mjs is the CLI version of this exact story; the
-// real-VM variant (machinenDriver(), whole microVM dumps) is pnpm demo:machinen.
+// work. The restored guest then serves /mf-manifest.json + /mf-image +
+// /mf-snapshot (it is a registry of itself), so `machinen+pull+http://` entries
+// can fork it: steps 4/5 pull warm clones over plain HTTP. The CLI versions of
+// the legs: pnpm demo:snapshot (freeze/restore), pnpm demo:pull (fork-by-fetch);
+// the real-VM variant (machinenDriver(), whole-microVM dumps) is pnpm demo:machinen.
 
 const SNAP_IMAGE =
   process.env.SNAPSHOT_IMAGE ?? path.resolve(import.meta.dirname, '../../remote/dist/index.js');
 const SNAP_DIR = path.resolve(import.meta.dirname, '../.machinen/web-snapshots');
+// Demo-scoped artifact cache, wiped on every lifecycle reset so each full run
+// honestly shows miss-then-hit.
+const PULL_CACHE_DIR = path.resolve(import.meta.dirname, '../.machinen/web-cache');
 const SNAP_NAME = 'snap_machine';
+// Fixed port so the pull entry below is static: the process driver honors
+// ?port= on image entries, which makes the origin its own artifact registry
+// at a known address.
+const SNAP_PORT = Number(process.env.SNAPSHOT_PORT ?? 3811);
+const ORIGIN_ENTRY = `machinen://${SNAP_IMAGE}?port=${SNAP_PORT}`;
 
-const snapPlugin = machinenPlugin({ driver: processDriver({ snapshotDir: SNAP_DIR }) });
+const CLONE_IDS = ['a', 'b'] as const;
+type CloneId = (typeof CLONE_IDS)[number];
+const cloneName = (id: CloneId) => `snap_clone_${id}`;
+// The whole deployment story of a clone is this one entry string. The clone=
+// param only disambiguates the two forks: the runtime caches machines (and
+// memoizes pull resolutions) per entry string, and two independent clones
+// must not share one process.
+const cloneEntry = (id: CloneId) =>
+  `machinen+pull+http://127.0.0.1:${SNAP_PORT}?artifact=snapshot&version=^1.0.0&clone=${id}`;
+
+const snapPlugin = machinenPlugin({
+  driver: processDriver({ snapshotDir: SNAP_DIR }),
+  artifactCacheDir: PULL_CACHE_DIR,
+});
 const snapHost = createInstance({
-  name: 'snapshot_host',
-  remotes: [{ name: SNAP_NAME, entry: `machinen://${SNAP_IMAGE}` }],
+  name: 'lifecycle_host',
+  remotes: [{ name: SNAP_NAME, entry: ORIGIN_ENTRY }],
   plugins: [snapPlugin],
 });
 logHooks(snapPlugin);
 recordWire(snapPlugin);
 
-interface SnapState {
-  phase: 'cold' | 'running' | 'snapshotted' | 'restored';
+interface CloneState {
+  /** Counter value the clone resumed at (the fork point). */
+  resumed: number;
+  /** Current counter value (diverges from the origin via /api/lifecycle/counter). */
+  value: number;
+  entry: string;
+  pulledBytes: number;
+  imageCacheHit: boolean;
+  pullMs: number;
+}
+
+interface LifecycleState {
+  phase: 'cold' | 'running' | 'snapshotted' | 'restored' | 'forked';
   value?: number;
   snapFile?: string;
   snapBytes?: number;
+  clones: Partial<Record<CloneId, CloneState>>;
   busy: boolean;
 }
 
-const snapState: SnapState = { phase: 'cold', busy: false };
+const lifecycle: LifecycleState = { phase: 'cold', clones: {}, busy: false };
 
-function snapStateBody() {
-  const { busy: _busy, snapFile, ...rest } = snapState;
-  return { ...rest, snapFile: snapFile ? path.basename(snapFile) : undefined };
+function lifecycleBody() {
+  const { busy: _busy, snapFile, ...rest } = lifecycle;
+  return {
+    ...rest,
+    snapFile: snapFile ? path.basename(snapFile) : undefined,
+    originPort: SNAP_PORT,
+  };
 }
 
-/** Serialize the snapshot lifecycle: one step at a time, valid phases only. */
-async function snapStep<T>(
+/** Serialize the lifecycle arc: one step at a time, valid phases only. */
+async function lifecycleStep<T>(
   res: http.ServerResponse,
-  allowed: SnapState['phase'][],
+  allowed: LifecycleState['phase'][],
   step: () => Promise<T>,
 ): Promise<void> {
-  if (snapState.busy) return json(res, 409, { error: 'a snapshot step is already running' });
-  if (!allowed.includes(snapState.phase)) {
+  if (lifecycle.busy) return json(res, 409, { error: 'a lifecycle step is already running' });
+  if (!allowed.includes(lifecycle.phase)) {
     return json(res, 409, {
-      error: `step not valid in phase "${snapState.phase}" (expected ${allowed.join(' | ')})`,
+      error: `step not valid in phase "${lifecycle.phase}" (expected ${allowed.join(' | ')})`,
     });
   }
-  snapState.busy = true;
+  lifecycle.busy = true;
   try {
     const extra = await step();
-    json(res, 200, { ...snapStateBody(), ...extra, wire: wire() });
+    json(res, 200, { ...lifecycleBody(), ...extra, wire: wire() });
   } finally {
-    snapState.busy = false;
+    lifecycle.busy = false;
   }
 }
 
-function handleSnapshotState(_req: http.IncomingMessage, res: http.ServerResponse) {
-  json(res, 200, snapStateBody());
+function handleLifecycleState(_req: http.IncomingMessage, res: http.ServerResponse) {
+  json(res, 200, lifecycleBody());
 }
 
-/** Boot (or reboot) snap_machine from its image and work it warm. */
-async function handleSnapshotBoot(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await snapStep(res, ['cold', 'running', 'snapshotted', 'restored'], async () => {
-    // (Re)point the remote at the pristine image — a normal dynamic-remotes
-    // operation; force drops the cached container for the name.
+/** Step 1 — boot & work. Also the arc's reset: clones, origin, cache all go. */
+async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerResponse) {
+  await lifecycleStep(res, ['cold', 'running', 'snapshotted', 'restored', 'forked'], async () => {
+    // Full reset: kill origin + clones, wipe the artifact cache so the next
+    // pull is honestly a miss, then (re)point the remote at the pristine
+    // image — a normal dynamic-remotes operation; force drops the cached
+    // container for the name.
     await snapPlugin.disposeMachines();
-    snapHost.registerRemotes([{ name: SNAP_NAME, entry: `machinen://${SNAP_IMAGE}` }], {
-      force: true,
-    });
+    await rm(PULL_CACHE_DIR, { recursive: true, force: true });
+    cacheStats.reset();
+    lifecycle.clones = {};
+    snapHost.registerRemotes([{ name: SNAP_NAME, entry: ORIGIN_ENTRY }], { force: true });
     const counter = (await snapHost.loadRemote<CounterModule>(`${SNAP_NAME}/counter`))!;
     await counter.increment();
     await counter.increment();
-    snapState.value = await counter.increment();
-    snapState.phase = 'running';
-    snapState.snapFile = undefined;
-    snapState.snapBytes = undefined;
+    lifecycle.value = await counter.increment();
+    lifecycle.phase = 'running';
+    lifecycle.snapFile = undefined;
+    lifecycle.snapBytes = undefined;
     return { loadRemote: `${SNAP_NAME}/counter` };
   });
 }
 
-/** Freeze the machine's app state into a .snap bundle, then kill the process. */
-async function handleSnapshotFreeze(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await snapStep(res, ['running'], async () => {
+/** Step 2 — freeze the machine's app state into a .snap bundle, then kill the process. */
+async function handleLifecycleFreeze(_req: http.IncomingMessage, res: http.ServerResponse) {
+  await lifecycleStep(res, ['running'], async () => {
     const snapshot = (await snapPlugin.snapshotMachine(SNAP_NAME)) as { snapFile: string };
     await snapPlugin.disposeMachines(); // the process is gone — state lives only in the bundle
     logEvent('snapshot', `${SNAP_NAME} process killed — state lives in the .snap bundle`);
-    snapState.phase = 'snapshotted';
-    snapState.snapFile = snapshot.snapFile;
-    snapState.snapBytes = (await stat(snapshot.snapFile)).size;
+    lifecycle.phase = 'snapshotted';
+    lifecycle.snapFile = snapshot.snapFile;
+    lifecycle.snapBytes = (await stat(snapshot.snapFile)).size;
     return {};
   });
 }
 
-/** Restore: point the SAME remote name at the .snap and loadRemote again. */
-async function handleSnapshotRestore(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await snapStep(res, ['snapshotted'], async () => {
+/** Step 3 — restore: point the SAME remote name at the .snap and loadRemote again. */
+async function handleLifecycleRestore(_req: http.IncomingMessage, res: http.ServerResponse) {
+  await lifecycleStep(res, ['snapshotted'], async () => {
+    // Same fixed port: the restored process is the pull origin for steps 4/5.
     snapHost.registerRemotes(
-      [{ name: SNAP_NAME, entry: `machinen://${snapState.snapFile}` }],
+      [{ name: SNAP_NAME, entry: `machinen://${lifecycle.snapFile}?port=${SNAP_PORT}` }],
       { force: true },
     );
     const counter = (await snapHost.loadRemote<CounterModule>(`${SNAP_NAME}/counter`))!;
     const resumed = await counter.current();
     const next = await counter.increment();
     logEvent('restore', `${SNAP_NAME} restored from .snap — counter resumed at ${resumed}`);
-    snapState.phase = 'restored';
-    snapState.value = next;
+    lifecycle.phase = 'restored';
+    lifecycle.value = next;
     return { resumed, next, loadRemote: `${SNAP_NAME}/counter` };
   });
+}
+
+/** Steps 4/5 — fork by pull: register a pull entry against the origin, loadRemote. */
+async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerResponse) {
+  await lifecycleStep(res, ['restored', 'forked'], async () => {
+    const id = CLONE_IDS.find((c) => !lifecycle.clones[c]);
+    if (!id) throw new HttpError(409, 'both clones already exist — step 1 resets the arc');
+    const name = cloneName(id);
+    const entry = cloneEntry(id);
+    // force: after a reset the MF runtime may still cache the previous
+    // clone's container under this name.
+    snapHost.registerRemotes([{ name, entry }], { force: true });
+    const counter = (await snapHost.loadRemote<CounterModule>(`${name}/counter`))!;
+    const resumed = await counter.current();
+    // The artifact hook events for THIS request carry the real pull stats.
+    const pull = wire().find(
+      (e): e is Extract<WireEvent, { type: 'artifact' }> =>
+        e.type === 'artifact' && e.machine === name,
+    );
+    lifecycle.clones[id] = {
+      resumed,
+      value: resumed,
+      entry,
+      pulledBytes: pull?.bytes ?? 0,
+      imageCacheHit: pull?.cacheHit ?? false,
+      pullMs: pull?.ms ?? 0,
+    };
+    lifecycle.phase = 'forked';
+    return { clone: id, resumed, loadRemote: `${name}/counter` };
+  });
+}
+
+type CounterTarget = 'origin' | CloneId;
+
+function isCounterTarget(value: unknown): value is CounterTarget {
+  return value === 'origin' || value === 'a' || value === 'b';
+}
+
+/** Increment one of the three counters — origin and clones diverge from here. */
+async function handleLifecycleCounter(req: http.IncomingMessage, res: http.ServerResponse) {
+  const { target } = await readBody(req);
+  if (!isCounterTarget(target)) {
+    return json(res, 400, { error: `expected target: origin | a | b, got "${String(target)}"` });
+  }
+  if (lifecycle.busy) return json(res, 409, { error: 'a lifecycle step is already running' });
+  let remote: string;
+  switch (target) {
+    case 'origin': {
+      if (!['running', 'restored', 'forked'].includes(lifecycle.phase)) {
+        return json(res, 409, { error: `origin is not running (phase "${lifecycle.phase}")` });
+      }
+      remote = SNAP_NAME;
+      break;
+    }
+    case 'a':
+    case 'b': {
+      if (!lifecycle.clones[target]) {
+        return json(res, 409, { error: `clone ${target} does not exist yet` });
+      }
+      remote = cloneName(target);
+      break;
+    }
+    default: {
+      const unreachable: never = target;
+      return json(res, 400, { error: `unknown target ${String(unreachable)}` });
+    }
+  }
+  const counter = (await snapHost.loadRemote<CounterModule>(`${remote}/counter`))!;
+  const value = await counter.increment();
+  if (target === 'origin') lifecycle.value = value;
+  else lifecycle.clones[target]!.value = value;
+  json(res, 200, { ...lifecycleBody(), target, value, loadRemote: `${remote}/counter`, wire: wire() });
+}
+// ----------------------------------------------------------------------------
+
+// ---- data gravity: deploy-by-pull -------------------------------------------
+// Scenario 2's first beat is a real deployment: the host asks the eu-west
+// region agent (across the WAN) to pull the analytics IMAGE from its us-east
+// origin and boot it next to db_machine. The agent answers with its own
+// artifact-hook payload — bytes, digest, cache hit/miss, timings — so the UI
+// shows exactly what moved. Until the deploy happens, the host's analytics
+// entry exists in config but the machine doesn't exist.
+const REGION_AGENT_URL = process.env.REGION_AGENT_URL;
+
+async function agentFetch(pathname: string, init?: RequestInit): Promise<unknown> {
+  if (!REGION_AGENT_URL) {
+    throw new HttpError(503, 'no region agent configured (REGION_AGENT_URL) — run scripts/demo-web.mjs');
+  }
+  const upstream = await fetch(`${REGION_AGENT_URL}${pathname}`, init).catch((error) => {
+    throw new HttpError(502, `region agent unreachable: ${errorMessage(error)}`);
+  });
+  const body = (await upstream.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!upstream.ok) {
+    throw new HttpError(502, `region agent answered ${upstream.status}: ${String(body.error ?? '')}`);
+  }
+  return body;
+}
+
+async function handleGravityState(_req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    json(res, 200, { ...(await agentFetch('/status') as object), agent: 'reachable' });
+  } catch (error) {
+    const status = error instanceof HttpError ? error.status : 502;
+    json(res, 200, { agent: 'unreachable', error: errorMessage(error), status });
+  }
+}
+
+async function handleGravityDeploy(_req: http.IncomingMessage, res: http.ServerResponse) {
+  const start = performance.now();
+  const reply = (await agentFetch('/deploy', { method: 'POST' })) as object;
+  json(res, 200, { ...reply, wanMs: Math.round(performance.now() - start) });
 }
 // ----------------------------------------------------------------------------
 
@@ -634,10 +856,14 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/compute', handleCompute],
   ['GET /api/countdown', handleCountdown],
   ['POST /api/counter', handleCounter],
-  ['GET /api/snapshot/state', handleSnapshotState],
-  ['POST /api/snapshot/boot', handleSnapshotBoot],
-  ['POST /api/snapshot/freeze', handleSnapshotFreeze],
-  ['POST /api/snapshot/restore', handleSnapshotRestore],
+  ['GET /api/lifecycle/state', handleLifecycleState],
+  ['POST /api/lifecycle/boot', handleLifecycleBoot],
+  ['POST /api/lifecycle/freeze', handleLifecycleFreeze],
+  ['POST /api/lifecycle/restore', handleLifecycleRestore],
+  ['POST /api/lifecycle/pull', handleLifecyclePull],
+  ['POST /api/lifecycle/counter', handleLifecycleCounter],
+  ['GET /api/gravity/state', handleGravityState],
+  ['POST /api/gravity/deploy', handleGravityDeploy],
   ['POST /api/report/remote', handleReportRemote],
   ['POST /api/report/colocated', handleReportColocated],
   ['GET /api/region/latency', handleRegionLatency],
@@ -664,7 +890,17 @@ server.listen(PORT, () => {
   console.log('[host] machines attach on demand — watch the dashboard');
 });
 
-process.on('SIGTERM', () => {
-  void snapPlugin.disposeMachines().catch(() => {});
-  server.close(() => process.exit(0));
-});
+// The lifecycle guests (origin + clones) are child processes of this host and
+// inherit its stdio — they must not outlive it, or they wedge piped demo
+// output and poison the fixed origin port for the next run.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    void snapPlugin
+      .disposeMachines()
+      .catch(() => {})
+      .finally(() => {
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 500).unref();
+      });
+  });
+}
