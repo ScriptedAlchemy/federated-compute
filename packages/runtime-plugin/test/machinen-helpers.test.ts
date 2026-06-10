@@ -237,6 +237,15 @@ describe('Machinen driver unit behavior without KVM', () => {
       pid: 1,
       exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
       writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+    // Snapshots must go through an attach() handle, never the boot-owned
+    // one (the CRIU engine's snapshot path deadlocks on boot handles).
+    const snapVm = {
+      pid: 1,
+      exec: vi.fn(),
+      writeFile: vi.fn(),
       snapshot: vi.fn(async ({ outDir }: { outDir: string }) => {
         await mkdir(outDir, { recursive: true });
         await writeFile(path.join(outDir, 'meta.json'), '{}\n');
@@ -245,6 +254,7 @@ describe('Machinen driver unit behavior without KVM', () => {
       }),
       kill: vi.fn(async () => {}),
     };
+    const attach = vi.fn(async () => snapVm);
     vi.doMock('@machinen/runtime', () => ({
       boot: vi.fn(),
       restore: vi.fn(async (opts: Record<string, unknown>) => {
@@ -253,6 +263,7 @@ describe('Machinen driver unit behavior without KVM', () => {
         await startHealthServer(hostPort);
         return vm;
       }),
+      attach,
       resolveBaseRootfs: () => '/base/rootfs.tar',
       resolveBaseKernel: () => '/base/kernel',
       resolveBaseDtb: () => undefined,
@@ -266,6 +277,15 @@ describe('Machinen driver unit behavior without KVM', () => {
 
     expect((restoreCalls[0].portForward as Array<{ guestPort: number }>)[0].guestPort).toBe(4707);
     const snap = (await handle.snapshot?.()) as { snapDir: string };
+    expect(attach).toHaveBeenCalledWith({ pid: vm.pid });
+    expect(vm.snapshot).not.toHaveBeenCalled();
+    expect(snapVm.snapshot).toHaveBeenCalledTimes(1);
+    // The reseed shim is written through the live handle before the dump.
+    expect(vm.writeFile).toHaveBeenCalledWith(
+      '/sbin/machinen-vmstate-reseed',
+      expect.stringContaining('/dev/urandom'),
+      { mode: 0o755 },
+    );
     const marker = JSON.parse(await readFile(path.join(snap.snapDir, 'federated-machine.json'), 'utf8')) as {
       guestPort: number;
     };

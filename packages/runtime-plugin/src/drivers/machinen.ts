@@ -30,7 +30,10 @@ import { getFreePort } from './process.js';
  *     boot-then-exec installs node in ~5s instead,
  *   - `/sbin/machinen-vmstate-reseed` in the amd64 rootfs is an aarch64
  *     binary ("Exec format error" -> BOOT_VMSTATE_RESEED_FAILED on
- *     restore); snapshot() stubs it with `exit 0` first,
+ *     restore); snapshot() first replaces it with a functional shell shim
+ *     that reseeds the guest CSPRNG from the host-provided seed,
+ *   - snapshots go through an attach() handle: the CRIU engine's snapshot
+ *     path awaits errorOutput(), which deadlocks on a boot-owned handle,
  *   - `fork()` is unreliable on amd64; `handle.fork()` throws a clear
  *     not-supported error until the upstream fix lands.
  */
@@ -43,6 +46,37 @@ const GUEST_BUNDLE = `${GUEST_DIR}/guest.mjs`;
 const GUEST_LAUNCHER = `${GUEST_DIR}/run.sh`;
 const GUEST_LOG = '/var/log/federated-guest.log';
 const RESEED_BINARY = '/sbin/machinen-vmstate-reseed';
+/**
+ * Functional replacement for machinen 0.4.0's mis-arched reseed helper
+ * (identical to the shim in scripts/machinen-e2e.mjs, which asserts its
+ * behavior). The amd64 base rootfs ships an aarch64 binary at
+ * RESEED_BINARY, so every vmstate restore dies with "Exec format error"
+ * (BOOT_VMSTATE_RESEED_FAILED). A bare `exit 0` stub would unblock the
+ * restore but freeze guest entropy: every VM restored from one bundle
+ * would share RNG/UUID/key state. A bare write to /dev/urandom is not
+ * enough either — it mixes the seed into the input pool without rekeying
+ * the output crng, so restores replay identical randomness for up to 60s.
+ * The shim uses perl-base (Debian essential, present in every machinen
+ * rootfs) to issue the ioctls the real helper would: RNDADDENTROPY
+ * credits the host seed, RNDRESEEDCRNG forces an immediate crng rekey.
+ */
+const RESEED_SHIM = `#!/bin/sh
+# x64 shim for machinen 0.4.0's mis-arched arm64 reseed helper. $1 is the
+# hex seed the host runtime generates fresh for every restore.
+if [ -x /usr/bin/perl ]; then
+  exec /usr/bin/perl -e '
+    my $seed = pack("H*", $ARGV[0]);
+    open(my $fh, "+<", "/dev/urandom") or die "open /dev/urandom: $!";
+    my $req = pack("l l a*", 8 * length($seed), length($seed), $seed);
+    ioctl($fh, 0x40085203, $req) or die "RNDADDENTROPY: $!";
+    ioctl($fh, 0x5207, 0) or die "RNDRESEEDCRNG: $!";
+  ' "$1"
+fi
+# Fallback for images without perl: mix the seed into the input pool. The
+# crng still rekeys from it at the kernel next scheduled reseed.
+printf '%s' "$1" > /dev/urandom
+exit 0
+`;
 /** Written into every snapshot bundle so a restore knows the guest port. */
 const SNAP_MARKER = 'federated-machine.json';
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -76,6 +110,8 @@ interface MachinenVm {
 interface MachinenRuntime {
   boot(opts: Record<string, unknown>): Promise<MachinenVm>;
   restore(opts: Record<string, unknown>): Promise<MachinenVm>;
+  /** Reconnect to a live VM by VMM pid (registry lookup); used for snapshots. */
+  attach(opts: { pid?: number; name?: string }): Promise<MachinenVm>;
   kill?(name: string): Promise<void> | void;
   resolveBaseRootfs(explicit?: string, cwd?: string): string;
   resolveBaseKernel(explicit?: string, cwd?: string): string;
@@ -301,16 +337,26 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const snapshot = async (): Promise<MachinenSnapshotDescriptor> => {
       // amd64 0.4.0 ships an aarch64 /sbin/machinen-vmstate-reseed in the
       // debian rootfs; the restored guest runs it and dies with
-      // BOOT_VMSTATE_RESEED_FAILED ("Exec format error"). Stub it before
-      // every snapshot so the state we freeze contains a working no-op.
-      // TODO(reseed): reconcile with CRIU-engine approach in machinen-e2e.
-      await vm.writeFile(RESEED_BINARY, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      await checkedExec(vm, `chmod +x ${RESEED_BINARY}`, 'prepare vmstate reseed stub');
+      // BOOT_VMSTATE_RESEED_FAILED ("Exec format error"). Overwrite it with
+      // the functional shell shim before every snapshot so the state we
+      // freeze contains a helper that actually reseeds the guest CSPRNG
+      // from the host-provided seed on restore.
+      await vm.writeFile(RESEED_BINARY, RESEED_SHIM, { mode: 0o755 });
 
       await mkdir(snapshotDir, { recursive: true });
       const outDir = path.resolve(snapshotDir, `${spec.remoteName}-${Date.now().toString(36)}`);
       const started = Date.now();
-      await vm.snapshot({ outDir });
+      // Snapshot through an attach() handle, never the boot-owned `vm`.
+      // The default vmstate engine is safe either way, but with
+      // MACHINEN_SNAPSHOT_ENGINE=criu (host env, outside our control) the
+      // CRIU snapshot path awaits ctx.errorOutput(), which on a boot-owned
+      // handle is a collect(child.stderr) promise that only resolves when
+      // the VM exits — a guaranteed deadlock. Attach handles resolve
+      // errorOutput() immediately (this is also how the machinen CLI
+      // snapshots), so the same driver code is safe under every engine.
+      const runtime = await loadRuntime();
+      const snapVm = await runtime.attach({ pid: vm.pid });
+      await snapVm.snapshot({ outDir });
       const marker: SnapMarker = {
         remoteName: spec.remoteName,
         guestPort,

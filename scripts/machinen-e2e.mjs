@@ -86,13 +86,33 @@ if (!existsSync(GUEST_BUNDLE)) {
 // guest payload, so every vmstate restore dies with Exec format error
 // (BOOT_VMSTATE_RESEED_FAILED, exit 126). We drop a functionally equivalent
 // shell shim over it inside the source VM before snapshotting; the restored
-// guest then reseeds /dev/urandom for real and the restore completes.
+// guest then reseeds its CSPRNG for real and the restore completes.
 // (The CRIU engine is no alternative: guest criu 3.17.1 cannot restore
 // node 18's OpenSSL MADV_WIPEONFORK pages.)
+//
+// A bare write to /dev/urandom is NOT enough: it mixes the seed into the
+// input pool but does not reseed the ChaCha output crng, so two restores
+// from one bundle replay identical /dev/urandom output until the kernel's
+// next scheduled reseed (up to 60s). The shim therefore uses perl-base
+// (Debian essential, present in every machinen rootfs) to issue the same
+// ioctls the real helper would: RNDADDENTROPY (0x40085203) credits the
+// host-provided seed, RNDRESEEDCRNG (0x5207) forces the crng to rekey from
+// it immediately. The e2e asserts the divergence below.
 // TODO: drop once upstream fixes the helper arch in @machinen/native-x64-linux.
 const RESEED_SHIM = `#!/bin/sh
-# x64 shim for machinen 0.4.0's mis-arched arm64 reseed helper.
-# Equivalent behavior: feed the host-provided seed to the guest CSPRNG.
+# x64 shim for machinen 0.4.0's mis-arched arm64 reseed helper. $1 is the
+# hex seed the host runtime generates fresh for every restore.
+if [ -x /usr/bin/perl ]; then
+  exec /usr/bin/perl -e '
+    my $seed = pack("H*", $ARGV[0]);
+    open(my $fh, "+<", "/dev/urandom") or die "open /dev/urandom: $!";
+    my $req = pack("l l a*", 8 * length($seed), length($seed), $seed);
+    ioctl($fh, 0x40085203, $req) or die "RNDADDENTROPY: $!";
+    ioctl($fh, 0x5207, 0) or die "RNDRESEEDCRNG: $!";
+  ' "$1"
+fi
+# Fallback for images without perl: mix the seed into the input pool. The
+# crng still rekeys from it at the kernel next scheduled reseed.
 printf '%s' "$1" > /dev/urandom
 exit 0
 `;
@@ -131,26 +151,43 @@ try {
 }
 
 // Errors that mean "machinen can't run here", as opposed to "our validation
-// found a real problem". VMM missing/broken and unfetched base assets are
-// environment problems, not protocol failures.
+// found a real problem". Deliberately narrow: only failures that occur
+// BEFORE any of this script's own fixes (explicit kernel/dtb, explicit
+// memory, reseed shim) are in play may skip. Anything those fixes guard
+// against must FAIL — recurrence means a workaround regressed.
+//
+// NOT listed (now hard failures):
+//   - BOOT_KERNEL_NOT_FOUND / BOOT_DTB_NOT_FOUND and the PROVISION_*
+//     kernel/dtb codes: we resolve kernel+dtb ourselves up front (missing
+//     assets already exit 78 there) and pass them explicitly, so these
+//     firing later means the explicit-kernel fix regressed.
 const UNAVAILABLE_CODES = new Set([
+  // The platform-native VMM package is absent or unloadable — install-time
+  // environment problem, hit before any VM is configured.
   'BOOT_VMM_MISSING',
   'BOOT_VMM_PACKAGE_BROKEN',
+  // The debian base rootfs was never fetched (`machinen install`); the
+  // script does not resolve the rootfs itself, so this is genuinely
+  // environmental.
   'PROVISION_BASE_NOT_FOUND',
-  'PROVISION_KERNEL_NOT_FOUND',
-  'PROVISION_DTB_NOT_FOUND',
-  'BOOT_KERNEL_NOT_FOUND',
-  'BOOT_DTB_NOT_FOUND',
 ]);
 
 // VMM startup failures that mean the host's virtualization stack can't run
-// machinen at all (e.g. KVM present but vCPU creation refused). These are
-// host-capability problems, not failures of OUR protocol inside the VM.
+// machinen at all. Also deliberately narrow:
+//
+// NOT listed (now a hard failure):
+//   - KvmCreateVcpuFailed: vCPU creation only fails this way when the guest
+//     RAM layout collides with the KVM APIC page — exactly what the
+//     explicit GUEST_MEMORY_MIB fix prevents. Seeing it again means the
+//     memory workaround regressed.
 const VMM_CAPABILITY_PATTERNS = [
+  // Opening /dev/kvm or creating the VM fd is refused (seccomp, cgroup
+  // device policy, nested-virt quirks) — happens before any guest
+  // configuration of ours is applied.
   /KvmCreateVmFailed/i,
-  /KvmCreateVcpuFailed/i,
   /KvmOpenFailed/i,
   /Could not access KVM/i,
+  // macOS: Hypervisor.framework refused the entitlement/VM — host policy.
   /HvfError/i,
 ];
 
@@ -205,6 +242,21 @@ async function call(port, module, fn, args = []) {
   return body.result;
 }
 
+// The vsock exec agent inside a restored VM can take a beat to re-register
+// with the new VMM process; probe instead of failing on the first attempt.
+async function execWithRetry(vm, cmd, label, attempts = 10) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await vm.exec(cmd, { execTimeoutMs: 15_000 });
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
+  throw new Error(`${label}: exec never succeeded after ${attempts} attempts (${lastErr})`);
+}
+
 async function freePort() {
   const { createServer } = await import('node:net');
   return new Promise((res, rej) => {
@@ -224,10 +276,11 @@ const imagePath = join(work, 'guest-image.tar.gz');
 const snapDir = join(work, 'snapshot');
 let bootVm;
 let restoredVm;
+let entropyVm;
 const timings = {};
 
 const cleanup = async () => {
-  for (const vm of [bootVm, restoredVm]) {
+  for (const vm of [bootVm, restoredVm, entropyVm]) {
     try {
       await vm?.kill();
     } catch {}
@@ -376,6 +429,39 @@ try {
     );
   }
   log('counter continued 2 -> 3 across snapshot/kill/restore: in-VM process heap preserved');
+
+  // (e) entropy divergence — the property the functional reseed shim buys
+  // over a bare `exit 0` stub. Two VMs restored from the SAME bundle resume
+  // from identical kernel CSPRNG state; only a real reseed (the shim
+  // crediting the per-restore host seed and forcing a crng rekey) makes
+  // their entropy streams diverge immediately.
+  const READ_ENTROPY = 'head -c 32 /dev/urandom | base64';
+  const entropyA = (await execWithRetry(restoredVm, READ_ENTROPY, 'restore #1 entropy read')).stdout.trim();
+  log('restoring a second VM from the same bundle for the entropy check ...');
+  try {
+    entropyVm = await restore({
+      snapDir,
+      kernel,
+      dtb,
+      memory: GUEST_MEMORY_MIB,
+      timeoutMs: null,
+    });
+  } catch (err) {
+    classify(err, 'second restore (entropy check)');
+  }
+  const entropyB = (await execWithRetry(entropyVm, READ_ENTROPY, 'restore #2 entropy read')).stdout.trim();
+  if (!entropyA || !entropyB) {
+    throw new Error(`entropy read came back empty (A="${entropyA}" B="${entropyB}")`);
+  }
+  if (entropyA === entropyB) {
+    throw new Error(
+      'two VMs restored from one bundle produced IDENTICAL /dev/urandom output — ' +
+        'the reseed shim did not actually reseed the guest CSPRNG',
+    );
+  }
+  log('entropy diverged across two restores from one bundle: reseed shim performs a real reseed');
+  await entropyVm.kill().catch(() => {});
+  entropyVm = undefined;
 
   const summary =
     `provision=${timings.provision_ms}ms boot_to_healthy=${timings.boot_to_healthy_ms}ms ` +

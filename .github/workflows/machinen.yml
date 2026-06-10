@@ -130,9 +130,14 @@ jobs:
           echo "scratch_dir=$SCRATCH" >> "$GITHUB_OUTPUT"
           npm init -y > /dev/null
 
-          if ! npm install --no-audit --no-fund @machinen/cli @machinen/runtime > npm-install.log 2>&1; then
+          # Pinned to 0.4.0: every workaround in the driver and the e2e
+          # script (explicit memory, no provision(), reseed shim, attach-
+          # based snapshot) targets this exact release. An unpinned install
+          # would silently validate a different runtime than the one the
+          # code is written against.
+          if ! npm install --no-audit --no-fund @machinen/cli@0.4.0 @machinen/runtime@0.4.0 > npm-install.log 2>&1; then
             tail -20 npm-install.log
-            reason="npm install of @machinen/cli + @machinen/runtime failed on $(uname -m) (packages missing for this platform?)"
+            reason="npm install of @machinen/cli@0.4.0 + @machinen/runtime@0.4.0 failed on $(uname -m) (packages missing for this platform?)"
             echo "machinen_available=false" >> "$GITHUB_OUTPUT"
             echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -176,6 +181,7 @@ jobs:
           echo "machinen_available=true" >> "$GITHUB_OUTPUT"
 
       - name: Real machinen validation (enforced)
+        id: e2e
         if: steps.probe.outputs.machinen_available == 'true'
         env:
           MACHINEN_RUNTIME_DIR: ${{ steps.probe.outputs.scratch_dir }}
@@ -188,15 +194,21 @@ jobs:
             # The script discovered at runtime that machinen can't run here
             # (e.g. VMM refused by the hypervisor). Honest skip, not success.
             echo "machinen_available=false (runtime probe)"
+            echo "outcome=skipped-at-runtime" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "outcome=ran" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
       - name: Honest result
         if: always()
         run: |
-          if [ "${{ steps.probe.outputs.machinen_available }}" = "true" ]; then
+          # Three honest outcomes — never claim the validation ran when the
+          # e2e itself exited 78 (runtime skip) after a successful probe.
+          if [ "${{ steps.e2e.outputs.outcome }}" = "ran" ]; then
             echo "machinen was installable and KVM is usable: real validation ran (see step above)."
+          elif [ "${{ steps.e2e.outputs.outcome }}" = "skipped-at-runtime" ]; then
+            echo "probe passed but the e2e found machinen unrunnable at runtime (exit 78) — see job summary. No validation ran, none was faked."
           else
             echo "machinen_available=false — see job summary for the honest reason. No validation was faked."
           fi

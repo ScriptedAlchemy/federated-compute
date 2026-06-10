@@ -315,11 +315,11 @@ restores it and the guest process resumes mid-heap. `@machinen/runtime` is an
 pull the ~18MB native package, and the error when it's missing says exactly
 what to install.
 
-Security note: whole-VM snapshot bundles are credential-bearing artifacts. The
-rootdisk and RAM dump include the launcher token and process memory, and the
-current amd64 reseed-stub workaround freezes guest entropy across restores
-(identical RNG/UUID/key state for VMs restored from one bundle) until the CRIU
-snapshot-engine path is reconciled.
+Security note: whole-VM snapshot bundles are credential-bearing artifacts —
+the rootdisk and RAM dump include the launcher token and process memory, so
+treat bundles like secrets. The amd64 reseed workaround performs a *real*
+reseed: the shim feeds the host-provided seed to the guest CSPRNG on restore,
+so VMs restored from one bundle do not share RNG/UUID/key state.
 
 Measured on x86_64/KVM (machinen 0.4.0, nested KVM, warm asset cache):
 
@@ -344,9 +344,13 @@ around inside the driver (each carries a comment at the call site):
    performs the same install in ~5s.
 3. **Restore dies in entropy reseed** — the amd64 base rootfs ships an
    *aarch64* `/sbin/machinen-vmstate-reseed` ("Exec format error" → restore
-   fails with `BOOT_VMSTATE_RESEED_FAILED`). `handle.snapshot()` stubs the
-   binary with `#!/bin/sh; exit 0` before every dump so the frozen state
-   contains a working no-op.
+   fails with `BOOT_VMSTATE_RESEED_FAILED`). `handle.snapshot()` replaces the
+   binary with a functional shell shim before every dump: on restore it
+   credits the host-provided seed to the guest CSPRNG (`RNDADDENTROPY`) and
+   forces an immediate crng rekey (`RNDRESEEDCRNG`), so the guest's
+   randomness is genuinely reseeded instead of frozen. The machinen e2e
+   asserts the property: two VMs restored from one bundle produce different
+   `/dev/urandom` output.
 4. **`fork()` is unreliable on amd64** — the forked sibling does not resume
    dependably. `handle.fork()` throws a clear not-supported-on-amd64 error;
    snapshot + boot-from-bundle covers the clone-a-warm-VM use case meanwhile.

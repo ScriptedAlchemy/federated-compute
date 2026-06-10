@@ -27,8 +27,9 @@ never carry credentials. Hosts surface a guest's `401` as `MachineAuthError`
 
 Security note for whole-VM snapshots: `machinenDriver()` bundles are
 credential-bearing (rootdisk + RAM can include launcher tokens and process
-memory). Its current amd64 reseed-stub workaround also freezes guest entropy
-across restores, so VMs restored from one bundle can share RNG/UUID/key state.
+memory) — treat them like secrets. Its amd64 reseed workaround performs a
+real reseed (the shim feeds the host seed to the guest CSPRNG on restore),
+so VMs restored from one bundle do not share RNG/UUID/key state.
 
 ## `GET /mf/health`
 
