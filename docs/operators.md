@@ -117,8 +117,10 @@ Entry params:
   clone (state + image digest reference) from a live machine — fork-by-fetch.
 - `?version=^1.0.0` — negotiated against the origin manifest **before any
   bytes move**, then re-checked on the booted clone.
-- `?digest=sha256:…` — pin the exact image; resolution fails if the origin
-  offers anything else.
+- `?digest=sha256:…` — pin the exact image. Image pulls fail if the origin
+  offers anything else; snapshot pulls fail if the pulled snapshot references
+  a different image digest ("a warm clone, but only of exactly this code" —
+  live snapshot bytes change per request, so the pin always means the image).
 
 Operational notes:
 

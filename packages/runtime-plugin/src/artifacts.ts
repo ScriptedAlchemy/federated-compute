@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
@@ -159,7 +159,20 @@ async function readVerifiedCache(cachePath: string, hex: string): Promise<Buffer
 async function writeAtomic(cachePath: string, bytes: Buffer | string): Promise<void> {
   const temp = `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
   await writeFile(temp, bytes);
-  await rename(temp, cachePath);
+  try {
+    await rename(temp, cachePath);
+  } catch (error) {
+    // Concurrent writers race the same destination. Content is
+    // digest/content-addressed, so whoever landed first wrote the same
+    // bytes — accept it (rename onto an existing file fails on some
+    // platforms) as long as the destination actually exists.
+    await rm(temp, { force: true });
+    try {
+      await stat(cachePath);
+    } catch {
+      throw error;
+    }
+  }
 }
 
 interface CachedImage {
@@ -294,14 +307,31 @@ async function resolveSnapshot(
   const url = joinArtifactUrl(spec.url!, descriptor.href);
   const res = await fetchOk(spec, url, 'snapshot artifact');
   const snapshotText = await res.text();
-  let snapshot: PulledSnapshot;
+  let parsed: unknown;
   try {
-    snapshot = JSON.parse(snapshotText) as PulledSnapshot;
+    parsed = JSON.parse(snapshotText);
   } catch {
     fail(spec, `snapshot artifact at ${url} is not valid JSON`);
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    const got = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : `a ${typeof parsed}`;
+    fail(spec, `snapshot artifact at ${url} is not a JSON object (got ${got})`);
+  }
+  const snapshot = parsed as PulledSnapshot;
   const imageDigest = parseDigest(spec, snapshot.imageDigest, 'snapshot');
   if (snapshot.state === undefined) fail(spec, `snapshot artifact at ${url} carries no "state"`);
+
+  // A ?digest= pin on a snapshot pull constrains the IMAGE the snapshot
+  // references — "a warm clone, but only of exactly this code". Live
+  // snapshot bytes change per request, so they are the one thing a pin
+  // cannot mean. Checked before any image bytes move.
+  const pinned = spec.params.get('digest');
+  if (pinned && pinned !== snapshot.imageDigest) {
+    fail(
+      spec,
+      `entry pins digest "${pinned}" but the pulled snapshot references image digest "${snapshot.imageDigest}" — the origin is running different code`,
+    );
+  }
 
   // State travels by value; the image only by digest reference. Resolve the
   // reference: the cache first, then the origin's image artifact — but only

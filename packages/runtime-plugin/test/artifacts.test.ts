@@ -286,6 +286,78 @@ describe('resolvePullEntry: snapshot artifacts (fork-by-fetch)', () => {
     ).rejects.toThrow(/snapshot/);
   });
 
+  test('a digest pin on a snapshot pull is honored when it matches the referenced image', async () => {
+    const origin = await snapshotOrigin({ counter: 5 });
+
+    const resolution = await resolvePullEntry(
+      pullSpec(origin.url, `?artifact=snapshot&digest=${IMAGE_DIGEST}`),
+      { cacheDir },
+    );
+
+    const bundle = JSON.parse(await readFile(resolution.localPath, 'utf8'));
+    expect(bundle.state).toEqual({ counter: 5 });
+    expect(await readFile(bundle.image)).toEqual(IMAGE_BYTES);
+  });
+
+  test('a digest pin mismatching the snapshot image fails before any image bytes move', async () => {
+    const origin = await snapshotOrigin();
+    const pinned = `sha256:${'c'.repeat(64)}`;
+
+    await expect(
+      resolvePullEntry(pullSpec(origin.url, `?artifact=snapshot&digest=${pinned}`), { cacheDir }),
+    ).rejects.toThrow(/pins digest .* but the pulled snapshot references image digest/i);
+    // The reference check fails before the image download and before any
+    // bundle is materialized.
+    expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(0);
+    expect(await readdir(cacheDir)).toEqual([]);
+  });
+
+  test('a null snapshot body fails with a machine-named error, not a bare TypeError', async () => {
+    const origin = await startOrigin(
+      {
+        artifacts: {
+          image: imageDescriptor,
+          snapshot: { href: '/mf-snapshot', format: 'app-state@1' },
+        },
+      },
+      {
+        '/mf-snapshot': (res) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('null');
+        },
+      },
+    );
+
+    const error = await resolvePullEntry(pullSpec(origin.url, '?artifact=snapshot'), {
+      cacheDir,
+    }).catch((e: unknown) => e as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/snapshot artifact .* is not a JSON object/);
+    expect((error as Error).message).toContain('stub_machine');
+  });
+
+  test('non-object snapshot bodies (string, array) fail the same machine-named way', async () => {
+    for (const body of ['"warm"', '[1,2,3]', '42']) {
+      const origin = await startOrigin(
+        {
+          artifacts: {
+            image: imageDescriptor,
+            snapshot: { href: '/mf-snapshot', format: 'app-state@1' },
+          },
+        },
+        {
+          '/mf-snapshot': (res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(body);
+          },
+        },
+      );
+      await expect(
+        resolvePullEntry(pullSpec(origin.url, '?artifact=snapshot'), { cacheDir }),
+      ).rejects.toThrow(/is not a JSON object/);
+    }
+  });
+
   test('a snapshot referencing an image the origin does not serve fails clearly', async () => {
     const otherDigest = `sha256:${'b'.repeat(64)}`;
     const origin = await startOrigin(
@@ -313,6 +385,102 @@ describe('resolvePullEntry: snapshot artifacts (fork-by-fetch)', () => {
     await expect(
       resolvePullEntry(pullSpec(origin.url, '?artifact=snapshot'), { cacheDir }),
     ).rejects.toThrow(/references image digest/i);
+  });
+});
+
+describe('resolvePullEntry: adversarial origins (integrity)', () => {
+  test('an artifact endpoint answering HTML fails the digest check and caches nothing', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      {
+        '/mf-image': (res) => {
+          res.writeHead(200, { 'content-type': 'text/html' });
+          res.end('<html><body>Sign in to your captive portal</body></html>');
+        },
+      },
+    );
+
+    await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow(
+      /digest mismatch/i,
+    );
+    expect(await readdir(cacheDir)).toEqual([]);
+  });
+
+  test('a snapshot endpoint answering HTML fails as not-JSON, never a crash', async () => {
+    const origin = await startOrigin(
+      {
+        artifacts: {
+          image: imageDescriptor,
+          snapshot: { href: '/mf-snapshot', format: 'app-state@1' },
+        },
+      },
+      {
+        '/mf-snapshot': (res) => {
+          res.writeHead(200, { 'content-type': 'text/html' });
+          res.end('<!doctype html><h1>502 Bad Gateway</h1>');
+        },
+      },
+    );
+
+    await expect(
+      resolvePullEntry(pullSpec(origin.url, '?artifact=snapshot'), { cacheDir }),
+    ).rejects.toThrow(/is not valid JSON/);
+  });
+
+  test('a truncated download fails the digest and leaves nothing cached or bootable', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      {
+        // A "complete" response carrying only a prefix of the artifact —
+        // what a cut connection or buggy proxy hands back.
+        '/mf-image': (res) => serveImage(res, IMAGE_BYTES.subarray(0, 10)),
+      },
+    );
+
+    await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow(
+      /digest mismatch/i,
+    );
+    // No cached artifact, no temp file litter: a later resolve must re-fetch.
+    expect(await readdir(cacheDir)).toEqual([]);
+  });
+
+  test('after a truncated download, a healthy origin resolves cleanly on retry', async () => {
+    let truncate = true;
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      {
+        '/mf-image': (res) => serveImage(res, truncate ? IMAGE_BYTES.subarray(0, 10) : IMAGE_BYTES),
+      },
+    );
+
+    await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow();
+    truncate = false;
+    const resolution = await resolvePullEntry(pullSpec(origin.url), { cacheDir });
+    expect(await readFile(resolution.localPath)).toEqual(IMAGE_BYTES);
+  });
+
+  test('two concurrent fetches of one digest never tear the cache — both callers win', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      {
+        // Delay the body so both pulls overlap mid-download.
+        '/mf-image': (res) => {
+          setTimeout(() => serveImage(res), 50);
+        },
+      },
+    );
+
+    const [a, b] = await Promise.all([
+      resolvePullEntry(pullSpec(origin.url), { cacheDir }),
+      resolvePullEntry(pullSpec(origin.url), { cacheDir }),
+    ]);
+
+    expect(a.localPath).toBe(b.localPath);
+    expect(await readFile(a.localPath)).toEqual(IMAGE_BYTES);
+    // Exactly one cache entry, zero temp-file litter.
+    expect(await readdir(cacheDir)).toEqual([path.basename(a.localPath)]);
+    // Both raced the miss: two downloads is acceptable, a torn file is not.
+    expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(2);
   });
 });
 

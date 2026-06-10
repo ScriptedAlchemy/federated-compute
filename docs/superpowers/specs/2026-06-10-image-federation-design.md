@@ -373,6 +373,19 @@ Phase 1 landed as scoped. Implementation forced these refinements:
   there is follow-up work, as scoped).
 - Pull resolution shares the plugin's `bootTimeoutMs` budget (it runs inside
   the boot phase); raise it for slow links the same way as for slow boots.
+- **`?digest=` pins on snapshot pulls constrain the image the snapshot
+  references** (review finding): live snapshot bytes change per request, so
+  the pin can only ever mean the underlying code. A mismatch fails before
+  any image bytes move; the spec's original wording left the snapshot case
+  undefined.
+- **Snapshot bodies are validated as JSON objects** before field access
+  (null/array/scalar bodies produce machine-named errors), and cache writes
+  tolerate concurrent same-digest writers (rename-onto-existing fallback);
+  adversarial origins (HTML responses, truncated downloads, racing pulls)
+  are pinned by tests.
+- Phase 1 buffers whole artifacts in memory during download and digest
+  verification — fine at app-bundle sizes; Phase 2's multi-GB vmstate
+  bundles need streaming hash-while-writing and `Range` resume.
 
 ## Recommendation
 
