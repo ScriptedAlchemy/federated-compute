@@ -51,6 +51,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Hosted x64 runners ship /dev/kvm owned root:kvm 0660 with the runner
+      # user outside the kvm group; this is GitHub's documented recipe to make
+      # it usable (same one the Android emulator workflows use). No-op when
+      # the device is absent (arm64 hosted runners).
+      - name: Enable KVM access
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "/dev/kvm absent; nothing to enable"
+          fi
+
       - name: Hardware audit
         id: audit
         run: |
