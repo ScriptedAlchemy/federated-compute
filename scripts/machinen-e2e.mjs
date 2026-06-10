@@ -147,7 +147,7 @@ try {
   kernel = resolveBaseKernel();
   dtb = resolveBaseDtb();
 } catch (err) {
-  unavailable(`machinen base assets missing (run \`npx machinen install\`): ${err?.message ?? err}`);
+  unavailable(`machinen base assets missing (run \`pnpm exec machinen install\`): ${err?.message ?? err}`);
 }
 
 // Errors that mean "machinen can't run here", as opposed to "our validation

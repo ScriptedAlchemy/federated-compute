@@ -8,7 +8,7 @@
 // directory restores it — the counter continues from in-VM process heap.
 //
 // Requires Linux with usable /dev/kvm (or Apple Silicon) and machinen base
-// assets (`npx machinen install`, fetched automatically on first boot).
+// assets (`pnpm exec machinen install`, fetched automatically on first boot).
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';

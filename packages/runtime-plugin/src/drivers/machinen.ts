@@ -184,7 +184,7 @@ export async function loadRuntime(): Promise<MachinenRuntime> {
       throw new Error(
         '[machinen-plugin] machinenDriver needs @machinen/runtime, which is not installed ' +
           '(it is an optional peer dependency). Install it next to this package: ' +
-          '`npm i @machinen/runtime @machinen/cli` then `npx machinen install` to fetch ' +
+          '`pnpm add @machinen/runtime@0.4.0 @machinen/cli@0.4.0` then `pnpm exec machinen install` to fetch ' +
           `base assets. Underlying error: ${(error as Error)?.message ?? error}`,
       );
     },

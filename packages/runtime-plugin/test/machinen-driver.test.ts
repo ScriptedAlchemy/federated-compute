@@ -13,6 +13,8 @@ import { machinenDriver } from '../src/drivers/machinen.js';
 import { parseMachineEntry, type MachineHandle } from '../src/types.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
+const MACHINEN_BIN = path.join(PACKAGE_ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'machinen.cmd' : 'machinen');
 const GUEST_BUNDLE = path.join(REPO_ROOT, 'apps/remote/dist/index.js');
 const TOKEN = 'machinen-vm-secret';
 // Generous: cold boot ~5s + apt+node ~5s + snapshot ~7s + restore ~7s, but
@@ -37,8 +39,11 @@ async function machinenUnavailableReason(): Promise<string | null> {
     try {
       runtime.resolveBaseRootfs();
     } catch {
-      const install = spawnSync('pnpm', ['exec', 'machinen', 'install'], {
-        cwd: path.resolve(import.meta.dirname, '..'),
+      if (!existsSync(MACHINEN_BIN)) {
+        return `repo-local machinen CLI missing at ${MACHINEN_BIN}; run pnpm install`;
+      }
+      const install = spawnSync(MACHINEN_BIN, ['install'], {
+        cwd: PACKAGE_ROOT,
         stdio: 'inherit',
         timeout: 240_000,
       });

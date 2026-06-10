@@ -128,22 +128,31 @@ jobs:
           SCRATCH="$RUNNER_TEMP/machinen-deps"
           mkdir -p "$SCRATCH" && cd "$SCRATCH"
           echo "scratch_dir=$SCRATCH" >> "$GITHUB_OUTPUT"
-          npm init -y > /dev/null
 
           # Pinned to 0.4.0: every workaround in the driver and the e2e
           # script (explicit memory, no provision(), reseed shim, attach-
           # based snapshot) targets this exact release. An unpinned install
           # would silently validate a different runtime than the one the
           # code is written against.
-          if ! npm install --no-audit --no-fund @machinen/cli@0.4.0 @machinen/runtime@0.4.0 > npm-install.log 2>&1; then
-            tail -20 npm-install.log
-            reason="npm install of @machinen/cli@0.4.0 + @machinen/runtime@0.4.0 failed on $(uname -m) (packages missing for this platform?)"
+          cat > package.json <<'JSON'
+          {
+            "private": true,
+            "packageManager": "pnpm@10.34.1",
+            "dependencies": {
+              "@machinen/cli": "0.4.0",
+              "@machinen/runtime": "0.4.0"
+            }
+          }
+          JSON
+          if ! pnpm install --frozen-lockfile=false > pnpm-install.log 2>&1; then
+            tail -20 pnpm-install.log
+            reason="pnpm install of @machinen/cli@0.4.0 + @machinen/runtime@0.4.0 failed on $(uname -m) (packages missing for this platform?)"
             echo "machinen_available=false" >> "$GITHUB_OUTPUT"
             echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo "installed @machinen/cli + @machinen/runtime:"
-          npm ls @machinen/cli @machinen/runtime || true
+          pnpm list @machinen/cli @machinen/runtime || true
 
           if [ "$KVM_USABLE" != "true" ]; then
             reason="/dev/kvm is not usable on the ${{ matrix.runner }} hosted runner (nested virtualization not exposed)"
@@ -152,7 +161,7 @@ jobs:
             exit 0
           fi
 
-          if ! npx machinen install --json > machinen-install.json 2> machinen-install.err; then
+          if ! pnpm exec machinen install --json > machinen-install.json 2> machinen-install.err; then
             tail -20 machinen-install.err
             reason="machinen install (kernel + base rootfs prefetch) failed"
             echo "machinen_available=false" >> "$GITHUB_OUTPUT"
@@ -168,10 +177,10 @@ jobs:
           # guest RAM breaks the x86 32-bit MMIO gap layout and stalls boot;
           # 1 GiB boots everywhere (the e2e script caps itself the same way).
           echo "running machinen smoke boot..."
-          if ! timeout 180 env MACHINEN_MEMORY=1024 npx machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
+          if ! timeout 180 env MACHINEN_MEMORY=1024 pnpm exec machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
               > smoke.log 2>&1 || ! grep -q MACHINEN_SMOKE_OK smoke.log; then
             tail -30 smoke.log
-            reason="machinen's own smoke test (npx machinen boot -- /bin/sh) cannot boot a guest on this runner's hardware ($(uname -m))"
+            reason="machinen's own smoke test (pnpm exec machinen boot -- /bin/sh) cannot boot a guest on this runner's hardware ($(uname -m))"
             echo "machinen_available=false" >> "$GITHUB_OUTPUT"
             echo "- machinen not yet runnable: $reason" >> "$GITHUB_STEP_SUMMARY"
             exit 0

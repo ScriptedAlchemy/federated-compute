@@ -12,5 +12,8 @@
     "demo:gravity": "node scripts/demo-gravity.mjs",
     "bindgen": "node scripts/bindgen.mjs"
   },
-  "packageManager": "pnpm@10.34.1"
+  "packageManager": "pnpm@10.34.1",
+  "devDependencies": {
+    "@machinen/cli": "0.4.0"
+  }
 }
