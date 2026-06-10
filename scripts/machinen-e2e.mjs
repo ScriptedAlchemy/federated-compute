@@ -37,6 +37,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GUEST_BUNDLE = join(repoRoot, 'apps/remote/dist/index.js');
 const GUEST_PORT = 3801;
 const EXIT_UNAVAILABLE = 78;
+// Modest explicit guest RAM. machinen 0.4.0's auto-sizing picks up to 4 GiB,
+// which places the main memory region across the 32-bit MMIO gap and breaks
+// boot on some x86 hosts ("Cannot find an available gap in the 32-bit address
+// range"); 1 GiB is plenty for the guest and boots everywhere.
+const GUEST_MEMORY_MIB = 1024;
 
 const log = (msg) => console.log(`[machinen-e2e] ${msg}`);
 
@@ -77,6 +82,21 @@ if (!existsSync(GUEST_BUNDLE)) {
   fail(`guest bundle missing at ${GUEST_BUNDLE} — run \`pnpm --filter remote build\` first`);
 }
 
+// machinen 0.4.0 ships an arm64 /sbin/machinen-vmstate-reseed in the x64
+// guest payload, so every vmstate restore dies with Exec format error
+// (BOOT_VMSTATE_RESEED_FAILED, exit 126). We drop a functionally equivalent
+// shell shim over it inside the source VM before snapshotting; the restored
+// guest then reseeds /dev/urandom for real and the restore completes.
+// (The CRIU engine is no alternative: guest criu 3.17.1 cannot restore
+// node 18's OpenSSL MADV_WIPEONFORK pages.)
+// TODO: drop once upstream fixes the helper arch in @machinen/native-x64-linux.
+const RESEED_SHIM = `#!/bin/sh
+# x64 shim for machinen 0.4.0's mis-arched arm64 reseed helper.
+# Equivalent behavior: feed the host-provided seed to the guest CSPRNG.
+printf '%s' "$1" > /dev/urandom
+exit 0
+`;
+
 let runtime;
 try {
   const fromDir = process.env.MACHINEN_RUNTIME_DIR
@@ -88,7 +108,27 @@ try {
   unavailable(`@machinen/runtime could not be loaded: ${err?.message ?? err}`);
 }
 
-const { provision, boot, restore, isMachinenError, formatMachinenError } = runtime;
+const {
+  provision,
+  boot,
+  attach,
+  restore,
+  resolveBaseKernel,
+  resolveBaseDtb,
+  isMachinenError,
+  formatMachinenError,
+} = runtime;
+
+// boot() does not auto-resolve the guest kernel the way provision() does;
+// resolve it from the machinen asset cache (populated by `machinen install`).
+let kernel;
+let dtb;
+try {
+  kernel = resolveBaseKernel();
+  dtb = resolveBaseDtb();
+} catch (err) {
+  unavailable(`machinen base assets missing (run \`npx machinen install\`): ${err?.message ?? err}`);
+}
 
 // Errors that mean "machinen can't run here", as opposed to "our validation
 // found a real problem". VMM missing/broken and unfetched base assets are
@@ -134,7 +174,10 @@ async function waitForHealth(port, label, timeoutMs = 120_000) {
   let lastErr;
   while (Date.now() - started < timeoutMs) {
     try {
+      // connection: close — keep-alive sockets must not dangle into the
+      // CRIU dump.
       const res = await fetch(`http://127.0.0.1:${port}/mf/health`, {
+        headers: { connection: 'close' },
         signal: AbortSignal.timeout(2_000),
       });
       if (res.ok) {
@@ -153,7 +196,7 @@ async function waitForHealth(port, label, timeoutMs = 120_000) {
 async function call(port, module, fn, args = []) {
   const res = await fetch(`http://127.0.0.1:${port}/mf/call`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', connection: 'close' },
     body: JSON.stringify({ module, fn, args }),
     signal: AbortSignal.timeout(10_000),
   });
@@ -162,7 +205,17 @@ async function call(port, module, fn, args = []) {
   return body.result;
 }
 
-const freePort = () => 20_000 + Math.floor(Math.random() * 20_000);
+async function freePort() {
+  const { createServer } = await import('node:net');
+  return new Promise((res, rej) => {
+    const srv = createServer();
+    srv.once('error', rej);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => res(port));
+    });
+  });
+}
 
 // --------------------------------------------------------------------- run
 
@@ -195,12 +248,36 @@ try {
       out: imagePath,
       cmd: ['node', '/opt/guest/index.mjs'],
       env: { PORT: String(GUEST_PORT), HOST: '0.0.0.0' },
+      vmmEnv: { MACHINEN_MEMORY: String(GUEST_MEMORY_MIB) },
       timeoutMs: 8 * 60_000,
       install: async (vm) => {
-        await vm.exec('apt-get update');
-        await vm.exec('apt-get install -y --no-install-recommends nodejs ca-certificates');
-        await vm.exec('node --version');
+        // The guest exec agent can come up a beat after the first vsock
+        // connection attempts; probe with short timeouts instead of letting
+        // a half-open first exec eat the full default 300s ceiling.
+        let ready = false;
+        for (let i = 0; i < 8 && !ready; i++) {
+          try {
+            await vm.exec('true', { execTimeoutMs: 15_000 });
+            ready = true;
+          } catch {
+            await new Promise((r) => setTimeout(r, 1_000));
+          }
+        }
+        if (!ready) throw new Error('guest exec agent never became ready');
+        log('install: agent ready, apt-get update ...');
+        await vm.exec('apt-get update', { execTimeoutMs: 120_000 });
+        log('install: apt-get install nodejs ...');
+        // </dev/null matters: through the vsock exec agent dpkg can block on
+        // an stdin stream that never reaches EOF. iptables is required by
+        // criu to lock established TCP connections during the dump.
+        await vm.exec(
+          'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs ca-certificates iptables </dev/null',
+          { execTimeoutMs: 240_000 },
+        );
+        log('install: writing guest bundle ...');
+        await vm.exec('node --version', { execTimeoutMs: 30_000 });
         await vm.writeFile('/opt/guest/index.mjs', bundle, { mode: 0o644 });
+        log('install: done');
       },
     });
   } catch (err) {
@@ -210,13 +287,16 @@ try {
   log(`provisioned ${imagePath} in ${timings.provision_ms}ms`);
 
   // (b) boot with a port forward.
-  const bootPort = freePort();
+  const bootPort = await freePort();
   log(`booting VM with port forward 127.0.0.1:${bootPort} -> guest:${GUEST_PORT} ...`);
   t0 = Date.now();
   try {
     bootVm = await boot({
       image: imagePath,
       name: 'federated-e2e',
+      kernel,
+      dtb,
+      memory: GUEST_MEMORY_MIB,
       portForward: [{ hostPort: bootPort, guestPort: GUEST_PORT }],
       timeoutMs: null,
     });
@@ -228,7 +308,11 @@ try {
   log(`boot -> healthy in ${timings.boot_to_healthy_ms}ms (health poll ${bootHealthMs}ms)`);
 
   // (c) the real protocol, through the real VM.
-  const manifest = await (await fetch(`http://127.0.0.1:${bootPort}/mf-manifest.json`)).json();
+  const manifest = await (
+    await fetch(`http://127.0.0.1:${bootPort}/mf-manifest.json`, {
+      headers: { connection: 'close' },
+    })
+  ).json();
   if (manifest.name !== 'compute_machine' || !manifest.exposes?.['./counter']) {
     throw new Error(`unexpected manifest: ${JSON.stringify(manifest).slice(0, 300)}`);
   }
@@ -241,22 +325,40 @@ try {
   log(`counter incremented to ${two}; guest reports node ${where.node} pid ${where.pid} (${where.platform})`);
 
   // (d) snapshot, kill, restore — boot once, run everywhere.
+  // Patch the broken arm64 reseed helper before the snapshot so the restored
+  // guest (which boots from this VM's rootdisk) can complete its reseed step.
+  await bootVm.writeFile('/sbin/machinen-vmstate-reseed', RESEED_SHIM, { mode: 0o755 });
+
   log('snapshotting ...');
   t0 = Date.now();
-  await bootVm.snapshot({ outDir: snapDir });
+  // Snapshot through an attach handle: machinen 0.4.0's snapshot path can
+  // await errorOutput(), which on a boot-owned handle only resolves when the
+  // VM exits — deadlock. Attach handles return console state immediately,
+  // matching how the machinen CLI itself snapshots.
+  const snapVm = await attach({ pid: bootVm.pid });
+  // Outer race: never let CI sit on a wedged snapshot.
+  await Promise.race([
+    snapVm.snapshot({ outDir: snapDir, timeoutMs: 120_000 }),
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('snapshot exceeded 180s wall-time guard')), 180_000),
+    ),
+  ]);
   timings.snapshot_ms = Date.now() - t0;
   log(`snapshot written to ${snapDir} in ${timings.snapshot_ms}ms`);
 
   log('killing source VM ...');
-  await bootVm.kill();
+  await bootVm.kill().catch(() => {});
   bootVm = undefined;
 
-  const restorePort = freePort();
+  const restorePort = await freePort();
   log(`restoring with port forward 127.0.0.1:${restorePort} -> guest:${GUEST_PORT} ...`);
   t0 = Date.now();
   try {
     restoredVm = await restore({
       snapDir,
+      kernel,
+      dtb,
+      memory: GUEST_MEMORY_MIB,
       portForward: [{ hostPort: restorePort, guestPort: GUEST_PORT }],
       timeoutMs: null,
     });

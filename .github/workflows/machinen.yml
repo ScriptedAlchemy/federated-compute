@@ -157,11 +157,13 @@ jobs:
           echo "machinen assets:" && cat machinen-install.json
 
           # Machinen's own documented smoke test. If machinen cannot boot its
-          # own base image on this hardware (e.g. guest kernel stalls on the
-          # runner's AMD EPYC hosts), that is a machinen-availability problem,
-          # not a failure of our protocol — report it honestly and skip.
+          # own base image on this hardware, that is a machinen-availability
+          # problem, not a failure of our protocol — report it honestly and
+          # skip. MACHINEN_MEMORY=1024: machinen 0.4.0's auto-sized >4 GiB
+          # guest RAM breaks the x86 32-bit MMIO gap layout and stalls boot;
+          # 1 GiB boots everywhere (the e2e script caps itself the same way).
           echo "running machinen smoke boot..."
-          if ! timeout 180 npx machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
+          if ! timeout 180 env MACHINEN_MEMORY=1024 npx machinen boot -- /bin/sh -c 'echo MACHINEN_SMOKE_OK' \
               > smoke.log 2>&1 || ! grep -q MACHINEN_SMOKE_OK smoke.log; then
             tail -30 smoke.log
             reason="machinen's own smoke test (npx machinen boot -- /bin/sh) cannot boot a guest on this runner's hardware ($(uname -m))"
