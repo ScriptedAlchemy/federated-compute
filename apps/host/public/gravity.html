@@ -12,6 +12,8 @@
     --wan: #e5534b;
     --local: #3fb950;
     --db: #58a6ff;
+    --pull: #4dd2bf;
+    --java: #f0883e;
   }
   body {
     background-image:
@@ -136,6 +138,21 @@
   .nodebox.db::before { background: var(--db); box-shadow: 0 0 6px var(--db); }
   .nodebox.an { border-color: rgba(63, 185, 80, .4); color: var(--local); }
   .nodebox.an::before { background: var(--local); box-shadow: 0 0 6px var(--local); }
+  .nodebox.origin { border-color: rgba(77, 210, 191, .4); color: var(--pull); }
+  .nodebox.origin::before { background: var(--pull); box-shadow: 0 0 6px var(--pull); }
+  .nodebox.agent { border-color: rgba(116, 131, 154, .4); color: var(--ink-dim); }
+  .nodebox.agent::before { background: var(--ink-dim); }
+  /* The empty slot: the entry exists in config, the machine doesn't exist yet. */
+  .nodebox.slot { border-style: dashed; color: var(--ink-faint); background: none; }
+  .nodebox.slot::before { background: #2c3640; }
+  .nodebox.slot.filled {
+    border-style: solid; border-color: rgba(63, 185, 80, .5); color: var(--local);
+    background: linear-gradient(180deg, #0e1620, #0a1018);
+    animation: slot-in .6s cubic-bezier(.2, .7, .2, 1);
+  }
+  .nodebox.slot.filled::before { background: var(--local); box-shadow: 0 0 6px var(--local); }
+  @keyframes slot-in { from { transform: scale(.85); opacity: 0; } }
+  .nodebox small { color: var(--ink-faint); font-size: 9px; margin-left: 4px; }
 
   .link {
     display: flex; flex-direction: column; justify-content: center; align-items: center;
@@ -169,6 +186,21 @@
   .link.busy .packet.p3 { animation-delay: .66s; }
   .link.flow-local .packet { background: var(--local); box-shadow: 0 0 10px var(--local); }
   .link.flow-local .packet.p2, .link.flow-local .packet.p3 { animation: none; }
+  /* Artifact transfer: a packet TRAIN, visually distinct from RPC traffic —
+     square teal packets, denser, and a transfer label while it crosses. */
+  .link.flow-artifact .wire::before {
+    background: repeating-linear-gradient(90deg, var(--pull) 0 8px, transparent 8px 16px);
+    background-size: 16px 2px;
+  }
+  .link.flow-artifact .packet {
+    background: var(--pull); box-shadow: 0 0 10px var(--pull);
+    border-radius: 2px; width: 10px;
+  }
+  .link.flow-artifact .packet { animation-duration: .7s; }
+  .link .transfer-label {
+    font-size: 9px; color: var(--pull); letter-spacing: .04em; text-transform: none;
+    min-height: 12px; text-align: center; word-break: break-all;
+  }
   @keyframes fly {
     0% { left: 0; opacity: 0; }
     8% { opacity: 1; }
@@ -241,6 +273,43 @@
     text-shadow: 0 0 22px rgba(var(--acc-rgb), .35);
   }
   .substat { color: var(--ink-dim); font-size: 11px; }
+
+  /* Scenario 2's two beats: deploy (pull accent) then run (local accent). */
+  .beats { display: grid; gap: 10px; }
+  .beat {
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 10px 13px;
+  }
+  .beat .bhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .beat .bno {
+    font-family: var(--display); font-weight: 700; font-size: 11px;
+    letter-spacing: .1em; color: var(--ink-faint);
+  }
+  .beat button.deploy-btn { border-color: rgba(77, 210, 191, .45); color: var(--pull); }
+  .beat button.deploy-btn:hover:not(:disabled) { border-color: var(--pull); box-shadow: 0 0 18px -6px rgba(77, 210, 191, .7); }
+  .beat button:disabled { opacity: .35; cursor: not-allowed; }
+  .deploy-stats { font-size: 10.5px; color: var(--ink-dim); margin-top: 8px; line-height: 1.7; }
+  .deploy-stats b { color: var(--pull); font-weight: 500; }
+  .deploy-stats code { color: var(--ink-dim); font-size: 10px; }
+  .beat .bnote { font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; }
+
+  /* Comparison annotation: the pull is a different unit than per-report bars. */
+  .pull-note {
+    display: none; margin-top: 12px; padding: 8px 11px;
+    border: 1px dashed rgba(77, 210, 191, .35); border-radius: 5px;
+    font-size: 10.5px; color: var(--ink-dim);
+  }
+  .pull-note.visible { display: block; }
+  .pull-note b { color: var(--pull); font-weight: 500; }
+
+  /* Lesson callout: the anti-pattern, taught as text, not buttons. */
+  .callout {
+    border: 1px solid rgba(229, 83, 75, .3); border-left: 3px solid var(--wan);
+    border-radius: 5px; background: rgba(229, 83, 75, .04);
+    padding: 10px 14px; font-size: 11.5px; color: var(--ink-dim); margin-bottom: 12px;
+  }
+  .callout b { color: var(--ink); font-weight: 500; }
+  .footnote { font-size: 10px; color: var(--ink-faint); margin-top: 10px; }
 
   /* ---------- comparison ---------- */
   .speedup-hero {
@@ -327,19 +396,24 @@
 
 <main>
   <section class="panel reveal" id="panel-setup" style="--d:1">
-    <h2>The setup</h2>
+    <h2>The setup — act 07: the economics</h2>
     <p class="lede">
       The database machine lives in <b>eu-west</b>. The consumer (this app) runs in <b>us-east</b>.
       A "top spenders" report needs <b>1 + N queries</b> (list users, then orders per user).
       Same report, two topologies: query the database <b>across the WAN</b> per query — or make
-      <b>one federated call</b> to an analytics machine deployed next to the database, which runs the
-      same queries over same-region hops. The consumer's code style is identical either way:
+      <b>one federated call</b> to an analytics machine next to the database. But eu-west starts
+      with <b>no analytics machine</b>: scenario 2 first <b>deploys it there, by pull, live</b> —
+      the analytics <b>image</b> (its remoteEntry.js analog) crosses the WAN once, then every
+      report stays short. The consumer's code style is identical either way:
       <b>imported functions</b>. Only the federation entries (addresses) differ.
     </p>
     <div class="topo">
       <div class="region">
-        <div class="rname">us-east — consumer</div>
-        <div class="rbody"><span class="nodebox host">host app</span></div>
+        <div class="rname">us-east — consumer + code origin</div>
+        <div class="rbody">
+          <span class="nodebox host">host app</span>
+          <span class="nodebox origin" title="serves /mf-manifest.json, /mf-image — the pull source">analytics_machine<small>origin · publishes /mf-image</small></span>
+        </div>
       </div>
       <div class="link" id="wan-link">
         <span>simulated wan</span>
@@ -347,12 +421,14 @@
           <i class="packet p1"></i><i class="packet p2"></i><i class="packet p3"></i>
         </div>
         <span class="link-lat"><b id="lat-label">+75ms</b> / crossing</span>
+        <span class="transfer-label" id="transfer-label"></span>
       </div>
       <div class="region">
         <div class="rname">eu-west — data region</div>
         <div class="rbody">
           <span class="nodebox db">db_machine</span>
-          <span class="nodebox an">analytics_machine</span>
+          <span class="nodebox agent" title="a ~140-line process whose deployment surface is one federation entry">region agent</span>
+          <span class="nodebox slot" id="analytics-slot">no analytics here yet</span>
         </div>
       </div>
     </div>
@@ -367,6 +443,11 @@
     <section class="panel scenario wan-side reveal" style="--d:2">
       <span class="badge" aria-hidden="true">01</span>
       <h3>Query across regions</h3>
+      <div class="mv" data-mv="attach" style="margin-bottom:10px">
+        <span class="mvname">attach</span>
+        <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">far db</i></span>
+        <span class="mvwhat"><b>calls move</b> — ×(1+N), every one across the WAN</span>
+      </div>
       <p class="desc">The host runs the N+1 itself. Every query is a WAN round-trip: <span class="acc">1 + N crossings</span>.</p>
       <code class="card-code"><span class="kw">const</span> db = <span class="kw">await</span> host.loadRemote(<span class="str">'db_machine/db'</span>);  <span class="cm">// entry crosses the WAN</span>
 <span class="kw">const</span> users = <span class="kw">await</span> db.listUsers();              <span class="cm">// 1 crossing</span>
@@ -386,16 +467,46 @@
 
     <section class="panel scenario colo reveal" style="--d:3">
       <span class="badge" aria-hidden="true">02</span>
-      <h3>The code goes to the data</h3>
-      <p class="desc">One federated call to <span class="acc">analytics_machine</span> — co-located with the database, it runs the same N+1 locally: <span class="acc">1 crossing</span>.</p>
-      <code class="card-code"><span class="kw">const</span> analytics = <span class="kw">await</span> host.loadRemote(<span class="str">'analytics_machine/analytics'</span>);
-<span class="kw">await</span> analytics.topSpenders(5);                  <span class="hl">// 1 crossing — the N+1 runs next to the db</span></code>
-      <div class="xdots" id="colo-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
-      <button id="run-colo">Run report (co-located)</button>
-      <div class="resultline">
-        <span class="stat" id="colo-ms">—</span>
-        <span class="substat" id="colo-detail"></span>
+      <h3>The code goes to the data — live, by pull</h3>
+      <div class="mv" data-mv="deploy" style="margin-bottom:10px">
+        <span class="mvname">code → data</span>
+        <span class="mvdiag"><i>image</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i class="mvhot">data region</i></span>
+        <span class="mvwhat"><b>the artifact moves once</b> — then calls stay short</span>
       </div>
+      <p class="desc">eu-west has no analytics machine until <span class="acc">you deploy it</span>: a region
+        agent pulls the analytics <span class="acc">image</span> from its us-east origin through the WAN,
+        verifies the digest, and boots it next to the db. Then the report is
+        <span class="acc">1 crossing</span>.</p>
+      <code class="card-code"><span class="cm">// the region agent, eu-west — this line IS the deployment</span>
+{ name: <span class="str">'analytics_machine'</span>,
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3896?artifact=image'</span> }
+<span class="cm">// the clone's own db entry re-resolves to the LOCAL eu-west address at boot</span></code>
+      <div class="beats">
+        <div class="beat">
+          <div class="bhead">
+            <span class="bno">beat 1</span>
+            <button id="run-deploy" class="deploy-btn">deploy by pull</button>
+            <span class="chip" id="deploy-state">not deployed</span>
+          </div>
+          <div class="deploy-stats" id="deploy-stats" hidden></div>
+        </div>
+        <div class="beat">
+          <div class="bhead">
+            <span class="bno">beat 2</span>
+            <button id="run-colo" disabled>Run report (co-located)</button>
+          </div>
+          <div class="bnote" id="colo-note">disabled until beat 1 — the host's entry exists in config, but the machine doesn't exist until the pull makes it exist.</div>
+          <div class="xdots" id="colo-dots"><span class="xlabel">each dot = one WAN crossing</span></div>
+          <div class="resultline">
+            <span class="stat" id="colo-ms">—</span>
+            <span class="substat" id="colo-detail"></span>
+          </div>
+        </div>
+      </div>
+      <details class="wiretrace" id="deploy-wire" hidden>
+        <summary>what the deploy moved<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
       <details class="wiretrace" id="colo-wire" hidden>
         <summary>what just happened on the wire<span class="wcount"></span></summary>
         <div class="wirebody"></div>
@@ -416,6 +527,7 @@
         <div class="bartrack"><div class="barfill local" id="bar-colo"></div></div>
       </div>
     </div>
+    <p class="pull-note" id="pull-note"></p>
     <p class="compare-hint">same queries, same answer — the only variable is where the loop runs.</p>
   </section>
 
@@ -429,6 +541,13 @@
 
   <section class="panel reveal" id="panel-lesson" style="--d:6">
     <h2>The lesson</h2>
+    <div class="callout">
+      <b>Why not pull db_machine here instead?</b> Pull = clone. Three consumers pulling the db
+      get three databases that each believe they're the real one — and the data would have moved,
+      which is the thing gravity says not to do. <b>Attach to state you share; pull state you
+      want to own.</b> That's why the db stays a <span style="color: var(--db)">machinen+http://</span>
+      attach entry while analytics travels as a <span style="color: var(--pull)">machinen+pull+http://</span> image.
+    </div>
     <p class="lede">
       <b>Latency is a property of topology, not of code.</b> Both scenarios run byte-identical
       business logic — the same 1 + N queries, the same answer. The only difference is <b>where the
@@ -436,20 +555,26 @@
       distributed-systems performance bug there is (the N+1 problem, at region scale).
     </p>
     <p class="lede">
-      <b>Federation makes topology a config change.</b> Both scenarios are plain
-      <span style="color: var(--local)">host.loadRemote()</span> calls — same runtime, same plugin,
-      same code shape. Moving the computation from "here" to "next to the data" changed which
-      <b>remote entry</b> the host calls, not how it calls it. The analytics machine itself is a
-      consumer too: it reaches db_machine through its own federation entry, just resolved to a
-      local address. Machines federating machines.
+      <b>Federation makes topology a config change — and now you watched the config deploy
+      itself.</b> Both scenarios are plain <span style="color: var(--local)">host.loadRemote()</span>
+      calls; the deploy was one <b>machinen+pull+http://</b> entry on a region agent, warmed on
+      command. The image moved <i>toward the data</i>, digest-verified, and the clone's own
+      db binding re-resolved to the local eu-west address at boot. The analytics machine is a
+      consumer too: machines federating machines.
     </p>
     <p class="lede">
-      <b>With Machinen, "moving the code" is literal.</b> This demo deploys the analytics
-      service in the data region; with <a href="https://machinen.dev">Machinen</a> you snapshot
-      the running analytics machine — heap, state, open connections — and restore it
-      next to the database. That move is implemented here: <code>machinenDriver()</code> freezes a
-      real microVM and restores it from the bundle (<code>pnpm demo:machinen</code>). Boot once,
-      run where the data lives. The federation entry is the only thing that changes.
+      <b>With Machinen, "moving the code" is literal.</b> Here the image (cold code, the strict
+      remoteEntry.js analog) crossed the WAN; page 01's act 04 pulls warm <b>snapshots</b> the
+      same way. With <a href="https://machinen.dev">Machinen</a> you move the whole running VM —
+      heap, open connections — and restore it next to the database: <code>machinenDriver()</code>
+      freezes a real microVM and restores it from the bundle (<code>pnpm demo:machinen</code>).
+      Boot once, run where the data lives. A static registry dir / CDN serves the identical
+      artifact layout — every machine here simply serves its own.
+    </p>
+    <p class="footnote">
+      Honesty notes: the pull protocol is deliberately unauthenticated and loopback-bound —
+      anyone who can reach a machine can take its code (and with snapshots, its memory). The
+      origin here is a running guest; a registry is the same shape, published statically.
     </p>
   </section>
 </main>
@@ -467,7 +592,8 @@ const post = async (url, body) => {
   return data;
 };
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let lastRemote = null, lastColo = null;
+const fmtBytes = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+let lastRemote = null, lastColo = null, lastDeploy = null;
 
 function countUp(el, to, fmt) {
   const from = parseFloat(el.textContent) || 0;
@@ -501,9 +627,10 @@ fetch('/api/region/latency').then(r => r.json()).then(r => {
 }).catch(() => {});
 
 const link = $('wan-link');
-function setFlow(kind) {
-  link.classList.remove('busy', 'flow-wan', 'flow-local');
+function setFlow(kind, label) {
+  link.classList.remove('busy', 'flow-wan', 'flow-local', 'flow-artifact');
   if (kind) link.classList.add('busy', kind);
+  $('transfer-label').textContent = label ?? '';
 }
 
 /* ---------- wire traces: render the host-captured hook events ---------- */
@@ -588,6 +715,96 @@ function renderCompare() {
     countUp($('speedup').querySelector('.xnum'), lastRemote / lastColo, (v) => v.toFixed(1));
   }
 }
+
+/* ---------- deploy-by-pull (scenario 2, beat 1) ---------- */
+function renderPullNote() {
+  if (!lastDeploy) return;
+  const note = $('pull-note');
+  note.classList.add('visible');
+  note.innerHTML = lastDeploy.cacheHit
+    ? `one-time pull: image digest <b>HIT</b> in the agent's cache — 0 bytes re-fetched.`
+    : `one-time pull: <b>${fmtBytes(lastDeploy.bytes)}</b> in <b>${lastDeploy.pullMs}ms</b> — amortized over every report after. (The bars compare per-report latency; the pull is a different unit.)`;
+}
+
+/** All numbers here come from the region agent's own artifact hooks. */
+function renderDeployWire(r) {
+  const details = $('deploy-wire');
+  details.hidden = false;
+  const hops = [
+    `<div class="whop"><span class="wchain">${chainHtml(['browser', 'browser'], ['host', 'host'])}</span>
+      <span class="wdetail"><b>http</b> <code>POST /api/gravity/deploy</code> — the browser never deploys anything; the host forwards one command</span></div>`,
+    `<div class="whop"><span class="wchain">${chainHtml(['host', 'host'], ['machine', 'agent eu-west'])}</span>
+      <span class="wdetail"><b>deploy command</b> — crossed the WAN once (<span class="wms">${Math.round(r.wanMs ?? 0)}ms</span> round-trip incl. everything below); the agent's entire config is the entry <code>${esc(r.entry ?? '')}</code></span></div>`,
+    `<div class="whop"><span class="wchain">${chainHtml(['machine', 'agent'], ['machine', 'origin us-east'])}</span>
+      <span class="wdetail"><b>pull ${esc(r.artifact ?? 'image')}</b> — <code>GET /mf-manifest.json</code> (version negotiated before download) → image digest ${r.cacheHit
+        ? '<b>HIT — served from the agent cache, 0 bytes re-fetched</b>'
+        : `<b>MISS</b> → <code>GET /mf-image</code> <span class="wres">${fmtBytes(r.bytes ?? 0)}</span> across the WAN, sha256-verified`}
+        ${r.digest ? `<code>${esc(String(r.digest).slice(0, 19))}…</code>` : ''} in <span class="wms">${r.pullMs}ms</span></span></div>`,
+    `<div class="whop"><span class="wchain">${chainHtml(['machine', 'agent'], ['machine', 'clone eu-west'])}</span>
+      <span class="wdetail"><b>boot</b> — process driver boots the verified image next to db_machine in <span class="wms">${r.bootMs}ms</span>; the clone's <code>db_machine</code> entry re-resolved to the local eu-west address</span></div>`,
+  ];
+  details.querySelector('.wirebody').innerHTML = hops.join('');
+  details.querySelector('.wcount').textContent = '4 hops';
+}
+
+function setDeployedUI(r, { fresh = false } = {}) {
+  lastDeploy = r;
+  const slot = $('analytics-slot');
+  slot.classList.add('filled');
+  slot.innerHTML = 'analytics_machine<small>deployed by pull</small>';
+  slot.title = `pulled from ${r.entry ?? 'the origin'} — ${r.digest ?? ''}`;
+  $('run-colo').disabled = false;
+  $('colo-note').textContent = fresh
+    ? 'the machine exists now — the pull made it exist. Run the report.'
+    : 'analytics already deployed (this demo run) — run the report.';
+  $('deploy-state').textContent = r.cacheHit ? 'deployed · cache hit' : 'deployed';
+  const stats = $('deploy-stats');
+  stats.hidden = false;
+  stats.innerHTML =
+    `<b>${r.cacheHit ? 'image cache HIT — 0 bytes' : `${fmtBytes(r.bytes ?? 0)} pulled`}</b>` +
+    ` · digest <code>${esc(String(r.digest ?? '?').slice(0, 26))}…</code>` +
+    ` · pull <b>${r.pullMs}ms</b> + boot <b>${r.bootMs}ms</b>` +
+    (r.wanMs ? ` · ${Math.round(r.wanMs)}ms end-to-end over the WAN` : '');
+  renderPullNote();
+}
+
+$('run-deploy').onclick = async () => {
+  const btn = $('run-deploy');
+  btn.disabled = true;
+  $('deploy-state').textContent = 'pulling image…';
+  setFlow('flow-artifact', 'image crossing the WAN…');
+  try {
+    const r = await post('/api/gravity/deploy', {});
+    if (r.error) {
+      $('deploy-state').textContent = 'deploy failed';
+      $('deploy-stats').hidden = false;
+      $('deploy-stats').innerHTML = `<span style="color: var(--wan)">error: ${esc(r.error)}</span>`;
+      btn.disabled = false;
+      return;
+    }
+    setFlow('flow-artifact', `${fmtBytes(r.bytes ?? 0)} · ${esc(String(r.digest ?? '').slice(0, 16))}… · ${r.cacheHit ? 'hit' : 'miss'}`);
+    setDeployedUI(r, { fresh: !r.alreadyDeployed });
+    renderDeployWire(r);
+    setTimeout(() => setFlow(null), REDUCED ? 0 : 1800);
+  } catch {
+    btn.disabled = false;
+    setFlow(null);
+  }
+};
+
+// Page (re)load mid-demo: reflect what the region agent says is already true.
+fetch('/api/gravity/state').then((r) => r.json()).then((s) => {
+  if (s.agent !== 'reachable') {
+    $('run-deploy').disabled = true;
+    $('deploy-state').textContent = 'region agent unreachable';
+    $('colo-note').textContent = 'no region agent — run the demo via scripts/demo-web.mjs to deploy.';
+    return;
+  }
+  if (s.deployed) {
+    setDeployedUI(s.deployed);
+    $('run-deploy').disabled = true;
+  }
+}).catch(() => {});
 
 $('run-remote').onclick = async () => {
   $('remote-ms').textContent = '…';
