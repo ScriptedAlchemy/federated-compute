@@ -8,7 +8,10 @@ const hostname = process.env.HOST ?? '127.0.0.1';
 
 const guest = createGuestRuntime({ name: 'compute_machine', version: '1.0.0', exposes, state });
 
-serveGuest(guest, { port, hostname }).then((server) => {
+// Publish this machine's own bundle as a pull-federation artifact: consumers
+// with a `machinen+pull+http://...` entry can fetch it (or a warm snapshot
+// via /mf-snapshot) and boot their own clone.
+serveGuest(guest, { port, hostname, imagePath: process.argv[1] }).then((server) => {
   console.log(`[remote] machine guest listening on ${hostname}:${server.port}`);
 
   const shutdown = async (signal: string) => {

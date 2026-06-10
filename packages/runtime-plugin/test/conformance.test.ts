@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
@@ -132,6 +133,36 @@ for (const target of targets) {
       expect(res.status).toBe(target.types.status);
       if (target.types.status === 200) {
         expect(await res.text()).toContain(target.types.contains);
+      }
+    });
+
+    test('artifact endpoints follow the capability gate (pull federation)', { timeout: 30_000 }, async () => {
+      const { handle, port } = await bootOnce(target);
+      const manifest = await handle.manifest();
+
+      const image = manifest.artifacts?.image;
+      if (image) {
+        // An advertised image must be fetchable and digest-true.
+        const res = await fetch(`http://127.0.0.1:${port}${image.href}`);
+        expect(res.status).toBe(200);
+        const bytes = Buffer.from(await res.arrayBuffer());
+        expect(`sha256:${createHash('sha256').update(bytes).digest('hex')}`).toBe(image.digest);
+      } else {
+        // Unadvertised capability: the endpoint must answer 404/501, never 200.
+        const res = await fetch(`http://127.0.0.1:${port}/mf-image`);
+        expect([404, 501]).toContain(res.status);
+      }
+
+      const snapshot = manifest.artifacts?.snapshot;
+      if (snapshot) {
+        const res = await fetch(`http://127.0.0.1:${port}${snapshot.href}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { imageDigest?: string; state?: unknown };
+        expect(body.imageDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(body).toHaveProperty('state');
+      } else {
+        const res = await fetch(`http://127.0.0.1:${port}/mf-snapshot`);
+        expect([404, 501]).toContain(res.status);
       }
     });
 

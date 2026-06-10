@@ -76,7 +76,7 @@ export {
 } from './types.js';
 export { inProcessDriver } from './drivers/in-process.js';
 export { httpAttachDriver, httpMachineHandle } from './drivers/http.js';
-export { processDriver, resolveBootCommand, type BootCommandMap } from './drivers/process.js';
+export { getFreePort, processDriver, resolveBootCommand, type BootCommandMap } from './drivers/process.js';
 export {
   isMachinenSnapshotDir,
   machinenDriver,
