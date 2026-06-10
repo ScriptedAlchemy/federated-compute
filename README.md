@@ -264,8 +264,35 @@ Requires Node 22+, a JDK 21+ for the Java machine, and Python 3 for the
 Python machine. CI runs the full suite plus all three demos and the web
 demo smoke checks.
 
+## Real Machinen validation in CI
+
+The main CI lane uses the process driver (a simulation). A separate lane —
+`.github/workflows/machinen.yml` — validates against **real Machinen**
+(`@machinen/runtime`, published on npm): it provisions an image containing the
+real Node guest (`apps/remote/dist/index.js`), boots it in a real microVM with
+a port forward, exercises `/mf/health`, `/mf-manifest.json`, and live
+`./counter` calls, then snapshots, kills, and restores the VM and asserts the
+counter continues — the boot-once-run-everywhere claim, for real, with boot
+and restore wall times reported.
+
+The lane runs on both `ubuntu-24.04` (x64, hosted runners expose `/dev/kvm`)
+and `ubuntu-24.04-arm` (arm64, hosted runners currently have **no** `/dev/kvm`
+— nested virtualization isn't exposed on Azure arm64 VMs). Every run writes a
+hardware audit to the job summary and probes honestly: if `@machinen/*`
+packages can't install or KVM isn't usable, the job reports
+"machinen not yet runnable: <reason>" and `machinen_available=false` instead
+of faking success. The moment machinen installs and boots on a leg, that leg
+is enforced — validation failures fail the job. Run it anywhere compatible
+with `node scripts/machinen-e2e.mjs` (exit 78 = machinen unavailable, 1 =
+validation failed).
+
+Note: typical x86_64 dev boxes without Apple Silicon / arm64 KVM were the
+original blocker; machinen now ships `@machinen/native-x64-linux`, so any
+Linux machine with usable `/dev/kvm` can run the validation locally too.
+
 ## Status
 
-Experimental. The Machinen runtime source isn't public yet; the process driver
-simulates the boot/port-forward model and the attach driver covers deployed
-machines, so the binding layer is real today and the VM layer swaps in later.
+Experimental. The binding layer is real today; the process driver simulates
+the boot/port-forward model for fast local dev, and the real-VM layer is
+validated continuously by the Machinen CI lane above as `@machinen/*`
+packages and runner hardware allow.
