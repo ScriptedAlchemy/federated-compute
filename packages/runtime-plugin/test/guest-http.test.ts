@@ -1,6 +1,11 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import http from 'node:http';
-import { afterAll, describe, expect, test } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createGuestRuntime, serveGuest, type GuestServer, type ServeGuestOptions } from '../src/guest.js';
+import type { MachineExposeManifest } from '../src/types.js';
 import { httpMachineHandle } from '../src/drivers/http.js';
 import {
   GuestError,
@@ -356,6 +361,142 @@ describe('guest state capture (process-driver snapshots)', () => {
       ok: false,
       error: { message: 'corrupt snapshot', type: 'TypeError' },
     });
+  });
+});
+
+describe('guest artifact endpoints (pull federation)', () => {
+  let imageFile: string;
+  let imageBytes: Buffer;
+  let imageDigest: string;
+
+  beforeAll(async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'mf-image-'));
+    imageFile = path.join(dir, 'guest.mjs');
+    imageBytes = Buffer.from('// pretend guest bundle\nconsole.log("hi");\n');
+    await writeFile(imageFile, imageBytes);
+    imageDigest = `sha256:${createHash('sha256').update(imageBytes).digest('hex')}`;
+  });
+
+  function statefulConfig(name = 'artifact_guest') {
+    let counter = 0;
+    return {
+      name,
+      exposes: {
+        './counter': {
+          increment: () => ++counter,
+          current: () => counter,
+        },
+      },
+      state: {
+        dehydrate: () => ({ counter }),
+        rehydrate: (state: unknown) => {
+          counter = (state as { counter: number }).counter;
+        },
+      },
+    };
+  }
+
+  async function startArtifactGuest() {
+    const guest = createGuestRuntime(statefulConfig());
+    const server = await serveGuest(guest, { port: 0, imagePath: imageFile });
+    servers.push(server);
+    return server;
+  }
+
+  test('manifest advertises image and snapshot artifacts with digest, ext, and platform', async () => {
+    const server = await startArtifactGuest();
+    const manifest = (await (
+      await fetch(`http://127.0.0.1:${server.port}/mf-manifest.json`)
+    ).json()) as MachineExposeManifest;
+
+    expect(manifest.artifacts?.image).toEqual({
+      href: '/mf-image',
+      format: 'guest-bundle',
+      mediaType: 'text/javascript',
+      digest: imageDigest,
+      ext: '.mjs',
+      bytes: imageBytes.length,
+      platform: 'any',
+    });
+    expect(manifest.artifacts?.snapshot).toEqual({
+      href: '/mf-snapshot',
+      format: 'app-state@1',
+      platform: 'any',
+    });
+  });
+
+  test('GET /mf-image serves the exact bytes with digest and format headers', async () => {
+    const server = await startArtifactGuest();
+    const res = await fetch(`http://127.0.0.1:${server.port}/mf-image`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-mf-digest')).toBe(imageDigest);
+    expect(res.headers.get('x-mf-format')).toBe('guest-bundle');
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(imageBytes);
+  });
+
+  test('GET /mf-snapshot dehydrates fresh state with the image digest reference', async () => {
+    const server = await startArtifactGuest();
+    const handle = httpMachineHandle(`http://127.0.0.1:${server.port}`);
+    await handle.call('./counter', 'increment', []);
+    await handle.call('./counter', 'increment', []);
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/mf-snapshot`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const snapshot = (await res.json()) as {
+      name: string;
+      imageDigest: string;
+      state: unknown;
+      createdAt: string;
+    };
+    expect(snapshot.name).toBe('artifact_guest');
+    expect(snapshot.imageDigest).toBe(imageDigest);
+    expect(snapshot.state).toEqual({ counter: 2 });
+    expect(new Date(snapshot.createdAt).getTime()).not.toBeNaN();
+
+    // The snapshot is live, not a stale capture: the next GET sees new state.
+    await handle.call('./counter', 'increment', []);
+    const next = (await (await fetch(`http://127.0.0.1:${server.port}/mf-snapshot`)).json()) as {
+      state: unknown;
+    };
+    expect(next.state).toEqual({ counter: 3 });
+  });
+
+  test('guests without imagePath answer 404 and advertise no artifacts (capability-gated)', async () => {
+    const guest = createGuestRuntime(statefulConfig('no_artifact_guest'));
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+
+    const manifest = (await (
+      await fetch(`http://127.0.0.1:${server.port}/mf-manifest.json`)
+    ).json()) as MachineExposeManifest;
+    expect(manifest.artifacts).toBeUndefined();
+    expect((await fetch(`http://127.0.0.1:${server.port}/mf-image`)).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${server.port}/mf-snapshot`)).status).toBe(404);
+  });
+
+  test('stateless guests with imagePath publish the image but no snapshot', async () => {
+    const guest = createGuestRuntime({
+      name: 'stateless_artifact_guest',
+      exposes: { './math': { add: (a: number, b: number) => a + b } },
+    });
+    const server = await serveGuest(guest, { port: 0, imagePath: imageFile });
+    servers.push(server);
+
+    const manifest = (await (
+      await fetch(`http://127.0.0.1:${server.port}/mf-manifest.json`)
+    ).json()) as MachineExposeManifest;
+    expect(manifest.artifacts?.image?.digest).toBe(imageDigest);
+    expect(manifest.artifacts?.snapshot).toBeUndefined();
+    expect((await fetch(`http://127.0.0.1:${server.port}/mf-image`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${server.port}/mf-snapshot`)).status).toBe(404);
+  });
+
+  test('serveGuest rejects a missing image file at startup, not at request time', async () => {
+    const guest = createGuestRuntime(statefulConfig('broken_artifact_guest'));
+    await expect(
+      serveGuest(guest, { port: 0, imagePath: '/no/such/file/anywhere.mjs' }),
+    ).rejects.toThrow(/imagePath/);
   });
 });
 

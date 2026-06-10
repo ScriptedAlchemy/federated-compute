@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
+import path from 'node:path';
 import { generateBindings, isJsReservedWord } from './bindgen.js';
 import { GuestError } from './errors.js';
-import type { FunctionSignature, MachineExposeManifest } from './types.js';
+import type { ArtifactDescriptor, FunctionSignature, MachineExposeManifest } from './types.js';
 
 type AnyFn = (...args: never[]) => unknown;
 
@@ -157,7 +160,60 @@ export interface ServeGuestOptions {
    * reveal file paths and internals, so sending them is a deliberate choice.
    */
   exposeStacks?: boolean;
+  /**
+   * Path to this guest's own program artifact (usually `process.argv[1]`).
+   * Enables pull federation: the manifest advertises an `artifacts` block,
+   * `GET /mf-image` serves the program, and — when the guest also has state
+   * support — `GET /mf-snapshot` serves fresh warm clones. Off by default:
+   * anyone who can reach the guest can take its code (and with snapshots,
+   * its memory), so publishing artifacts is a deliberate choice.
+   */
+  imagePath?: string;
 }
+
+/** Drivers pick boot commands by extension, so cached pulls must keep it. */
+const IMAGE_MEDIA_TYPES: Record<string, string> = {
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.cjs': 'text/javascript',
+  '.jar': 'application/java-archive',
+  '.py': 'text/x-python',
+};
+
+interface ImageArtifact {
+  bytes: Buffer;
+  descriptor: ArtifactDescriptor;
+}
+
+async function loadImageArtifact(imagePath: string): Promise<ImageArtifact> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(imagePath);
+  } catch (error) {
+    throw new Error(
+      `[machinen-guest] imagePath "${imagePath}" is not readable: ${(error as Error).message}`,
+    );
+  }
+  const ext = path.extname(imagePath);
+  return {
+    bytes,
+    descriptor: {
+      href: '/mf-image',
+      format: 'guest-bundle',
+      mediaType: IMAGE_MEDIA_TYPES[ext] ?? 'application/octet-stream',
+      digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      ext,
+      bytes: bytes.length,
+      platform: 'any',
+    },
+  };
+}
+
+const SNAPSHOT_DESCRIPTOR: ArtifactDescriptor = {
+  href: '/mf-snapshot',
+  format: 'app-state@1',
+  platform: 'any',
+};
 
 function errorBody(error: unknown, exposeStacks: boolean) {
   const err = error as Error;
@@ -229,11 +285,19 @@ async function readJsonBody(
  * Serve a guest runtime over HTTP (`GET /mf-manifest.json`, `GET /mf/health`,
  * `POST /mf/call`). Streaming functions respond as NDJSON. Under
  * `machinenDriver()` this listens inside the microVM behind a port forward.
+ * With `imagePath` the guest also publishes pull-federation artifacts
+ * (`GET /mf-image`, `GET /mf-snapshot`).
  */
-export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
+export async function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
   const hostname = opts.hostname ?? '127.0.0.1';
   const exposeStacks = opts.exposeStacks ?? false;
   const guestName = guest.manifest().name;
+  // Read + hash once at startup: a missing image fails the boot loudly, and
+  // /mf-image can never drift from the digest the manifest advertised.
+  const image = opts.imagePath ? await loadImageArtifact(opts.imagePath) : undefined;
+  const artifacts: MachineExposeManifest['artifacts'] = image
+    ? { image: image.descriptor, ...(guest.state ? { snapshot: SNAPSHOT_DESCRIPTOR } : {}) }
+    : undefined;
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -244,7 +308,29 @@ export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promis
       }
       if (req.method === 'GET' && req.url === '/mf-manifest.json') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(guest.manifest()));
+        res.end(JSON.stringify({ ...guest.manifest(), ...(artifacts ? { artifacts } : {}) }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/mf-image' && image) {
+        res.writeHead(200, {
+          'content-type': image.descriptor.mediaType ?? 'application/octet-stream',
+          'content-length': image.bytes.length,
+          'x-mf-digest': image.descriptor.digest!,
+          'x-mf-format': image.descriptor.format,
+        });
+        res.end(image.bytes);
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/mf-snapshot' && image && guest.state) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(
+          JSON.stringify({
+            name: guestName,
+            imageDigest: image.descriptor.digest,
+            state: guest.state.dehydrate(),
+            createdAt: new Date().toISOString(),
+          }),
+        );
         return;
       }
       // Type distribution: the machine's own bindings, MF's @mf-types analog.
