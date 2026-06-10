@@ -31,6 +31,14 @@ export {
   type MachinesOptions,
 } from './client.js';
 export {
+  MACHINEN_CONFIG_FILENAME,
+  findMachinenConfigPath,
+  loadMachinenConfig,
+  parseMachinenConfig,
+  type MachinenConfig,
+  type MachinenConfigMachine,
+} from './config.js';
+export {
   formatMachineEntry,
   isMachineEntry,
   normalizeExpose,
