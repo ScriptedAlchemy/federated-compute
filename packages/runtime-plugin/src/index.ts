@@ -18,6 +18,13 @@ export {
   type MachineMetrics,
 } from './policy.js';
 export {
+  runBindgenFromConfig,
+  type BindgenFileStatus,
+  type BindgenMachineResult,
+  type BindgenRunOptions,
+  type BindgenRunResult,
+} from './bindgen-run.js';
+export {
   bindingExportNames,
   fetchBindingsSource,
   fetchMachineManifest,
