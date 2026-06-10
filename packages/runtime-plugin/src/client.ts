@@ -239,7 +239,11 @@ export function configureMachines(options: MachinesOptions): void {
   if (defaultClient) {
     throw new Error('[machinen] configureMachines() must run before any machine call');
   }
-  defaultOptions = { ...defaultOptions, ...options };
+  const versions =
+    defaultOptions.versions || options.versions
+      ? { ...defaultOptions.versions, ...options.versions }
+      : undefined;
+  defaultOptions = { ...defaultOptions, ...options, ...(versions ? { versions } : {}) };
 }
 
 export function getMachines(): MachinesClient {
@@ -250,6 +254,12 @@ export function getMachines(): MachinesClient {
 export function resetMachines(): void {
   defaultClient = undefined;
   defaultOptions = {};
+}
+
+function rememberDefaultVersionPin(machineName: string, opts?: MachineModuleOptions): void {
+  if (!opts?.version) return;
+  defaultOptions.versions ??= {};
+  defaultOptions.versions[machineName] ??= opts.version;
 }
 
 /**
@@ -263,6 +273,7 @@ export function machineModule<M extends AnyModule>(
   modulePath: string,
   opts?: MachineModuleOptions,
 ): M {
+  rememberDefaultVersionPin(machineName, opts);
   let mod: AnyModule | undefined;
   const streams = new Set(opts?.streams ?? []);
   const wrappers = new Map<string, AnyFn>();

@@ -3,6 +3,7 @@ import {
   configureMachines,
   createMachines,
   envKeyFor,
+  getMachines,
   machineModule,
   resetMachines,
 } from '../src/client.js';
@@ -228,6 +229,15 @@ describe('default client', () => {
 
     const math = machineModule<MathModule>(name, './math', { streams: ['countdown'] });
     await expect(math.add(20, 22)).resolves.toBe(42);
+  });
+
+  test('generated module versions are registered before default warm()', async () => {
+    const { name, entry } = unique('dc_warm_pin');
+    configureMachines({ remotes: { [name]: entry }, driver: inProcessDriver(demoGuest(name)) });
+
+    machineModule<MathModule>(name, './math', { version: '^9.0.0' });
+
+    await expect(getMachines().warm()).rejects.toThrow(MachineVersionError);
   });
 
   test('configureMachines after first use throws', async () => {
