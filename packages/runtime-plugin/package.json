@@ -14,6 +14,7 @@
     "rpc",
     "bindgen",
     "microvm",
+    "kvm",
     "runtime-plugin"
   ],
   "type": "module",

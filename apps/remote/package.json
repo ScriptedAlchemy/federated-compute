@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Machine guest service: exposes functions Module Federation-style; runs inside the (simulated) machine.",
+  "description": "Machine guest service: exposes functions Module Federation-style; runs inside the machine (local child process or real machinen microVM).",
   "scripts": {
     "build": "rsbuild build",
     "start": "node dist/index.js"

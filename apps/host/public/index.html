@@ -347,7 +347,7 @@
 
   <section class="panel reveal" id="panel-state" style="--d:4">
     <h2>Machine-owned state</h2>
-    <p class="concept"><b>Concept: state has an address.</b> Each counter lives inside its machine, not in this app. Freeze a machine and its counter travels with it — that's the snapshot demo (<code>pnpm demo:snapshot</code>).</p>
+    <p class="concept"><b>Concept: state has an address.</b> Each counter lives inside its machine, not in this app. Freeze a machine and its counter travels with it — that's the snapshot demo (<code>pnpm demo:snapshot</code>), and the real-VM variant freezes the whole microVM, heap and all (<code>pnpm demo:machinen</code>).</p>
     <div class="row counter-row" data-acc="node"><button data-counter="compute_machine">node +1</button><span class="counterval" id="c-compute_machine">—</span></div>
     <div class="row counter-row" data-acc="java"><button data-counter="java_machine">java +1</button><span class="counterval" id="c-java_machine">—</span></div>
     <div class="row counter-row" data-acc="python"><button data-counter="python_machine">python +1</button><span class="counterval" id="c-python_machine">—</span></div>

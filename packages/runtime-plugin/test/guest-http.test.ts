@@ -300,7 +300,7 @@ describe('guest over HTTP', () => {
   });
 });
 
-describe('guest state capture (snapshot simulation)', () => {
+describe('guest state capture (process-driver snapshots)', () => {
   async function startStatefulGuest() {
     let counter = 0;
     const guest = createGuestRuntime({

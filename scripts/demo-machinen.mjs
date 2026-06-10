@@ -91,7 +91,7 @@ try {
   console.log('\n=== Verdict ===');
   console.log('  The counter went 1,2,3 in one VM, was frozen mid-heap, and continued 3 -> 4');
   console.log('  in a VM restored by a different federation client. Boot once, run everywhere —');
-  console.log('  with real microVMs, not process simulations.');
+  console.log('  with real microVMs, not local child processes.');
   console.log(
     `  timings: cold boot+call ${timings.coldBootAndFirstCall}, warm calls ${timings.twoWarmCalls}, ` +
       `snapshot ${timings.snapshot}, restore+call ${timings.restoreAndFirstCall}`,

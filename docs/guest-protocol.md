@@ -110,12 +110,14 @@ Machines that can capture warm state advertise `"state"` in
   failures answer `200` with the `{ "ok": false }` error envelope.
 
 Machines without the capability respond `501`. This powers the process
-driver's snapshot/restore simulation of Machinen's "boot once, run
-everywhere": `handle.snapshot()` writes a `.snap` bundle (state + image
+driver's snapshot/restore — the app-state flavor of Machinen's "boot once,
+run everywhere": `handle.snapshot()` writes a `.snap` bundle (state + image
 reference, like Machinen bundles remembering their rootfs tarball), and
 booting an entry whose image is a `.snap` restores instead of cold-booting.
-A real `@machinen/runtime` driver snapshots the entire microVM (memory, open
-files, timers) and does not need these endpoints.
+Machinen-backed machines (`machinenDriver()`) do not need these endpoints:
+the driver snapshots the entire microVM — memory, open files, timers — so
+the guest needs no state cooperation at all. `/mf/state` remains the
+protocol for process-driver snapshots.
 
 ## `POST /mf/call`
 

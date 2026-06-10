@@ -106,10 +106,11 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
 - Machine access is a `MachineDriver`:
   - `httpAttachDriver()` — attach to a deployed machine (`machinen+http://...`),
     the containment-preserving default.
-  - `processDriver()` — boot an image as a local child process (stand-in for
-    `@machinen/runtime`'s `boot()` until its source is public). Allocates ports,
-    injects auth tokens, picks the boot command by image type (`.js` → node,
-    `.java` → java source mode, `.jar` → `java -jar`, `.py` → python3, extensible).
+  - `processDriver()` — boot an image as a local child process: the lightweight
+    local driver for dev and tests (no VMs, instant boots, app-state `.snap`
+    bundles). Allocates ports, injects auth tokens, picks the boot command by
+    image type (`.js` → node, `.java` → java source mode, `.jar` → `java -jar`,
+    `.py` → python3, extensible).
   - `inProcessDriver()` — same-process guest, used by tests.
   - `machinenDriver()` — the real thing: boots `machinen://` entries as
     actual microVMs via `@machinen/runtime` (KVM/HVF), with whole-VM
@@ -132,7 +133,8 @@ tap-and-emit shape:
 | `beforeFork` / `onForked` | around `plugin.forkMachine(name)` |
 
 Snapshot/fork mirror Machinen's signature operations and delegate to the
-driver's handle, so a real microVM driver gets them for free.
+driver's handle: the process driver freezes app state into `.snap` bundles,
+`machinenDriver()` dumps the whole microVM.
 
 ## Boot once, run everywhere
 
@@ -147,10 +149,16 @@ Two scenarios, both through federation (`pnpm demo:snapshot`):
    machine**, which continues exactly where it left off (the demo proves it
    with counters that survive the move across all three languages).
 
-Guests opt in via the protocol's `state` capability (`GET/POST /mf/state`) —
-the process driver's stand-in for a VM memory dump. With `machinenDriver()`
-the same `MachineDriver` interface snapshots whole microVMs for real: no
-guest cooperation needed, the heap simply survives (`pnpm demo:machinen`).
+The same story runs at two depths:
+
+- **App-state snapshots** (process driver): guests opt in via the protocol's
+  `state` capability (`GET/POST /mf/state`); `.snap` bundles are tiny
+  (~190 bytes for the demo counters) and freeze/restore is effectively
+  instant — ideal for dev loops and CI.
+- **Whole-VM snapshots** (`machinenDriver()`): the same `MachineDriver`
+  interface dumps the entire microVM — RAM, rootdisk, vCPU state, ~2.5GB,
+  ~7s — with **zero guest cooperation**: no `/mf/state`, the heap simply
+  survives (`pnpm demo:machinen`).
 
 ## Interactive demo
 
@@ -178,8 +186,10 @@ spenders" report needs 1 + N queries:
   (machine-to-machine federation). 1 crossing ≈ 200ms, ~10-20x faster.
 
 The consumer's code is import-shaped either way; only the federation entries
-(addresses) differ. With real Machinen, "moving the code" is a snapshot
-restored next to the data — the topology change needs no code change.
+(addresses) differ. And "moving the code" as a snapshot restored next to the
+data is implemented, not hypothetical: `machinenDriver()` freezes a running
+microVM and a `machinen://<snapDir>` entry restores it anywhere
+(`pnpm demo:machinen`) — the topology change needs no code change.
 
 ## What is this for?
 
@@ -346,7 +356,8 @@ without interface changes.
 
 ## Real Machinen validation in CI
 
-The main CI lane uses the process driver (a simulation). A separate lane —
+The main CI lane uses the process driver (fast, no VM hardware needed). A
+separate lane —
 `.github/workflows/machinen.yml` — validates against **real Machinen**
 (`@machinen/runtime`, published on npm): it provisions an image containing the
 real Node guest (`apps/remote/dist/index.js`), boots it in a real microVM with
@@ -374,8 +385,10 @@ Linux machine with usable `/dev/kvm` can run the validation locally too.
 
 Experimental. The binding layer is real today, and so is the VM layer:
 `machinenDriver()` boots, snapshots, and restores actual microVMs through
-`@machinen/runtime` (see [Real Machinen driver](#real-machinen-driver)). The
-process driver remains the fast local-dev simulation of the same
-boot/port-forward model, and the Machinen CI lane above keeps the real-VM
-path continuously validated as `@machinen/*` releases and runner hardware
-evolve.
+`@machinen/runtime` (published on npm; see
+[Real Machinen driver](#real-machinen-driver)), proven end to end on
+x86_64/KVM with the upstream 0.4.0 quirks documented and worked around. The
+process driver is the lightweight local driver — same boot/port-forward
+model, child processes instead of VMs — for dev loops and tests, and the
+Machinen CI lane above keeps the real-VM path continuously validated as
+`@machinen/*` releases and runner hardware evolve.

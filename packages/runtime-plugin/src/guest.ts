@@ -21,8 +21,9 @@ export interface GuestConfig {
   exposes: Record<string, Record<string, ExposedFunction>>;
   /**
    * Optional state capture for snapshot/restore: dehydrate returns the
-   * machine's warm state, rehydrate resumes from it. The process-driver
-   * stand-in for a VM memory dump.
+   * machine's warm state, rehydrate resumes from it. This is how
+   * process-driver snapshots work; machinen-backed machines don't need it —
+   * `machinenDriver()` dumps the whole VM.
    */
   state?: {
     dehydrate(): unknown;
@@ -236,8 +237,8 @@ async function readJsonBody(
 
 /**
  * Serve a guest runtime over HTTP (`GET /mf-manifest.json`, `GET /mf/health`,
- * `POST /mf/call`). Streaming functions respond as NDJSON. In a real Machinen
- * deployment this listens inside the VM on a port-forwarded port.
+ * `POST /mf/call`). Streaming functions respond as NDJSON. Under
+ * `machinenDriver()` this listens inside the microVM behind a port forward.
  */
 export function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): Promise<GuestServer> {
   const hostname = opts.hostname ?? '127.0.0.1';

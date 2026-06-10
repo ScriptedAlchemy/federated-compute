@@ -72,11 +72,12 @@ export function buildGuestEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 /**
- * Driver that boots the machine guest as a local child process — the stand-in
- * for `@machinen/runtime`'s `boot()` until its source is public. The entry's
- * image is the guest program (`.js`/`.java`/`.jar`/`.py`...).
- * `handle.snapshot()` freezes warm state into a `.snap` bundle that remembers
- * its image; booting a `machinen://*.snap` entry restores instead of cold-booting.
+ * Driver that boots the machine guest as a local child process — the
+ * lightweight local driver for dev and tests, alongside `machinenDriver()`
+ * (real microVMs, whole-VM snapshots). The entry's image is the guest program
+ * (`.js`/`.java`/`.jar`/`.py`...). `handle.snapshot()` freezes the guest's
+ * app state (via `GET /mf/state`) into a `.snap` bundle that remembers its
+ * image; booting a `machinen://*.snap` entry restores instead of cold-booting.
  */
 export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
   const snapshotDir = opts.snapshotDir ?? path.join('.machinen', 'snapshots');

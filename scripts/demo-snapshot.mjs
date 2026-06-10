@@ -1,5 +1,7 @@
 // Boot once, run everywhere: cold-boot machines, work them warm, snapshot,
 // then a fresh federation host restores them from the snapshots mid-state.
+// This is the app-state flavor (process driver, tiny .snap bundles, instant);
+// demo-machinen.mjs runs the same story on real microVMs with whole-VM dumps.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMachines } from '../packages/runtime-plugin/dist/client.js';

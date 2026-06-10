@@ -68,9 +68,9 @@ export interface MachineHandle {
   /** Liveness probe; defaults to manifest reachability when absent. */
   health?(): Promise<boolean>;
   /**
-   * Capture/restore the machine's application state — the process-driver
-   * simulation of a VM memory dump. A real Machinen driver snapshots the
-   * whole VM and does not need these.
+   * Capture/restore the machine's application state — how process-driver
+   * snapshots work. The machinen driver snapshots the whole VM and does not
+   * need these.
    */
   getState?(): Promise<unknown>;
   setState?(state: unknown): Promise<void>;
@@ -83,8 +83,8 @@ export interface MachineHandle {
 
 /**
  * Boots or attaches machines. Implementations: in-process (tests), child
- * process, HTTP attach, and eventually a real `@machinen/runtime` driver
- * (provision/boot/restore + port-forwarded guest).
+ * process (local dev), HTTP attach (deployed machines), and the real
+ * `@machinen/runtime` driver (microVM boot/restore + port-forwarded guest).
  */
 export interface MachineDriver {
   boot(spec: MachineSpec): Promise<MachineHandle>;
