@@ -40,3 +40,49 @@ describe('machine entries', () => {
     );
   });
 });
+
+describe('pull entries (machinen+pull+http(s)://)', () => {
+  test('recognizes pull entries', () => {
+    expect(isMachineEntry('machinen+pull+http://127.0.0.1:3802')).toBe(true);
+    expect(isMachineEntry('machinen+pull+https://registry.example/java_machine')).toBe(true);
+  });
+
+  test('parses a pull entry into kind, base url, and params', () => {
+    const spec = parseMachineEntry(
+      'java_machine',
+      'machinen+pull+http://127.0.0.1:3802?artifact=snapshot&version=^1.0.0',
+    );
+    expect(spec.kind).toBe('pull');
+    expect(spec.url).toBe('http://127.0.0.1:3802');
+    expect(spec.image).toBeUndefined();
+    expect(spec.params.get('artifact')).toBe('snapshot');
+    expect(spec.params.get('version')).toBe('^1.0.0');
+  });
+
+  test('pull entries keep any path component (registry layout)', () => {
+    const spec = parseMachineEntry('m', 'machinen+pull+https://registry.example/machines/java_machine');
+    expect(spec.kind).toBe('pull');
+    expect(spec.url).toBe('https://registry.example/machines/java_machine');
+  });
+
+  test('pull entries are never mistaken for attach entries', () => {
+    const spec = parseMachineEntry('m', 'machinen+pull+http://127.0.0.1:3802');
+    expect(spec.kind).toBe('pull');
+    // And plain attach keeps working untouched.
+    expect(parseMachineEntry('m', 'machinen+http://127.0.0.1:3802').kind).toBe('attach');
+  });
+
+  test('formatMachineEntry round-trips pull entries deterministically', () => {
+    const entry = 'machinen+pull+http://127.0.0.1:3802?artifact=image';
+    expect(formatMachineEntry(parseMachineEntry('m', entry))).toBe(entry);
+  });
+
+  test('rejects pull entries with non-http(s) transports', () => {
+    expect(() => parseMachineEntry('m', 'machinen+pull+ftp://files.example/m')).toThrow(
+      /pull entries must use http/i,
+    );
+    expect(() => parseMachineEntry('m', 'machinen+pull+://no-scheme')).toThrow(
+      /pull entries must use http/i,
+    );
+  });
+});
