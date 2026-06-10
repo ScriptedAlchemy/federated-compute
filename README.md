@@ -315,6 +315,12 @@ restores it and the guest process resumes mid-heap. `@machinen/runtime` is an
 pull the ~18MB native package, and the error when it's missing says exactly
 what to install.
 
+Security note: whole-VM snapshot bundles are credential-bearing artifacts. The
+rootdisk and RAM dump include the launcher token and process memory, and the
+current amd64 reseed-stub workaround freezes guest entropy across restores
+(identical RNG/UUID/key state for VMs restored from one bundle) until the CRIU
+snapshot-engine path is reconciled.
+
 Measured on x86_64/KVM (machinen 0.4.0, nested KVM, warm asset cache):
 
 | phase | wall time |
@@ -366,20 +372,20 @@ a port forward, exercises `/mf/health`, `/mf-manifest.json`, and live
 counter continues — the boot-once-run-everywhere claim, for real, with boot
 and restore wall times reported.
 
-The lane runs on both `ubuntu-24.04` (x64, hosted runners expose `/dev/kvm`)
-and `ubuntu-24.04-arm` (arm64, hosted runners currently have **no** `/dev/kvm`
-— nested virtualization isn't exposed on Azure arm64 VMs). Every run writes a
-hardware audit to the job summary and probes honestly: if `@machinen/*`
-packages can't install or KVM isn't usable, the job reports
-"machinen not yet runnable: <reason>" and `machinen_available=false` instead
-of faking success. The moment machinen installs and boots on a leg, that leg
-is enforced — validation failures fail the job. Run it anywhere compatible
-with `node scripts/machinen-e2e.mjs` (exit 78 = machinen unavailable, 1 =
+The lane runs on both `ubuntu-24.04` (x64) and `ubuntu-24.04-arm` (arm64).
+On x64, hosted runners expose `/dev/kvm` and the full validation **runs and
+is enforced today** — validation failures fail the job. On arm64, hosted
+runners currently have **no** `/dev/kvm` (nested virtualization isn't exposed
+on Azure arm64 VMs), so that leg writes its hardware audit, reports
+"machinen not yet runnable: <reason>" with `machinen_available=false`, and
+exits green without faking success; it flips to enforcing automatically the
+moment KVM appears there. Run the validation anywhere compatible with
+`node scripts/machinen-e2e.mjs` (exit 78 = machinen unavailable, 1 =
 validation failed).
 
-Note: typical x86_64 dev boxes without Apple Silicon / arm64 KVM were the
-original blocker; machinen now ships `@machinen/native-x64-linux`, so any
-Linux machine with usable `/dev/kvm` can run the validation locally too.
+Note: typical x86_64 dev boxes were the original blocker; machinen now ships
+`@machinen/native-x64-linux`, so any Linux machine with usable `/dev/kvm` can
+run the validation locally too.
 
 ## Status
 
