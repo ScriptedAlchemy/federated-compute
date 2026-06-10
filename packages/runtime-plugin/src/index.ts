@@ -17,7 +17,14 @@ export {
   type CircuitBreakerConfig,
   type MachineMetrics,
 } from './policy.js';
-export { fetchBindingsSource, generateBindings, isJsReservedWord } from './bindgen.js';
+export {
+  bindingExportNames,
+  fetchBindingsSource,
+  fetchMachineManifest,
+  generateBarrel,
+  generateBindings,
+  isJsReservedWord,
+} from './bindgen.js';
 export {
   configureMachines,
   createMachines,
