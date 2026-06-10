@@ -44,7 +44,10 @@ const guest = createGuestRuntime({
   },
 });
 
+// Publish this machine's bundle as a pull-federation artifact: a region
+// agent's `machinen+pull+http://...?artifact=image` entry can fetch it and
+// boot an analytics clone next to the data (the data-gravity deploy story).
 const port = Number(process.env.PORT ?? 3805);
-serveGuest(guest, { port }).then((server) => {
+serveGuest(guest, { port, imagePath: process.argv[1] }).then((server) => {
   console.log(`[machine-analytics] analytics machine listening on 127.0.0.1:${server.port}`);
 });
