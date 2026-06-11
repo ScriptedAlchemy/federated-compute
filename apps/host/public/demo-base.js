@@ -119,7 +119,12 @@ function wireHopHtml(e) {
         <span class="whot">${esc(e.error)}</span></span>
     </div>`;
   }
-  return '';
+  // Unknown event type (server ahead of this renderer): show a generic hop
+  // rather than silently dropping it — the hop count must stay honest.
+  return `<div class="whop">
+    <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine ?? '?')])}</span>
+    <span class="wdetail"><b>${esc(e.type)}</b> event</span>
+  </div>`;
 }
 
 /**

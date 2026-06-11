@@ -1121,10 +1121,12 @@ const LC_NARRATIVES = {
       const a = s.clones.a;
       return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh, image digest <b>MISS</b> — <b>${fmtBytes(a?.pulledBytes ?? 0)}</b> moved, sha256-verified — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again: the image is now cached.`;
     }
-    if (extra?.clone === 'b') {
-      const pin = s.clones.b?.pinnedDigest;
+    // The server guarantees clone b is pinned (it refuses the pull otherwise),
+    // so the narrative can state the pin as fact.
+    if (extra?.clone === 'b' && s.clones.b?.pinnedDigest) {
+      const pin = s.clones.b.pinnedDigest;
       return `<span class="pullc">Forked again — this time pinned:</span> the entry carried ` +
-        (pin ? `<span class="pullc">digest=${esc(String(pin).slice(0, 17))}…</span>` : `a <span class="pullc">?digest=</span> pin`) +
+        `<span class="pullc">digest=${esc(String(pin).slice(0, 17))}…</span>` +
         ` (the image digest learned from step 4), so the resolver verified the pulled image against the pin before boot — ` +
         `any other code would have been <b>refused</b>. The snapshot was re-fetched (tiny, by design — it's no-store) but the image was a digest cache <b>HIT</b> — near-instant boot. ` +
         `Increment the three counters separately: <b>clones own their state — divergence is the point.</b>`;

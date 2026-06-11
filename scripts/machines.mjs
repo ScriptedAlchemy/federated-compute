@@ -117,13 +117,21 @@ async function waitForManifest(port, name, child) {
   return await res.json();
 }
 
-/** Spawn one guest process and wait until it serves the protocol. */
-export async function startGuest({ name, command, port, env }) {
+/**
+ * The one place a machine process is spawned: env composition and stdio must
+ * not drift between initial startup and supervised respawns.
+ */
+export function spawnMachineProcess({ command, port, env }) {
   const [cmd, ...args] = command;
-  const child = spawn(cmd, args, {
+  return spawn(cmd, args, {
     env: { ...process.env, PORT: String(port), ...(env ?? {}) },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
+}
+
+/** Spawn one guest process and wait until it serves the protocol. */
+export async function startGuest({ name, command, port, env }) {
+  const child = spawnMachineProcess({ command, port, env });
   try {
     const manifest = await waitForManifest(port, name, child);
     return { name, port, child, manifest, stop: () => child.kill() };
@@ -137,16 +145,7 @@ export async function startMachines({ exclude = [] } = {}) {
   const wanted = MACHINES.filter((machine) => !exclude.includes(machine.name));
   const started = [];
   for (const machine of wanted) {
-    const [cmd, ...args] = machine.command;
-    const child = spawn(cmd, args, {
-      env: {
-        ...process.env,
-        PORT: String(machine.port),
-        ...(machine.env ?? {}),
-      },
-      stdio: ['ignore', 'inherit', 'inherit'],
-    });
-    started.push({ ...machine, child });
+    started.push({ ...machine, child: spawnMachineProcess(machine) });
   }
   try {
     for (const machine of started) {

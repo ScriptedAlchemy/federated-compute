@@ -134,7 +134,7 @@ function clip(value: unknown, max = 140): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-/** Record attach/call/snapshot/artifact hook events into the current request's wire. */
+/** Record plugin hook events into the current request's wire. */
 function recordWire(p: MachinenPlugin): void {
   p.machineHooks.onMachineReady.on(({ spec, manifest }) => {
     wireStore.getStore()?.push({
@@ -249,6 +249,10 @@ function logEvent(kind: ActivityEvent['kind'], detail: string) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'Error';
 }
 
 // The host-side artifact cache, as the resolver actually used it. Counters
@@ -498,7 +502,9 @@ async function handleChaosKill(_req: http.IncomingMessage, res: http.ServerRespo
     ))!;
     const dying = await admin.die();
     // The guest answers first, then exits (~100ms): wait for it to be dead.
-    await new Promise((r) => setTimeout(r, dying.exitingInMs + 200));
+    // Machines are untrusted — clamp the guest-supplied delay so a bogus
+    // value cannot wedge the chaos lock.
+    await new Promise((r) => setTimeout(r, Math.min(Number(dying.exitingInMs) || 0, 1_000) + 200));
     const counter = (await host.loadRemote<CounterModule>(`${CHAOS_MACHINE}/counter`))!;
     const results = await Promise.allSettled(
       Array.from({ length: CHAOS_BURST }, () => counter.current()),
@@ -525,7 +531,7 @@ async function handleChaosProbe(_req: http.IncomingMessage, res: http.ServerResp
   } catch (error) {
     json(res, 200, {
       recovered: false,
-      errorName: error instanceof Error ? error.name : 'Error',
+      errorName: errorName(error),
       error: errorMessage(error),
       wire: wire(),
     });
@@ -552,28 +558,6 @@ function withVersionParam(entry: string, required: string): string {
   return `${base}?${[...params, `version=${required}`].join('&')}`;
 }
 
-// ---- typed-imports surface ---------------------------------------------------
-// Every machine serves /mf-types.ts — its own typed bindings, the MF
-// @mf-types analog (bindgen consumes exactly this). The browser can't reach
-// machine addresses, so the host proxies the fetch from the entry's URL.
-async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
-  const name = url.searchParams.get('machine') ?? '';
-  const index = MACHINES.findIndex((m) => m.name === name);
-  if (index === -1) return json(res, 400, { error: `unknown machine "${name}"` });
-  const base = remotes[index].entry.replace(/^machinen\+/, '').split('?')[0];
-  let upstream: Response;
-  try {
-    upstream = await fetch(`${base}/mf-types.ts`, { signal: AbortSignal.timeout(5_000) });
-  } catch (error) {
-    return json(res, 502, { error: `machine unreachable: ${errorMessage(error)}` });
-  }
-  if (!upstream.ok) {
-    return json(res, 502, { error: `machine answered ${upstream.status} for /mf-types.ts` });
-  }
-  json(res, 200, { machine: name, url: `${base}/mf-types.ts`, types: await upstream.text() });
-}
-// ----------------------------------------------------------------------------
-
 async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerResponse) {
   const javaEntry = remotes.find((r) => r.name === 'java_machine')!.entry;
   const entry = withVersionParam(javaEntry, STRICT_REQUIRED);
@@ -596,13 +580,48 @@ async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerR
       rejected: true,
       entry,
       required: STRICT_REQUIRED,
-      errorName: error instanceof Error ? error.name : 'Error',
+      errorName: errorName(error),
       error: message,
       // The version the machine reported, extracted from the plugin's error.
       reported: /machine reports "([^"]+)"/.exec(message)?.[1],
       wire: wire(),
     });
   }
+}
+// ----------------------------------------------------------------------------
+
+// ---- typed-imports surface ---------------------------------------------------
+// Every machine serves /mf-types.ts — its own typed bindings, the MF
+// @mf-types analog (bindgen consumes exactly this). The browser can't reach
+// machine addresses, so the host proxies the fetch from the entry's URL.
+
+// Machines are untrusted: cap how much of their response the host will
+// buffer and relay to the browser.
+const MAX_TYPES_BYTES = 1024 * 1024;
+
+async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+  const name = url.searchParams.get('machine') ?? '';
+  const machine = remotes.find((r) => r.name === name);
+  if (!machine) return json(res, 400, { error: `unknown machine "${name}"` });
+  const base = machine.entry.replace(/^machinen\+/, '').split('?')[0];
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${base}/mf-types.ts`, { signal: AbortSignal.timeout(5_000) });
+  } catch (error) {
+    return json(res, 502, { error: `machine unreachable: ${errorMessage(error)}` });
+  }
+  if (!upstream.ok) {
+    return json(res, 502, { error: `machine answered ${upstream.status} for /mf-types.ts` });
+  }
+  if (Number(upstream.headers.get('content-length')) > MAX_TYPES_BYTES) {
+    await upstream.body?.cancel().catch(() => {});
+    return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
+  }
+  const types = await upstream.text();
+  if (Buffer.byteLength(types) > MAX_TYPES_BYTES) {
+    return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
+  }
+  json(res, 200, { machine: name, url: `${base}/mf-types.ts`, types });
 }
 // ----------------------------------------------------------------------------
 
@@ -774,7 +793,12 @@ async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerR
     const name = cloneName(id);
     // Step 5 demonstrates ?digest= pinning: clone b's entry pins the image
     // digest learned from the step-4 pull, so the resolver refuses to boot
-    // anything but exactly that code.
+    // anything but exactly that code. Honest-data rule: if step 4 somehow
+    // didn't learn a digest, fail loudly — the UI must never claim a pin
+    // that doesn't exist.
+    if (id === 'b' && !lifecycle.imageDigest) {
+      throw new Error('step 4 recorded no image digest — cannot pin clone b');
+    }
     const pin = id === 'b' ? lifecycle.imageDigest : undefined;
     const entry = cloneEntry(id) + (pin ? `&digest=${pin}` : '');
     // force: after a reset the MF runtime may still cache the previous

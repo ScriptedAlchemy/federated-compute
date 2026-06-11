@@ -47,7 +47,10 @@ interface FailedMachine {
   error: string;
 }
 
-const AUTO_GENERATED_MARKER = 'AUTO-GENERATED';
+// Deletion gate: must match what bindgen actually writes (see generateBindings
+// and generateBarrel headers), not any file that merely mentions
+// "AUTO-GENERATED" in a comment — pruning deletes files.
+const AUTO_GENERATED_MARKER = 'by machinen bindgen';
 
 async function reconcile(
   file: string,

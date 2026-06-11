@@ -162,14 +162,19 @@ describe('runBindgenFromConfig', () => {
     const outDir = path.join(config.dir, 'src/generated');
     const stale = path.join(outDir, 'removed_machine.ts');
     const userFile = path.join(outDir, 'notes.ts');
+    // Mentions "AUTO-GENERATED" but was not written by bindgen — pruning is a
+    // deletion gate, so only the full generated header may match.
+    const mentionFile = path.join(outDir, 'shim.ts');
     writeFileSync(stale, '// AUTO-GENERATED from an old machine by machinen bindgen.\nexport {};\n');
     writeFileSync(userFile, 'export const handwritten = true;\n');
+    writeFileSync(mentionFile, '// Unlike the AUTO-GENERATED bindings, this shim is hand-rolled.\nexport {};\n');
 
     const result = await runBindgenFromConfig(config, {});
 
     expect(result.ok).toBe(true);
     expect(result.pruned).toEqual([stale]);
     expect(existsSync(stale)).toBe(false);
+    expect(existsSync(mentionFile)).toBe(true);
     expect(readFileSync(userFile, 'utf8')).toBe('export const handwritten = true;\n');
   });
 

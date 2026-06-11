@@ -16,6 +16,7 @@ import {
   PORTS,
   REGION_AGENT_PORT,
   remoteEnv,
+  spawnMachineProcess,
   startGuest,
   startMachines,
   waitForHttpOk,
@@ -138,11 +139,7 @@ function supervise(machine) {
       );
       setTimeout(() => {
         if (shuttingDown) return;
-        const [cmd, ...args] = machine.command;
-        const next = spawn(cmd, args, {
-          env: { ...process.env, PORT: String(machine.port), ...(machine.env ?? {}) },
-          stdio: ['ignore', 'inherit', 'inherit'],
-        });
+        const next = spawnMachineProcess(machine);
         machine.child = next;
         watch(next);
         waitForHttpOk(`http://127.0.0.1:${machine.port}/mf/health`, {
@@ -158,7 +155,9 @@ function supervise(machine) {
 }
 
 // compute_machine is the chaos demo's victim; it gets supervised respawn.
-supervise(machines.find((machine) => machine.name === 'compute_machine'));
+const chaosVictim = machines.find((machine) => machine.name === 'compute_machine');
+if (!chaosVictim) throw new Error('compute_machine missing from started machines — chaos demo needs it');
+supervise(chaosVictim);
 
 if (smoke) {
   const base = `http://127.0.0.1:${HOST_PORT}`;
