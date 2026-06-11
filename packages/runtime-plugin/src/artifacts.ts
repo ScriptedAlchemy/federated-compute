@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
@@ -142,18 +143,25 @@ function imageExt(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
   return ext;
 }
 
-/** Read a cached artifact if present AND its bytes still match the digest. */
-async function readVerifiedCache(cachePath: string, hex: string): Promise<Buffer | undefined> {
-  let bytes: Buffer;
+/**
+ * True when the cached artifact exists AND still hashes to the digest.
+ * Streams the verification: `readFile` would buffer the whole artifact and
+ * hard-fail at >=2GiB (ERR_FS_FILE_TOO_LARGE), silently breaking the cache
+ * at exactly the bundle sizes vmstate federation targets.
+ */
+async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean> {
+  const hash = createHash('sha256');
   try {
-    bytes = await readFile(cachePath);
+    for await (const chunk of createReadStream(cachePath)) {
+      hash.update(chunk as Buffer);
+    }
   } catch {
-    return undefined;
+    return false; // missing or unreadable — treat as a miss
   }
-  if (sha256Hex(bytes) === hex) return bytes;
+  if (hash.digest('hex') === hex) return true;
   // Corrupt entry (partial write, disk fault): evict and re-download.
   await rm(cachePath, { force: true });
-  return undefined;
+  return false;
 }
 
 function tempCachePath(cachePath: string): string {
@@ -190,19 +198,31 @@ async function streamVerifiedToTemp(
   temp: string,
 ): Promise<number> {
   if (!res.body) fail(spec, 'image artifact response had no body');
+  // Open before taking the reader: an open failure must not strand an
+  // unconsumed (and uncancellable-by-us) body stream.
+  let file;
+  try {
+    file = await open(temp, 'w');
+  } catch (error) {
+    await res.body.cancel().catch(() => {});
+    throw error;
+  }
   const reader = res.body.getReader();
-  const file = await open(temp, 'w');
   const hash = createHash('sha256');
   let bytesFetched = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!value) continue;
       hash.update(value);
       bytesFetched += value.byteLength;
       await file.write(value);
     }
+  } catch (error) {
+    // Write failure mid-stream (ENOSPC at GB scale): cancel the body so the
+    // socket and remaining download die with the request instead of leaking.
+    await reader.cancel().catch(() => {});
+    throw error;
   } finally {
     await file.close();
     reader.releaseLock();
@@ -239,7 +259,7 @@ async function ensureImageCached(
   const ext = imageExt(spec, descriptor);
   const cachePath = path.join(cacheDir, `${hex}${ext}`);
 
-  if (await readVerifiedCache(cachePath, hex)) {
+  if (await verifyCachedFile(cachePath, hex)) {
     return { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
 
@@ -389,7 +409,7 @@ async function resolveSnapshot(
     // the image descriptor when present, else we cannot name the file.
     const ext = imageDescriptor ? imageExt(spec, imageDescriptor) : undefined;
     const cachePath = ext ? path.join(cacheDir, `${imageDigest}${ext}`) : undefined;
-    const hit = cachePath && (await readVerifiedCache(cachePath, imageDigest));
+    const hit = cachePath ? await verifyCachedFile(cachePath, imageDigest) : false;
     if (!hit || !cachePath) {
       fail(
         spec,

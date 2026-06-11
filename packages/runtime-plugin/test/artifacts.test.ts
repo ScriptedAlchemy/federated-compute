@@ -177,6 +177,29 @@ describe('resolvePullEntry: image artifacts', () => {
     }
   });
 
+  test('verifies a multi-chunk cached image as a hit without contacting the origin', async () => {
+    // The verify path streams (createReadStream + incremental hash) so the
+    // cache keeps working at >=2GiB, where readFile would throw
+    // ERR_FS_FILE_TOO_LARGE and silently turn every hit into a re-download.
+    // A cached artifact spanning many read chunks must verify as a pure hit.
+    const big = Buffer.concat([
+      IMAGE_BYTES,
+      Buffer.from('\n// padding\n'.repeat(40_000)), // ~480KB: many 64KB stream chunks
+    ]);
+    const digest = `sha256:${createHash('sha256').update(big).digest('hex')}`;
+    const origin = await startOrigin({
+      artifacts: { image: { ...imageDescriptor, digest, bytes: big.length } },
+    });
+    const cachePath = path.join(cacheDir, `${digest.slice('sha256:'.length)}.mjs`);
+    await writeFile(cachePath, big);
+
+    const resolution = await resolvePullEntry(pullSpec(origin.url), { cacheDir });
+
+    expect(resolution.fromCache).toBe(true);
+    expect(resolution.bytesFetched).toBe(0);
+    expect(origin.requests).not.toContain('/mf-image');
+  });
+
   test('a download whose bytes do not match the advertised digest fails and caches nothing', async () => {
     const origin = await startOrigin(
       { artifacts: { image: imageDescriptor } },
