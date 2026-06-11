@@ -16,7 +16,6 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
 const MACHINEN_BIN = path.join(PACKAGE_ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'machinen.cmd' : 'machinen');
 const GUEST_BUNDLE = path.join(REPO_ROOT, 'apps/remote/dist/index.js');
-const TOKEN = 'machinen-vm-secret';
 // Generous: cold boot ~5s + apt+node ~5s + snapshot ~7s + restore ~7s, but
 // apt mirrors and first-time rootfs materialization can be much slower.
 const FULL_CYCLE_TIMEOUT_MS = 300_000;
@@ -94,7 +93,7 @@ describe.skipIf(unavailable !== null)('machinenDriver (real microVMs)', () => {
       const driver = machinenDriver({ snapshotDir });
 
       // Cold boot: debian base + apt node + guest bundle, all inside the VM.
-      const spec = parseMachineEntry('vm_machine', `machinen://${GUEST_BUNDLE}?token=${TOKEN}`);
+      const spec = parseMachineEntry('vm_machine', `machinen://${GUEST_BUNDLE}`);
       const handle = await driver.boot(spec);
       liveHandles.push(handle);
 
@@ -115,7 +114,7 @@ describe.skipIf(unavailable !== null)('machinenDriver (real microVMs)', () => {
       await handle.dispose!();
 
       // Restore: the entry now points at the snapshot bundle directory.
-      const restoreSpec = parseMachineEntry('vm_machine', `machinen://${snap.snapDir}?token=${TOKEN}`);
+      const restoreSpec = parseMachineEntry('vm_machine', `machinen://${snap.snapDir}`);
       const restored = await driver.boot(restoreSpec);
       liveHandles.push(restored);
 

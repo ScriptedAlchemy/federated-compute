@@ -1,6 +1,5 @@
 import {
   GuestError,
-  MachineAuthError,
   MachineRequestError,
   MachineTransportError,
 } from '../errors.js';
@@ -21,11 +20,10 @@ function guestError(envelope: ErrorEnvelope): GuestError {
 
 /**
  * Classify a non-2xx guest response. 4xx are deliberate answers from a live
- * guest (401 auth, 413 too large...) — never transport failures, so they are
+ * guest (e.g. 413 too large) — never transport failures, so they are
  * not retried and never trigger restarts. Only 5xx means "machine is gone".
  */
 function statusError(what: string, status: number): Error {
-  if (status === 401) return new MachineAuthError(`${what} rejected: 401 unauthorized`);
   if (status >= 400 && status < 500) {
     return new MachineRequestError(`${what} rejected by the guest: ${status}`, status);
   }
@@ -36,10 +34,9 @@ function statusError(what: string, status: number): Error {
  * Talk to a machine guest over HTTP. Node's fetch (undici) pools and reuses
  * connections per origin, so repeated calls don't pay a new-connection tax.
  */
-export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}): MachineHandle {
+export function httpMachineHandle(baseUrl: string): MachineHandle {
   const base = baseUrl.replace(/\/$/, '');
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
 
   async function post(body: unknown, signal?: AbortSignal): Promise<Response> {
     const res = await fetch(`${base}/mf/call`, {
@@ -130,8 +127,7 @@ export function httpMachineHandle(baseUrl: string, opts: { token?: string } = {}
 /**
  * Driver that attaches to an independently deployed machine over HTTP —
  * the containment-preserving default. The machine is somebody else's deploy;
- * the entry only carries the address (and optionally a token):
- * `machinen+http://127.0.0.1:3802?token=...`
+ * the entry only carries the address: `machinen+http://127.0.0.1:3802`
  */
 export function httpAttachDriver(): MachineDriver {
   return {
@@ -141,7 +137,7 @@ export function httpAttachDriver(): MachineDriver {
           `[machinen-plugin] httpAttachDriver expects a machinen+http(s):// entry, got "${spec.entry}"`,
         );
       }
-      return httpMachineHandle(spec.url, { token: spec.auth?.token });
+      return httpMachineHandle(spec.url);
     },
   };
 }

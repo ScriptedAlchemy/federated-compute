@@ -4,7 +4,6 @@ import { createInstance } from '@module-federation/runtime';
 import { machinenPlugin } from '../src/index.js';
 import {
   isTransportFailure,
-  MachineAuthError,
   MachineCircuitOpenError,
   MachineRequestError,
   MachineTimeoutError,
@@ -78,37 +77,34 @@ function listen(server: http.Server): Promise<number> {
   );
 }
 
-describe('token leakage (MAJOR-1)', () => {
-  test('boot failure error messages never contain the token', async () => {
-    // httpAttachDriver rejects image entries; the thrown message interpolates
-    // the entry — which must be the redacted form.
-    const remote = { name: 'leaky_machine', entry: 'machinen://images/leak.img?token=hush-hush' };
+describe('httpAttachDriver entry handling', () => {
+  test('boot failures for image entries reject with a clear message', async () => {
+    const remote = { name: 'leaky_machine', entry: 'machinen://images/leak.img' };
     const plugin = machinenPlugin({ driver: httpAttachDriver() });
     const h = host(plugin, remote);
 
     const error = (await h.loadRemote('leaky_machine/math').catch((e: unknown) => e)) as Error;
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toMatch(/httpAttachDriver expects/);
-    expect(error.message).not.toContain('hush-hush');
   });
 
-  test('auth still reaches the guest out-of-band', async () => {
+  test('attach entries round-trip calls through the plugin', async () => {
     const guest = createGuestRuntime({
-      name: 'auth_guest',
+      name: 'attach_guest',
       exposes: { './math': { add: (a: number, b: number) => a + b } },
     });
-    const server = await serveGuest(guest, { port: 0, token: 'sesame' });
+    const server = await serveGuest(guest, { port: 0 });
     guestServers.push(server);
 
     const remote = {
-      name: 'auth_guest',
-      entry: `machinen+http://127.0.0.1:${server.port}?token=sesame`,
+      name: 'attach_guest',
+      entry: `machinen+http://127.0.0.1:${server.port}`,
     };
     const plugin = machinenPlugin({ driver: httpAttachDriver() });
     const h = host(plugin, remote);
 
     const mod = await h.loadRemote<{ add(a: number, b: number): Promise<number> }>(
-      'auth_guest/math',
+      'attach_guest/math',
     );
     await expect(mod!.add(2, 3)).resolves.toBe(5);
   });
@@ -232,21 +228,6 @@ describe('HTTP status classification (MAJOR-4)', () => {
     expect(isTransportFailure(error)).toBe(false);
     expect(boots).toBe(1); // no restart
     expect(crashes).toEqual([]); // no crash bookkeeping
-  });
-
-  test('401 surfaces as MachineAuthError, not a transport failure', async () => {
-    const server = http.createServer((_req, res) => {
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: { message: 'unauthorized' } }));
-    });
-    const port = await listen(server);
-    const handle = httpMachineHandle(`http://127.0.0.1:${port}`);
-
-    const manifestError = await handle.manifest().catch((e: unknown) => e);
-    expect(manifestError).toBeInstanceOf(MachineAuthError);
-    const callError = await handle.call('./svc', 'run', []).catch((e: unknown) => e);
-    expect(callError).toBeInstanceOf(MachineAuthError);
-    expect(isTransportFailure(callError)).toBe(false);
   });
 
   test('5xx still classifies as a transport failure', async () => {
@@ -405,41 +386,13 @@ describe('disposeMachines (MINOR)', () => {
   });
 });
 
-describe('token redaction across the failure surface (MAJOR-1, ported)', () => {
-  const TOKEN = 'super-secret-token-do-not-leak';
-
-  test('transport failures and crash hooks never carry the token', async () => {
-    // Nothing listens on this port: every request is a transport failure.
-    const plugin = machinenPlugin({
-      driver: httpAttachDriver(),
-      restartOnCrash: false,
-      bootTimeoutMs: 2_000,
-      calls: { retries: 0, circuitBreaker: false },
-    });
-    const crashEntries: string[] = [];
-    plugin.machineHooks.onMachineCrash.on(({ spec }) => crashEntries.push(spec.entry));
-    const bootEntries: string[] = [];
-    plugin.machineHooks.beforeMachineBoot.on(({ spec }) =>
-      bootEntries.push(`${spec.entry} ${spec.params.toString()}`),
-    );
-    const remote = { name: 'dead_machine', entry: `machinen+http://127.0.0.1:1?token=${TOKEN}` };
-    const h = host(plugin, remote);
-
-    const error = (await h.loadRemote(`${remote.name}/svc`).catch((e: unknown) => e)) as Error;
-    expect(error).toBeTruthy();
-    expect(`${error.name} ${error.message} ${error.stack ?? ''}`).not.toContain(TOKEN);
-    expect(bootEntries.length).toBeGreaterThan(0);
-    for (const entry of [...bootEntries, ...crashEntries]) {
-      expect(entry).not.toContain(TOKEN);
-    }
-  });
-
-  test('reboots after a crash keep authenticating with the out-of-band token', async () => {
+describe('crash recovery against a real guest', () => {
+  test('reboots after a crash reach the guest again', async () => {
     const guest = createGuestRuntime({
-      name: 'reboot_secured',
+      name: 'reboot_guest',
       exposes: { './math': { add: (a: number, b: number) => a + b } },
     });
-    const server = await serveGuest(guest, { port: 0, token: TOKEN });
+    const server = await serveGuest(guest, { port: 0 });
     guestServers.push(server);
 
     let boots = 0;
@@ -460,16 +413,15 @@ describe('token redaction across the failure surface (MAJOR-1, ported)', () => {
       },
     });
     const remote = {
-      name: 'reboot_secured_machine',
-      entry: `machinen+http://127.0.0.1:${server.port}?token=${TOKEN}`,
+      name: 'reboot_guest_machine',
+      entry: `machinen+http://127.0.0.1:${server.port}`,
     };
     const h = host(plugin, remote);
     const mod = await h.loadRemote<{ add(a: number, b: number): Promise<number> }>(
       `${remote.name}/math`,
     );
 
-    // Crash -> reboot -> the second generation's real HTTP call must still
-    // carry the token even though the cached (redacted) spec.entry has none.
+    // Crash -> reboot -> the second generation's real HTTP call succeeds.
     await expect(mod!.add(3, 4)).resolves.toBe(7);
     expect(boots).toBe(2);
   });

@@ -46,17 +46,6 @@ describe('processDriver boot failures', () => {
     // the whole host process down; it must surface through the boot promise.
     await expect(driver.boot(spec)).rejects.toThrow(/failed to spawn guest process/);
   });
-
-  test('boot failure messages carry the redacted entry, never the token', async () => {
-    const driver = processDriver({
-      commands: { '.ghost': (image) => ['no-such-binary-anywhere-9f1c', image] },
-    });
-    const spec = parseMachineEntry('ghost', 'machinen://guest.ghost?token=sekrit');
-
-    const error = (await driver.boot(spec).catch((e: unknown) => e)) as Error;
-    expect(error.message).toContain('machinen://guest.ghost');
-    expect(error.message).not.toContain('sekrit');
-  });
 });
 
 describe('buildGuestEnv', () => {
@@ -65,16 +54,16 @@ describe('buildGuestEnv', () => {
       PATH: '/usr/bin',
       HOME: '/home/u',
       AWS_SECRET_ACCESS_KEY: 'leak-me-not',
-      GITHUB_TOKEN: 'leak-me-not-either',
+      GITHUB_PAT: 'leak-me-not-either',
       MACHINEN_TYPES_FILE: '/tmp/mf-types.ts',
-      MACHINEN_TOKEN: 'guest-config',
+      MACHINEN_REMOTE_OTHER: 'machinen+http://127.0.0.1:9',
     });
 
     expect(env.PATH).toBe('/usr/bin');
     expect(env.HOME).toBe('/home/u');
     expect(env.MACHINEN_TYPES_FILE).toBe('/tmp/mf-types.ts');
-    expect(env.MACHINEN_TOKEN).toBe('guest-config');
+    expect(env.MACHINEN_REMOTE_OTHER).toBe('machinen+http://127.0.0.1:9');
     expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
-    expect(env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(env).not.toHaveProperty('GITHUB_PAT');
   });
 });

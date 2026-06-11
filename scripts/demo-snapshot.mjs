@@ -2,13 +2,17 @@
 // then a fresh federation host restores them from the snapshots mid-state.
 // This is the app-state flavor (process driver, tiny .snap bundles, instant);
 // demo-machinen.mjs runs the same story on real microVMs with whole-VM dumps.
+//
+// Disk note: this script plays the DEPLOYMENT-OWNER role — it boots its own
+// images from its own disk, like any deployed service starting up. Moving
+// code/state BETWEEN machines is always HTTP: that story is demo-pull.mjs
+// (machinen+pull+http:// entries) and the web demo's lifecycle card.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMachines } from '../packages/runtime-plugin/dist/client.js';
 import { processDriver } from '../packages/runtime-plugin/dist/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const token = 'snap-secret';
 
 const images = {
   compute_machine: path.join(ROOT, 'apps/remote/dist/index.js'),
@@ -20,7 +24,7 @@ console.log('=== Scenario 1: boot once (cold boot from images) ===');
 const hostA = createMachines({
   driver: processDriver({ snapshotDir: path.join(ROOT, '.machinen/snapshots') }),
   remotes: Object.fromEntries(
-    Object.entries(images).map(([name, image]) => [name, `machinen://${image}?token=${token}`]),
+    Object.entries(images).map(([name, image]) => [name, `machinen://${image}`]),
   ),
 });
 
@@ -43,7 +47,7 @@ const hostB = createMachines({
   remotes: Object.fromEntries(
     Object.entries(snapshots).map(([name, snap]) => [
       name,
-      `machinen://${snap.snapFile}?token=${token}`,
+      `machinen://${snap.snapFile}`,
     ]),
   ),
 });

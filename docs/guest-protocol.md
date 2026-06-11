@@ -9,31 +9,13 @@ manifest-first contract (`mf-manifest.json` analog), semver version
 negotiation (`requiredVersion` analog), and type distribution (DTS analog via
 `machinen-bindgen`).
 
-## Authentication
-
-If the machine was deployed with a token (`MACHINEN_TOKEN` env var by
-convention), every request except `/mf/health` must carry
-`Authorization: Bearer <token>`. Unauthenticated requests get `401`. Guests
-must bind loopback by default; only deliberate deployment exposes them
-further. Guests must compare tokens in constant time: hash both sides and
-compare digests (Node reference guest: `timingSafeEqual` over SHA-256; Java:
-`MessageDigest.isEqual` over SHA-256; Python: `hmac.compare_digest` over
-SHA-256).
-
-On the host side the token travels out-of-band: `parseMachineEntry` strips
-`?token=` into `spec.auth` so cache keys, hook payloads, and error messages
-never carry credentials. Hosts surface a guest's `401` as `MachineAuthError`
-— never retried and never treated as a machine crash.
-
-Security note for whole-VM snapshots: `machinenDriver()` bundles are
-credential-bearing (rootdisk + RAM can include launcher tokens and process
-memory) — treat them like secrets. Its amd64 reseed workaround performs a
-real reseed (the shim feeds the host seed to the guest CSPRNG on restore),
-so VMs restored from one bundle do not share RNG/UUID/key state.
+The protocol has no authentication: machines serve every endpoint
+unauthenticated. Guests must bind loopback by default; only deliberate
+deployment exposes them further.
 
 ## `GET /mf/health`
 
-Liveness probe — no auth, no side effects. Used by drivers for boot-waiting
+Liveness probe — no side effects. Used by drivers for boot-waiting
 and by orchestrators (k8s probes, load balancers).
 
 ```json
@@ -75,6 +57,75 @@ and by orchestrators (k8s probes, load balancers).
   signatures. `params[].type` and `returns` are TypeScript type expressions —
   they feed `machinen-bindgen`, which generates host-side interfaces.
 - `stream: true` marks a function whose result is a stream of `returns` chunks.
+- `artifacts` (optional) advertises pull-federation artifacts — see below.
+
+### `artifacts` (optional capability)
+
+Machines that publish themselves for pull federation (`machinen+pull+http://`
+entries: fetch the artifact, boot a local clone) add an `artifacts` block —
+the analog of mf-manifest.json's `remoteEntry` field. Presence is the
+capability advertisement; there is no separate feature flag:
+
+```json
+"artifacts": {
+  "image": {
+    "href": "/mf-image",
+    "format": "guest-bundle",
+    "mediaType": "text/javascript",
+    "digest": "sha256:9f2c…",
+    "ext": ".js",
+    "bytes": 34104,
+    "platform": "any"
+  },
+  "snapshot": { "href": "/mf-snapshot", "format": "app-state@1", "platform": "any" }
+}
+```
+
+- `href` is resolved against the manifest's base URL (absolute http(s) hrefs
+  pass through; for a registry living under a path, relative hrefs resolve
+  under that prefix).
+- `format` is the consumer-side dispatch key: `guest-bundle` (a raw guest
+  program) and `app-state@1` (state + image digest reference) today.
+- `digest` (`sha256:<hex>`) is required for `image` — it is the cache key and
+  the integrity check; consumers refuse artifacts whose bytes don't hash to it.
+- `ext` is the image's file extension (`.js`, `.jar`, `.py`…). Required:
+  consumer drivers pick boot commands by extension, so the cached artifact
+  must keep it.
+- `platform` is `any` for app-level artifacts; arch-bound formats (Phase 2
+  vmstate) carry `linux/amd64` etc. and consumers refuse mismatches.
+
+## `GET /mf-image` (optional capability)
+
+The machine's own program artifact, served verbatim
+(`application/octet-stream` or a more specific type), with `x-mf-digest` and
+`x-mf-format` headers matching the manifest descriptor. Immutable and
+digest-addressed: consumers cache it forever under its digest. Machines
+without the capability answer `404` (or `501`) — the manifest simply carries
+no `artifacts.image`.
+
+## `GET /mf-snapshot` (optional capability)
+
+A **freshly dehydrated** warm clone of a live machine, requiring both the
+`state` capability and a published image:
+
+```json
+{ "name": "compute_machine", "imageDigest": "sha256:9f2c…", "state": { "counter": 3 }, "createdAt": "…" }
+```
+
+State travels by value (it is small and changes constantly); the image only
+by digest reference — consumers fetch `/mf-image` on digest miss and reuse
+the cache otherwise. The response must carry `Cache-Control: no-store`:
+every GET is a new fork point. Machines without the capability answer `404`
+(or `501`).
+
+**Publishing artifacts amplifies the protocol's no-auth stance: anyone who
+can reach the machine can take its code (`/mf-image`) and, with snapshots,
+the contents of its memory (`/mf-snapshot`) — including any secrets the
+dehydrated state carries.** Artifacts are therefore strictly opt-in (the
+reference Node guest only publishes them when `serveGuest` is given
+`imagePath`), and the loopback-by-default rule matters doubly here. A guest
+whose state is large should also note that `/mf-snapshot` dehydrates on
+every GET — rate-limit or pre-bake if that becomes DoS-shaped.
 
 ### Naming
 
@@ -100,8 +151,7 @@ artifact on the fly. Machines without the artifact answer 404 and stay fully
 supported: consumers' bindgen (`machinen-bindgen`, `fetchBindingsSource`)
 falls back to rendering bindings from the manifest, which carries complete
 signatures. Either way the artifact is downloaded from the deployed
-machine's URL — never read from its source tree. Auth matches the manifest:
-the bearer token is required when one is configured.
+machine's URL — never read from its source tree.
 
 ## `GET /mf/state` and `POST /mf/state` (optional capability)
 
@@ -182,8 +232,7 @@ breaker, crash hooks, and optional automatic restart.
 A 4xx status is a deliberate answer from a live guest, not a transport
 failure. Hosts must not retry, restart, or crash-account it:
 
-- `401` → `MachineAuthError` (bad/missing bearer token).
-- Other 4xx (e.g. `413` payload too large) → `MachineRequestError` carrying
+- 4xx (e.g. `413` payload too large) → `MachineRequestError` carrying
   the status.
 - Only 5xx and network-level errors (connection refused/reset, timeouts) are
   transport failures and flow through the retry/breaker/restart policy.
@@ -226,7 +275,7 @@ scope:
 
 - Bind `127.0.0.1` unless deployment explicitly exposes the machine.
 - Shut down gracefully on SIGTERM (stop accepting, drain, exit).
-- Keep `/mf/health` cheap and auth-free.
+- Keep `/mf/health` cheap.
 
 ## Conformance
 
@@ -236,5 +285,8 @@ and oversized-request rules above; the Node guest is covered by
 `test/guest-http.test.ts`. Streaming — NDJSON framing and the mandatory
 `done`/`error` terminator — is exercised against the Node guest, the only
 reference guest that streams today; any guest that adds `stream: true`
-exposes must terminate every stream the same way. New guest languages should
-pass the same suite.
+exposes must terminate every stream the same way. Artifact endpoints are
+conformance-checked capability-gated: advertised artifacts must be fetchable
+and digest-true, unadvertised endpoints must answer 404/501 — guests without
+the capability pass untouched. New guest languages should pass the same
+suite.

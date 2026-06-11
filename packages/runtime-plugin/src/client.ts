@@ -1,4 +1,5 @@
 import { createInstance } from '@module-federation/runtime';
+import { loadMachinenConfig, type MachinenConfig } from './config.js';
 import { httpAttachDriver } from './drivers/http.js';
 import { machinenPlugin, type MachinenPlugin } from './plugin.js';
 import type { CallPolicy, MachineMetrics } from './policy.js';
@@ -13,18 +14,15 @@ import {
 /**
  * End-user facade. Importing a machine function should feel like importing a
  * local function — no instance wiring, no loadRemote, no plugin setup at call
- * sites. Addresses and auth resolve from config or env:
+ * sites. Addresses resolve from config or env:
  *
  *   MACHINEN_REMOTE_<NAME>  machine address (e.g. machinen+http://host:port)
- *   MACHINEN_TOKEN          bearer token, appended automatically
  */
 export interface MachinesOptions {
   /** Machine addresses by remote name. Falls back to MACHINEN_REMOTE_* env vars. */
   remotes?: Record<string, string>;
   /** Defaults to httpAttachDriver() — attach to deployed machines. */
   driver?: MachineDriver;
-  /** Defaults to the MACHINEN_TOKEN env var. */
-  token?: string;
   /**
    * Semver ranges by remote name. Overrides per-module pins from generated
    * bindings, so version policy survives paths (like warm()) that register
@@ -36,6 +34,24 @@ export interface MachinesOptions {
   restartOnCrash?: boolean;
   /** Timeout for boot + manifest fetch. Default 30s; raise for VM drivers that cold-boot. */
   bootTimeoutMs?: number;
+  /**
+   * Where to start searching for machinen.config.json (walks upward).
+   * Default: process.cwd(). The config is the lowest-precedence source of
+   * machine addresses and version pins: options > MACHINEN_REMOTE_* env > config.
+   */
+  configDir?: string;
+  /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
+  artifactCacheDir?: string;
+  /** Deadline for a pull entry's header/small fetches (manifest, snapshot). Default 30s. */
+  artifactFetchTimeoutMs?: number;
+  /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
+  artifactStreamIdleTimeoutMs?: number;
+  /**
+   * Enables plugin-owned vmstate publication (plugin.publishMachine() +
+   * a lazily started loopback artifact endpoint over `dir`).
+   * Default dir: .machinen/registry
+   */
+  publish?: { dir?: string; hostname?: string; port?: number };
 }
 
 export interface MachineModuleOptions {
@@ -105,6 +121,10 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     restartOnCrash: options.restartOnCrash ?? true,
     bootTimeoutMs: options.bootTimeoutMs,
     calls: options.calls,
+    artifactCacheDir: options.artifactCacheDir,
+    artifactFetchTimeoutMs: options.artifactFetchTimeoutMs,
+    artifactStreamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
+    publish: options.publish,
   });
 
   clientCounter++;
@@ -120,18 +140,32 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   const modules = new Map<string, Promise<AnyModule>>();
   const callables = new Map<string, AnyFn>();
 
+  let configLoaded = false;
+  let machinenConfig: MachinenConfig | undefined;
+  function configFile(): MachinenConfig | undefined {
+    if (!configLoaded) {
+      machinenConfig = loadMachinenConfig(options.configDir);
+      configLoaded = true;
+    }
+    return machinenConfig;
+  }
+
   function resolveEntry(name: string, opts?: MachineModuleOptions): string {
-    const base = options.remotes?.[name] ?? process.env[envKeyFor(name)];
+    const fromConfig = configFile()?.machines[name];
+    const base = options.remotes?.[name] ?? process.env[envKeyFor(name)] ?? fromConfig?.url;
     if (!base) {
+      const searched = configFile()
+        ? `add it to ${configFile()!.path}`
+        : 'add a machinen.config.json (none found from the working directory upward)';
       throw new Error(
-        `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }) or set ${envKeyFor(name)}.`,
+        `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }), ` +
+          `set ${envKeyFor(name)} (e.g. machinen+http://127.0.0.1:3801), or ${searched}.`,
       );
     }
     const spec = parseMachineEntry(name, base);
-    const token = options.token ?? process.env.MACHINEN_TOKEN;
-    if (token && !spec.auth?.token) spec.auth = { token };
-    // Priority: explicit ?version= on the entry > client options.versions > module pin.
-    const version = options.versions?.[name] ?? opts?.version;
+    // Priority: explicit ?version= on the entry > client options.versions
+    // > module pin > config file pin.
+    const version = options.versions?.[name] ?? opts?.version ?? fromConfig?.version;
     if (version && !spec.params.has('version')) spec.params.set('version', version);
     return formatMachineEntry(spec);
   }
@@ -216,7 +250,8 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     },
 
     async warm(remoteNames) {
-      const names = remoteNames ?? Object.keys(options.remotes ?? {});
+      const names =
+        remoteNames ?? Object.keys(options.remotes ?? configFile()?.machines ?? {});
       await plugin.warm(names.map((name) => ({ name, entry: ensureRegistered(name) })));
     },
 

@@ -45,7 +45,6 @@ const guest = createGuestRuntime({
 });
 
 const port = Number(process.env.PORT ?? 3804);
-const token = process.env.MACHINEN_TOKEN || undefined;
-serveGuest(guest, { port, token }).then((server) => {
+serveGuest(guest, { port }).then((server) => {
   console.log(`[machine-db] database machine listening on 127.0.0.1:${server.port}`);
 });

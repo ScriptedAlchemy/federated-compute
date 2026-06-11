@@ -69,7 +69,7 @@ describe('Machinen pure helpers', () => {
   test('shellSingleQuote preserves shell metacharacters inside one literal argument', async () => {
     const { shellSingleQuote } = await importMachinen();
 
-    expect(shellSingleQuote('plain-token')).toBe("'plain-token'");
+    expect(shellSingleQuote('plain-value')).toBe("'plain-value'");
     expect(shellSingleQuote("tok'en")).toBe("'tok'\\''en'");
     expect(shellSingleQuote('$(touch /tmp/pwn)')).toBe("'$(touch /tmp/pwn)'");
     expect(shellSingleQuote('`touch /tmp/pwn`')).toBe("'`touch /tmp/pwn`'");
@@ -136,7 +136,7 @@ describe('Machinen pure helpers', () => {
 });
 
 describe('Machinen driver unit behavior without KVM', () => {
-  test('fresh boot uses a finite boot timeout and stores the token launcher as owner-only', async () => {
+  test('fresh boot uses a finite boot timeout and stores the launcher as owner-only', async () => {
     const bootCalls: Record<string, unknown>[] = [];
     const writes: Array<{ guestPath: string; mode?: number; contents: string | Buffer }> = [];
     const vm = {
@@ -164,7 +164,7 @@ describe('Machinen driver unit behavior without KVM', () => {
 
     const { machinenDriver } = await importMachinen();
     const driver = machinenDriver({ guestReadyTimeoutMs: 1_000 });
-    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}?token=secret`));
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`));
 
     expect(bootCalls[0].timeoutMs).toBe(120_000);
     expect(writes.find((write) => write.guestPath === '/opt/federated/run.sh')?.mode).toBe(0o600);

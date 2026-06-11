@@ -13,6 +13,10 @@
     --java: #f0883e;
     --python: #58a6ff;
     --hot: #e5534b;
+    --snap: #c792ea;
+    --pull: #4dd2bf;
+    --vm: #e0709a;
+    --replay: #f0b43c;
   }
   body {
     background-image:
@@ -51,7 +55,7 @@
   /* ---------- hero ---------- */
   .hero {
     grid-column: span 12;
-    display: grid; grid-template-columns: 1.1fr .9fr; gap: 40px;
+    display: grid; grid-template-columns: 1fr 1.1fr; gap: 36px;
     padding: 30px 34px 28px;
     background:
       radial-gradient(ellipse 60% 80% at 0% 0%, rgba(63, 185, 80, .06), transparent),
@@ -64,36 +68,138 @@
   .kicker::before { content: '▸ '; }
   .hero-title {
     font-family: var(--display);
-    font-size: clamp(28px, 3.2vw, 42px); font-weight: 700;
+    font-size: clamp(26px, 2.8vw, 38px); font-weight: 700;
     line-height: 1.04; letter-spacing: .01em; text-transform: uppercase;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
   }
   .hero-title em {
     font-style: normal; color: var(--node);
     text-shadow: 0 0 26px rgba(63, 185, 80, .45);
   }
-  .pitch { font-size: 13px; color: var(--ink-dim); max-width: 62ch; }
+  .pitch { font-size: 12.5px; color: var(--ink-dim); max-width: 60ch; }
   .pitch b { color: var(--ink); font-weight: 500; }
   .pitch .nodec { color: var(--node); }
   code.block {
     display: block; background: var(--well); border: 1px solid var(--panel-edge);
     border-left: 2px solid var(--node);
-    border-radius: 6px; padding: 14px 16px; font-size: 12px; line-height: 1.75;
-    white-space: pre; overflow-x: auto; margin-top: 18px;
+    border-radius: 6px; padding: 13px 15px; font-size: 11.5px; line-height: 1.7;
+    white-space: pre; overflow-x: auto;
   }
   code.block .cm { color: var(--ink-faint); }
   code.block .kw { color: var(--java); }
   code.block .fn { color: var(--python); }
-  .steps { counter-reset: step; display: grid; gap: 14px; align-content: start; padding-top: 4px; }
-  .step { display: flex; gap: 14px; font-size: 12px; color: var(--ink-dim); }
-  .step::before {
-    counter-increment: step; content: '0' counter(step);
-    font-family: var(--display); font-weight: 700; font-size: 13px; color: var(--node);
-    border: 1px solid var(--panel-edge); border-radius: 5px;
-    background: var(--well);
-    width: 30px; height: 30px; display: grid; place-items: center; flex: none;
+  code.block .str { color: var(--node); }
+  .hero-code-label {
+    font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 7px;
   }
-  .step b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- topology ---------- */
+  #panel-topo { grid-column: span 12; --sec: var(--node); }
+  .topo {
+    display: grid;
+    grid-template-columns: minmax(150px, 205px) minmax(70px, 110px) minmax(210px, 265px) 1fr;
+    gap: 0; align-items: stretch;
+  }
+  .tregion {
+    border: 1px solid var(--panel-edge); border-radius: 8px;
+    background: var(--well); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .tregion .rname {
+    font-family: var(--display); font-size: 10px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim);
+    background: linear-gradient(180deg, #111a26, #0c121a);
+    border-bottom: 1px solid var(--panel-edge);
+    padding: 7px 12px;
+  }
+  .tregion .rbody { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: center; }
+  .tnode {
+    display: inline-flex; align-items: center; gap: 8px;
+    max-width: 100%;
+    border: 1px solid var(--panel-edge); border-radius: 5px;
+    padding: 7px 12px; font-size: 11.5px;
+    background: linear-gradient(180deg, #0e1620, #0a1018);
+  }
+  .tnode .tled { width: 7px; height: 7px; border-radius: 50%; background: #2c3640; flex: none; transition: background .4s, box-shadow .4s; }
+  .tnode.on .tled { background: var(--tacc, var(--node)); box-shadow: 0 0 8px var(--tacc, var(--node)); }
+  .tnode .tlabel { color: var(--ink); }
+  .tnode .tsub { color: var(--ink-faint); font-size: 9.5px; margin-left: auto; padding-left: 10px; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+  .tnode[data-m=compute_machine] { --tacc: var(--node); }
+  .tnode[data-m=java_machine] { --tacc: var(--java); }
+  .tnode[data-m=python_machine] { --tacc: var(--python); }
+  .tnode.host-node { border-color: rgba(63, 185, 80, .35); }
+  .tnode.host-node .tled { background: var(--node); box-shadow: 0 0 8px var(--node); }
+
+  /* Edges column: each row is one loadRemote id — the edge IS the import.
+     Edge taxonomy (data-kind): line style says WHAT crosses the edge.
+       rpc      thin dashed line, one pulse dot per call
+       artifact thicker solid line, packet TRAIN + bytes/digest label;
+                persists dimmed afterward as provenance                  */
+  .tedges { display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 0 14px; }
+  .tedge {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+    font-size: 10.5px;
+  }
+  .tedge code { color: var(--ink-dim); white-space: nowrap; }
+  .tedge code b { color: var(--tacc, var(--ink)); font-weight: 500; }
+  .tedge[data-m=compute_machine] { --tacc: var(--node); }
+  .tedge[data-m=java_machine] { --tacc: var(--java); }
+  .tedge[data-m=python_machine] { --tacc: var(--python); }
+  .tedge .twire { position: relative; height: 2px; min-width: 16px;
+    background: repeating-linear-gradient(90deg, #243040 0 6px, transparent 6px 12px);
+  }
+  .tedge.pulse .twire::after {
+    content: ''; position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--tacc, var(--node)); box-shadow: 0 0 10px var(--tacc, var(--node));
+    animation: tfly .5s linear;
+  }
+  @keyframes tfly { from { left: 0; } to { left: calc(100% - 8px); } }
+  .twan {
+    margin-top: 6px; padding-top: 10px; border-top: 1px dashed var(--panel-edge);
+    font-size: 10px; color: var(--ink-faint); letter-spacing: .1em; text-transform: uppercase;
+  }
+  .twan a { color: var(--python); }
+
+  /* Artifact cache sub-node: flashes per resolver event (hit/fetch). */
+  .tnode.cache-node { border-style: dashed; color: var(--ink-dim); transition: border-color .4s, box-shadow .4s; }
+  .tnode.cache-node .tled { background: #2c3640; }
+  .tnode.cache-node.flash-fetch { border-color: rgba(240, 136, 62, .7); box-shadow: 0 0 18px -6px var(--java); }
+  .tnode.cache-node.flash-fetch .tled { background: var(--java); box-shadow: 0 0 8px var(--java); }
+  .tnode.cache-node.flash-hit { border-color: rgba(63, 185, 80, .7); box-shadow: 0 0 18px -6px var(--node); }
+  .tnode.cache-node.flash-hit .tled { background: var(--node); box-shadow: 0 0 8px var(--node); }
+
+  /* Local machines group (process driver): origin + pulled clones, dynamic.
+     The artifact edge here runs VERTICALLY (origin above, clone below): a
+     thick teal pipe whose label is the pull's real stats — the column-width
+     rendering of the same artifact-edge taxonomy. */
+  .tlocal {
+    border-top: 1px dashed var(--panel-edge); margin-top: 10px; padding-top: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .tlocal .tlocal-name {
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 2px;
+  }
+  .tnode.clone { --tacc: var(--pull); border-color: rgba(77, 210, 191, .35); }
+  .tnode.origin-node { --tacc: var(--snap); border-color: rgba(199, 146, 234, .35); animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tclone { animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tclone .tnode { display: flex; }
+  .tpull {
+    margin: 0 0 3px 12px; padding: 2px 0 2px 10px;
+    border-left: 3px solid rgba(77, 210, 191, .45);
+    font-size: 9px; color: var(--ink-faint); line-height: 1.5;
+  }
+  .tpull b { color: var(--pull); font-weight: 500; }
+  .tclone.pulse .tpull { animation: pull-glow 1.2s ease-out 2; }
+  @keyframes pull-glow {
+    0% { border-left-color: rgba(77, 210, 191, .45); }
+    40% { border-left-color: var(--pull); box-shadow: -6px 0 14px -6px var(--pull); }
+    100% { border-left-color: rgba(77, 210, 191, .45); }
+  }
+  .topo-caption { color: var(--ink-dim); font-size: 11px; margin-top: 12px; }
+  .topo-caption code { color: var(--node); background: var(--well); padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
+  .topo-caption b { color: var(--ink); font-weight: 500; }
 
   /* ---------- machine cards ---------- */
   .machines { grid-column: span 12; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -125,7 +231,7 @@
     line-height: 1;
   }
   .machine.warm .mc-index { color: rgba(var(--acc-rgb), .16); }
-  .mc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .mc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
   .glyph {
     width: 38px; height: 38px; flex: none;
     display: grid; place-items: center;
@@ -147,6 +253,11 @@
   .led { width: 7px; height: 7px; border-radius: 50%; background: #2c3640; flex: none; transition: background .5s, box-shadow .5s; }
   .machine.warm .led { background: var(--acc); box-shadow: 0 0 9px var(--acc); }
   .machine.warm .state { color: var(--ink); }
+  .mc-entry {
+    font-size: 10px; color: var(--ink-faint);
+    margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mc-entry b { color: var(--ink-dim); font-weight: 400; }
   .mc-metrics {
     display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
     margin-bottom: 12px;
@@ -165,21 +276,29 @@
   .spark-label { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); margin-top: 5px; }
 
   /* ---------- layout: asymmetric rows ---------- */
-  #panel-pipeline { grid-column: span 8; --sec: var(--java); }
-  #panel-state    { grid-column: span 4; }
-  #panel-compute  { grid-column: span 4; --sec: var(--node); }
-  #panel-stream   { grid-column: span 8; --sec: var(--python); }
-  #panel-log      { grid-column: span 12; }
+  #panel-moves     { grid-column: span 12; }
+  #panel-pipeline  { grid-column: span 8; --sec: var(--java); }
+  #panel-state     { grid-column: span 4; }
+  #panel-lifecycle { grid-column: span 12; --sec: var(--snap); }
+  #panel-stream    { grid-column: span 12; --sec: var(--python); }
+  #panel-log       { grid-column: span 12; }
 
   .concept {
-    color: var(--ink-dim); font-size: 11.5px; margin: -6px 0 14px;
-    border-left: 2px solid var(--panel-edge); padding-left: 10px; max-width: 80ch;
+    color: var(--ink-dim); font-size: 11.5px; margin: -6px 0 12px;
+    border-left: 2px solid var(--panel-edge); padding-left: 10px; max-width: 84ch;
   }
   .concept b { color: var(--ink); font-weight: 500; }
   .concept code { color: var(--node); background: var(--well); padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
 
+  /* The label above each card's verbatim host code (code.card-code is shared). */
+  .card-code-label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 5px;
+  }
+
   /* ---------- pipeline ---------- */
-  textarea { width: 100%; resize: vertical; min-height: 64px; }
+  textarea { width: 100%; resize: vertical; min-height: 56px; }
   input:not([type=range]):focus, textarea:focus { outline: none; border-color: var(--node); box-shadow: 0 0 0 1px rgba(63, 185, 80, .3); }
   .row { gap: 10px; margin-top: 10px; }
   .num { width: 76px; }
@@ -211,10 +330,11 @@
   .stage[data-accent=java]   { --acc: var(--java);   border-top: 2px solid var(--java); }
   .stage[data-accent=python] { --acc: var(--python); border-top: 2px solid var(--python); }
   .stage[data-accent=node]   { --acc: var(--node);   border-top: 2px solid var(--node); }
-  .stage header { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+  .stage header { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; padding: 0; border: 0; background: none; }
   .stage .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 7px var(--acc); }
   .stage .sname { font-family: var(--display); font-weight: 600; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--acc); }
   .stage .chip { margin-left: auto; }
+  .stage .sremote { font-size: 9.5px; color: var(--ink-faint); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .op { display: flex; gap: 10px; font-size: 11.5px; padding: 2.5px 0; }
   .op + .op { border-top: 1px dashed #131b25; }
   .opk { color: var(--ink-dim); flex: none; width: 62px; }
@@ -233,7 +353,210 @@
     min-width: 44px; text-align: right; margin-left: auto;
     font-variant-numeric: tabular-nums;
   }
-  .hint { color: var(--ink-dim); font-size: 11px; margin-top: 10px; }
+
+  /* ---------- lifecycle (act 04) ---------- */
+  .snap-steps { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .snap-steps button { border-color: rgba(199, 146, 234, .4); color: var(--snap); }
+  .snap-steps button:hover:not(:disabled) { border-color: var(--snap); box-shadow: 0 0 16px -6px rgba(199, 146, 234, .6); }
+  .snap-steps button.pull-step { border-color: rgba(77, 210, 191, .4); color: var(--pull); }
+  .snap-steps button.pull-step:hover:not(:disabled) { border-color: var(--pull); box-shadow: 0 0 16px -6px rgba(77, 210, 191, .6); }
+  .snap-steps button:disabled { opacity: .35; cursor: not-allowed; }
+  .snap-steps .sarrow { color: var(--ink-faint); font-size: 12px; }
+  .snap-phase {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim);
+    margin-left: auto;
+  }
+  .snap-phase i { width: 7px; height: 7px; border-radius: 50%; background: #2c3640; }
+  .snap-phase[data-phase=running] i { background: var(--node); box-shadow: 0 0 8px var(--node); }
+  .snap-phase[data-phase=snapshotted] i { background: var(--snap); box-shadow: 0 0 8px var(--snap); }
+  .snap-phase[data-phase=restored] i { background: var(--node); box-shadow: 0 0 8px var(--node); }
+  .snap-phase[data-phase=forked] i { background: var(--pull); box-shadow: 0 0 8px var(--pull); }
+
+  /* Lineage strip: the artifact chain, lit up as the arc advances. */
+  .lineage { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .lineage .lin {
+    font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+    border: 1px solid var(--panel-edge); border-radius: 999px;
+    color: var(--ink-faint); background: var(--well);
+    padding: 1px 9px; transition: color .4s, border-color .4s;
+  }
+  .lineage .lin.lit { color: var(--snap); border-color: rgba(199, 146, 234, .45); }
+  .lineage .lin.lit.pull-lin { color: var(--pull); border-color: rgba(77, 210, 191, .45); }
+  .lineage .larr { color: var(--ink-faint); font-size: 10px; }
+
+  .snap-narrative { font-size: 11.5px; color: var(--ink-dim); min-height: 34px; max-width: 100ch; }
+  .snap-narrative b { color: var(--ink); font-weight: 500; }
+  .snap-narrative .snapc { color: var(--snap); }
+  .snap-narrative .pullc { color: var(--pull); }
+
+  /* Three counters: origin + clones, each independently incrementable. */
+  .fleet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  .fleet .member {
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 10px 13px;
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center;
+    transition: border-color .4s, opacity .4s;
+  }
+  .fleet .member[data-acc=snap] { --macc: var(--snap); --macc-rgb: 199, 146, 234; }
+  .fleet .member[data-acc=pull] { --macc: var(--pull); --macc-rgb: 77, 210, 191; }
+  .fleet .member.alive { border-color: rgba(var(--macc-rgb), .4); }
+  .fleet .member.absent { opacity: .45; }
+  .fleet .mname { font-family: var(--display); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--macc); }
+  .fleet .msub { grid-column: 1; font-size: 9.5px; color: var(--ink-faint); min-height: 14px; }
+  .fleet .mval {
+    grid-row: 1 / span 2; grid-column: 2;
+    font-family: var(--display); font-size: 34px; font-weight: 700;
+    color: var(--macc); text-shadow: 0 0 20px rgba(var(--macc-rgb), .4);
+    font-variant-numeric: tabular-nums;
+  }
+  .fleet .mrow { grid-column: 1 / span 2; margin-top: 8px; }
+  .fleet .mrow button { padding: 5px 12px; font-size: 10px; color: var(--macc); border-color: rgba(var(--macc-rgb), .4); }
+  .fleet .mrow button:hover:not(:disabled) { border-color: var(--macc); }
+  .fleet .mrow button:disabled { opacity: .35; cursor: not-allowed; }
+
+  .card-footer {
+    margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--panel-edge);
+    font-size: 10.5px; color: var(--ink-faint);
+  }
+  .card-footer code { color: var(--ink-dim); background: var(--well); padding: 0 4px; border-radius: 3px; }
+
+  /* ---------- whole-VM lane (act 04 · phase 2) ---------- */
+  .vm-lane { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--panel-edge); }
+  .vm-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .vm-head h3 {
+    font-family: var(--display); font-size: 13px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--vm); margin: 0;
+  }
+  .vm-badge[data-mode=live] { color: var(--node); border-color: rgba(63, 185, 80, .4); }
+  .vm-badge[data-mode=replay] { color: var(--replay); border-color: rgba(240, 180, 60, .5); }
+  .vm-badge[data-mode=off] { color: var(--ink-dim); border-color: var(--panel-edge); }
+  .vm-badge[data-mode=checking] { color: var(--ink-faint); border-color: var(--panel-edge); }
+  .vm-meta { font-size: 10px; color: var(--ink-faint); }
+  .vm-steps button { border-color: rgba(224, 112, 154, .4); color: var(--vm); }
+  .vm-steps button:hover:not(:disabled) { border-color: var(--vm); box-shadow: 0 0 16px -6px rgba(224, 112, 154, .6); }
+  .vm-steps button:disabled { opacity: .35; cursor: not-allowed; }
+  .vm-steps #vm-replay-btn { border-color: rgba(240, 180, 60, .5); color: var(--replay); }
+  .vm-steps #vm-replay-btn:hover:not(:disabled) { border-color: var(--replay); box-shadow: 0 0 16px -6px rgba(240, 180, 60, .6); }
+  .vm-steps #vm-reset { padding: 5px 10px; font-size: 10px; color: var(--ink-dim); border-color: var(--panel-edge); }
+  .vm-step4 {
+    font-size: 11px; letter-spacing: .04em; color: var(--ink-faint);
+    border: 1px dashed var(--panel-edge); border-radius: 5px; padding: 6px 12px;
+    transition: color .4s, border-color .4s;
+  }
+  .vm-step4.lit { color: var(--node); border-color: rgba(63, 185, 80, .45); border-style: solid; }
+  .snap-phase[data-phase=published] i { background: var(--vm); box-shadow: 0 0 8px var(--vm); }
+  .vm-witness { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .vm-strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    font-size: 11px; color: var(--ink-dim);
+    background: var(--well); border: 1px solid var(--panel-edge); border-radius: 6px;
+    padding: 8px 13px;
+  }
+  .vm-strip .wk { color: var(--ink-faint); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; min-width: 150px; }
+  .vm-strip b {
+    font-family: var(--display); font-size: 14px; font-weight: 700;
+    color: var(--vm); font-variant-numeric: tabular-nums;
+  }
+  .vm-lane[data-replay='1'] .vm-strip b { color: var(--replay); }
+  .vm-strip.frozen { opacity: .65; border-style: dashed; }
+  .vm-strip.frozen b { color: var(--snap); text-decoration: line-through; text-decoration-color: rgba(199, 146, 234, .5); }
+  .vm-delta {
+    font-size: 11.5px; color: var(--ink-dim);
+    border-left: 3px solid rgba(63, 185, 80, .5); padding: 4px 0 4px 10px;
+  }
+  .vm-delta b { color: var(--node); font-weight: 600; }
+  .vm-stats {
+    font-size: 10.5px; color: var(--ink-dim); margin: 6px 0;
+    padding: 7px 11px; border-left: 3px solid rgba(224, 112, 154, .45);
+    background: var(--well); border-radius: 0 5px 5px 0; line-height: 1.7;
+  }
+  .vm-stats b { color: var(--vm); font-weight: 500; }
+  .vm-lane[data-replay='1'] .vm-stats b { color: var(--replay); }
+  .vm-stats code { font-size: 10px; color: var(--ink-dim); background: none; padding: 0; }
+  .vm-skip { font-size: 9.5px; color: var(--replay); letter-spacing: .08em; text-transform: uppercase; }
+  .vmc { color: var(--vm); }
+  .repc { color: var(--replay); }
+  .vm-narrative-note { font-size: 10px; color: var(--ink-faint); margin-top: 10px; }
+
+  /* Topology: the whole-VM group. Same artifact-edge taxonomy as the local
+     machines group, but data-scale=gb edges are visibly HEAVIER — the weight
+     difference is the lesson (Phase 1 labels KBs; this labels GBs). */
+  .tvm .tlocal-name { color: rgba(224, 112, 154, .75); }
+  .tvm-replay {
+    color: var(--replay); border: 1px solid rgba(240, 180, 60, .5); border-radius: 999px;
+    padding: 0 7px; font-size: 8.5px; letter-spacing: .1em;
+  }
+  .tnode.vm-node { --tacc: var(--vm); border-color: rgba(224, 112, 154, .35); animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tnode.vm-node.dead { opacity: .5; }
+  .tnode.vm-node.dead .tled { background: #2c3640; box-shadow: none; }
+  .tnode.vm-node .tkilled { color: var(--hot); font-size: 8.5px; letter-spacing: .1em; text-transform: uppercase; }
+  .tnode.vm-registry { border-style: dashed; --tacc: var(--vm); }
+  .tvm .tpull { border-left-color: rgba(224, 112, 154, .5); }
+  .tvm .tpull b { color: var(--vm); }
+  .tvm .tpull[data-scale=gb] { border-left-width: 6px; padding-left: 12px; font-size: 9.5px; }
+  /* Indeterminate transfer: no progress events exist yet (runtime 2b), so the
+     train just flows until the response lands with the real totals. */
+  .tvm .tpull.flight {
+    background: repeating-linear-gradient(180deg, rgba(224, 112, 154, .16) 0 8px, transparent 8px 16px);
+    animation: gb-flow 1.2s linear infinite;
+  }
+  @keyframes gb-flow { from { background-position: 0 0; } to { background-position: 0 24px; } }
+  .tvm .tpull.done { opacity: .55; }
+  .tvm .rep { color: var(--replay); }
+
+  /* Race card: two bars, both from real timings (live run or labeled trace). */
+  .vm-race {
+    border: 1px dashed var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 11px 14px; margin: 10px 0;
+    max-width: 560px;
+  }
+  .vm-race-head {
+    font-family: var(--display); font-size: 11px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink);
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .vm-race-src { font-size: 9px; color: var(--ink-faint); letter-spacing: .08em; }
+  .vm-race-sub { font-size: 10px; color: var(--ink-faint); margin: 4px 0 10px; }
+  .vm-race-row { display: grid; grid-template-columns: 150px 1fr 56px; gap: 10px; align-items: center; font-size: 10px; }
+  .vm-race-row + .vm-race-row { margin-top: 7px; }
+  .vm-race-label { color: var(--ink-dim); letter-spacing: .06em; }
+  .vm-race-track { background: #0a1018; border: 1px solid #131b25; border-radius: 4px; height: 16px; overflow: hidden; }
+  .vm-race-fill { height: 100%; width: 0%; transition: width .8s cubic-bezier(.2, .8, .2, 1); }
+  .vm-race-fill.cold { background: var(--snap); box-shadow: 0 0 14px -4px var(--snap); }
+  .vm-race-fill.warm { background: var(--vm); box-shadow: 0 0 14px -4px var(--vm); }
+  .vm-lane[data-replay='1'] .vm-race-fill.warm { background: var(--replay); }
+  .vm-race-ms { font-family: var(--display); font-weight: 700; font-size: 12px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* artifacts capability chip on machine cards (capability-as-presence). */
+  .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
+
+  /* typed-imports expander: the machine's own /mf-types.ts, proxied by the host. */
+  details.types { margin-top: 10px; border: 1px solid var(--panel-edge); border-radius: 6px; background: var(--well); }
+  details.types summary {
+    cursor: pointer; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 11px;
+    font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  details.types summary::before { content: '▸'; color: var(--ink-faint); transition: transform .15s; }
+  details.types[open] summary::before { transform: rotate(90deg); }
+  details.types pre {
+    margin: 0; padding: 8px 12px;
+    border-top: 1px dashed var(--panel-edge);
+    font-size: 10px; line-height: 1.55; color: var(--ink-dim);
+    max-height: 220px; overflow: auto;
+  }
+
+  /* version negotiation control (java card): demand a version the machine
+     can't satisfy and watch the attach get refused. */
+  .vneg { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--panel-edge); }
+  .vneg-row { gap: 10px; margin-top: 0; }
+  .vneg button { padding: 5px 12px; font-size: 10px; color: var(--java); border-color: rgba(240, 136, 62, .4); }
+  .vneg button:hover:not(:disabled) { border-color: var(--java); box-shadow: 0 0 16px -6px rgba(240, 136, 62, .6); }
+  .vneg button:disabled { opacity: .35; cursor: not-allowed; }
+  .vneg-status { font-size: 10.5px; color: var(--ink-dim); }
+  .vneg-status b { color: var(--ink); font-weight: 500; }
 
   /* ---------- stream ---------- */
   .ticks { display: flex; gap: 9px; margin-top: 14px; min-height: 46px; flex-wrap: wrap; align-items: center; }
@@ -257,6 +580,19 @@
     font-size: 12px; padding: 8px 13px; text-shadow: none;
   }
 
+  /* ---------- chaos strip (act 06) ---------- */
+  .chaos { margin-bottom: 12px; }
+  .chaos-row { gap: 12px; margin-top: 0; }
+  #chaos-kill { border-color: rgba(229, 83, 75, .4); color: var(--hot); }
+  #chaos-kill:hover:not(:disabled) { border-color: var(--hot); box-shadow: 0 0 16px -6px rgba(229, 83, 75, .6); }
+  #chaos-kill:disabled { opacity: .35; cursor: not-allowed; }
+  #chaos-chip[data-state=alive] { color: var(--node); border-color: rgba(63, 185, 80, .35); }
+  #chaos-chip[data-state=dead] { color: var(--hot); border-color: rgba(229, 83, 75, .4); }
+  #chaos-chip[data-state=open] { color: var(--java); border-color: rgba(240, 136, 62, .4); }
+  .chaos-narrative { font-size: 11.5px; color: var(--ink-dim); margin-top: 9px; max-width: 110ch; min-height: 30px; }
+  .chaos-narrative b { color: var(--ink); font-weight: 500; }
+  .chaos-narrative .hotc { color: var(--hot); }
+
   /* ---------- log ---------- */
   #log {
     height: 230px; overflow-y: auto;
@@ -268,24 +604,30 @@
   #log .line { display: flex; gap: 10px; padding: 1px 0; }
   #log .t { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
   #log .kb {
-    flex: none; width: 58px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+    flex: none; width: 64px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
     color: var(--ink-dim); padding-top: 1px;
   }
   #log .line[data-k=ready] .kb { color: var(--node); }
+  #log .line[data-k=snapshot] .kb, #log .line[data-k=restore] .kb { color: var(--snap); }
+  #log .line[data-k=pull] .kb { color: var(--pull); }
   #log .line[data-k=error] .kb, #log .line[data-k=crash] .kb, #log .line[data-k=circuit] .kb { color: var(--hot); }
   #log .msg { color: var(--ink-dim); }
   #log .line[data-k=ready] .msg { color: var(--ink); }
+  #log .line[data-k=snapshot] .msg, #log .line[data-k=restore] .msg, #log .line[data-k=pull] .msg { color: var(--ink); }
   #log .line[data-k=error] .msg, #log .line[data-k=crash] .msg, #log .line[data-k=circuit] .msg { color: var(--hot); }
 
   .ms { color: var(--ink-dim); font-size: 11px; }
 
   @media (max-width: 1100px) {
-    #panel-pipeline, #panel-state, #panel-compute, #panel-stream { grid-column: span 12; }
+    #panel-pipeline, #panel-state, #panel-lifecycle, #panel-stream { grid-column: span 12; }
     .hero { grid-template-columns: 1fr; gap: 24px; }
+    .topo { grid-template-columns: 1fr; gap: 12px; }
+    .tedges { padding: 0; }
+    .fleet { grid-template-columns: 1fr; }
   }
   @media (max-width: 900px) {
     main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
-    .hero, .machines, #panel-pipeline, #panel-state, #panel-compute, #panel-stream, #panel-log { grid-column: span 1; }
+    .hero, .machines, #panel-moves, #panel-topo, #panel-pipeline, #panel-state, #panel-lifecycle, #panel-stream, #panel-log { grid-column: span 1; }
     .machines { grid-template-columns: 1fr; }
     .stages { grid-template-columns: 1fr; }
     header { padding: 22px 18px 16px; }
@@ -295,132 +637,460 @@
 <body>
 <header class="reveal" style="--d:0">
   <h1>federated<span class="accent">-</span>compute</h1>
-  <span class="sub">module federation as the multiplexer — machines attach on demand</span>
+  <span class="sub">module federation runtime — the remotes are machines</span>
   <span class="live"><i></i>polling 1.5s</span>
-  <nav><a href="/gravity">data gravity demo →</a></nav>
+  <nav>
+    <a href="/" class="tab-active" aria-current="page"><span class="tno">01</span>federation console</a>
+    <a href="/gravity"><span class="tno">02</span>data gravity</a>
+  </nav>
 </header>
 
 <main>
   <section class="panel hero reveal" style="--d:1">
     <div>
       <p class="kicker">live federation console</p>
-      <div class="hero-title">Three runtimes.<br /><em>One import graph.</em></div>
+      <div class="hero-title">A normal MF host.<br /><em>The remotes are machines.</em></div>
       <p class="pitch">
-        Three services — <b>Node</b>, a <b>JVM</b>, and <b>CPython</b> — none of which this app has ever
-        seen the source of. Each one is a <b>machine</b>: an independently deployed process that publishes
-        a typed manifest, exactly like a Module Federation remote publishes <b>mf-manifest.json</b>.
-        This app consumes them as <b class="nodec">plain imported functions</b> — no SDKs, no client
-        libraries, no codegen per language. The federation runtime is the multiplexer; HTTP is just
-        the transport. Watch the cards below flip from <b>cold</b> to <b>warm</b>: nothing attaches
-        until the first call needs it.
+        This page never touches federation — the <b>browser</b> only calls
+        <b>fetch('/api/…')</b>. Federation lives in the <b>host</b>: a Node process
+        (apps/host/src/server.ts) that is a stock <b>Module Federation runtime</b> consumer —
+        the same <b>createInstance</b> + <b>loadRemote</b> as module-federation.io. The twist:
+        every remote entry is a <b class="nodec">machinen</b> address, claimed by a runtime plugin
+        that resolves it to a running <b>machine</b> — a Node service, a JVM, a CPython process —
+        and hands back typed async functions. Every card below answers one question —
+        <b>what moves where?</b> — and shows the exact bytes that crossed each boundary: open
+        <b>“what just happened on the wire”</b> after you click.
       </p>
-      <code class="block"><span class="cm">// the entire consumer API — types pulled from the machines themselves</span>
-<span class="kw">import</span> { strings } <span class="kw">from</span> './machines/java_machine';
-<span class="kw">import</span> { stats } <span class="kw">from</span> './machines/python_machine';
-
-<span class="kw">await</span> strings.<span class="fn">sha256</span>(text);   <span class="cm">// runs on the JVM</span>
-<span class="kw">await</span> stats.<span class="fn">mean</span>(numbers);     <span class="cm">// runs on CPython</span></code>
     </div>
     <div>
-      <h2>Anatomy of a call</h2>
-      <div class="steps">
-        <div class="step"><span><b>Import.</b> Bindgen pulled typed bindings from each machine's manifest at dev time — the machine analog of MF's <b>@mf-types</b>. The import costs nothing.</span></div>
-        <div class="step"><span><b>First call → attach.</b> The runtime plugin claims the <b>machinen+http://</b> entry, fetches the manifest, negotiates the semver version — the card flips to <b>warm</b>.</span></div>
-        <div class="step"><span><b>Every call → RPC.</b> Arguments cross as JSON, governed by deadlines, retries, and a circuit breaker. The guest runs your function and answers.</span></div>
-        <div class="step"><span><b>Hooks see everything.</b> The activity log below is the plugin's hook system narrating boots, calls, latencies, and failures in real time.</span></div>
+      <div class="hero-code-label">the host, verbatim — apps/host/src/server.ts (runs in the host process, never the browser)</div>
+      <code class="block"><span class="kw">import</span> { createInstance } <span class="kw">from</span> <span class="str">'@module-federation/runtime'</span>;
+<span class="kw">import</span> { machinenPlugin, httpAttachDriver } <span class="kw">from</span> <span class="str">'@federated-compute/machinen-plugin'</span>;
+
+<span class="cm">// three entry kinds, one runtime — code only moves between machines over HTTP:</span>
+<span class="cm">//   machinen+http://host:port    attach to a deployment (calls move, code doesn't)</span>
+<span class="cm">//   machinen+pull+http://…       fetch the artifact over HTTP, boot a local clone</span>
+<span class="cm">//   machinen://&lt;path&gt;            boot from a local path (deployments booting their own code)</span>
+<span class="kw">const</span> host = <span class="fn">createInstance</span>({
+  name: <span class="str">'host'</span>,
+  remotes: [{ name: <span class="str">'java_machine'</span>, entry: <span class="str">'machinen+http://127.0.0.1:3802'</span> }, <span class="cm">/* … */</span>],
+  plugins: [<span class="fn">machinenPlugin</span>({ driver: <span class="fn">httpAttachDriver</span>() })],
+});
+
+<span class="cm">// loadRemote, exactly like any federated module — but it's a JVM</span>
+<span class="kw">const</span> strings = <span class="kw">await</span> host.<span class="fn">loadRemote</span>(<span class="str">'java_machine/strings'</span>);
+<span class="kw">await</span> strings.<span class="fn">sha256</span>(text);</code>
+    </div>
+  </section>
+
+  <section class="panel reveal" id="panel-moves" style="--d:2">
+    <h2>The four ways to move compute — what moves where?</h2>
+    <div class="moves">
+      <div class="move">
+        <span class="mv" data-mv="attach">
+          <span class="mvname">attach</span>
+          <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+        </span>
+        <span class="mvline"><b>Calls move.</b> The machine stays where it was deployed; every invocation is an RPC to its address.</span>
+        <span class="mvwhere"><a href="#panel-pipeline">acts 02 · 03 · 05 below</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="freeze">
+          <span class="mvname">freeze / restore</span>
+          <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
+        </span>
+        <span class="mvline"><b>Nothing crosses the network.</b> State drops to disk, the process dies, a new one resumes mid-count.</span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 2–3</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="pull">
+          <span class="mvname">pull to me</span>
+          <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
+        </span>
+        <span class="mvline"><b>The artifact moves to you.</b> Image or warm snapshot is fetched over HTTP; an independent clone boots locally.</span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 1, 4–5</a></span>
+      </div>
+      <div class="move">
+        <span class="mv" data-mv="deploy">
+          <span class="mvname">code → data</span>
+          <span class="mvdiag"><i>artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i class="mvhot">data region</i></span>
+        </span>
+        <span class="mvline"><b>The artifact moves toward the data.</b> Deploy by pull into the far region; calls stay short forever after.</span>
+        <span class="mvwhere"><a href="/gravity">page 02 — data gravity</a></span>
       </div>
     </div>
   </section>
 
-  <div class="machines reveal" id="machines" style="--d:2"></div>
+  <section class="panel reveal" id="panel-topo" style="--d:3">
+    <h2><span class="actno">act 01 ·</span> Topology — who runs what, where</h2>
+    <div class="topo">
+      <div class="tregion">
+        <div class="rname"><span class="actor browser">browser</span></div>
+        <div class="rbody"><span class="tnode on"><span class="tled"></span><span class="tlabel">this page</span><span class="tsub">fetch('/api/…')<br />no federation here</span></span></div>
+      </div>
+      <div class="tedges">
+        <div class="tedge"><code>http</code><span class="twire"></span></div>
+      </div>
+      <div class="tregion">
+        <div class="rname"><span class="actor host">host — node process</span></div>
+        <div class="rbody">
+          <span class="tnode host-node"><span class="tled"></span><span class="tlabel">MF runtime</span><span class="tsub">createInstance + machinenPlugin<br />runs every loadRemote</span></span>
+          <span class="tnode cache-node" id="topo-cache"><span class="tled"></span><span class="tlabel">artifact cache</span><span class="tsub" id="topo-cache-sub">0 artifacts<br />sha256-addressed</span></span>
+          <div class="tlocal" id="topo-local" hidden>
+            <div class="tlocal-name">local machines — process driver</div>
+            <div class="tedges" id="topo-local-edges"></div>
+          </div>
+          <!-- Whole-VM lane group: same artifact-edge taxonomy, GB scale.
+               In replay mode it renders trace events, labeled `replay`. -->
+          <div class="tlocal tvm" id="topo-vm" hidden>
+            <div class="tlocal-name">real microVMs — machinen driver <span class="tvm-replay" id="topo-vm-replay" hidden>replay</span></div>
+            <div class="tedges" id="topo-vm-edges"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tregion">
+        <div class="rname"><span class="actor machine">machines</span>&nbsp; us-east — independent deployments</div>
+        <div class="rbody">
+          <div class="tedges" id="topo-edges" style="padding:0"></div>
+          <div class="twan" id="topo-wan">
+            ⌁ wan&nbsp;→&nbsp;eu-west entries: <span id="topo-far"></span> — <a href="/gravity">data gravity demo →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="topo-caption">
+      The chain is always: <b>browser</b> → HTTP → <b>host process</b> (which executes
+      <code>host.loadRemote('&lt;machine&gt;/&lt;module&gt;')</code> server-side) → <b>machine</b>.
+      Edge style says what crosses it: thin dashed = <b>RPC calls</b>, thick teal pipe = an
+      <b>artifact</b> moved (real bytes · cache hit|miss; the digest is in the wire trace). Act 04
+      grows this map live: the pulled clones appear under the host with the cache that fed them.
+      The two eu-west machines sit behind a simulated WAN — that's page <b>02</b>.
+    </p>
+  </section>
 
-  <section class="panel reveal" id="panel-pipeline" style="--d:3">
-    <h2>Polyglot pipeline — one request, three machines</h2>
-    <p class="concept"><b>Concept: composition without SDKs.</b> One button fans out across three languages. The handler reads like local code — <code>strings.sha256()</code>, <code>data.wordCount()</code>, <code>text.shout()</code> — but each line executes in a different runtime.</p>
+  <div class="machines reveal" id="machines" style="--d:4"></div>
+
+  <section class="panel reveal" id="panel-pipeline" style="--d:5">
+    <h2><span class="actno">act 02 ·</span> Polyglot pipeline — one request, three machines</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">3 machines</i></span>
+      <span class="mvwhat"><b>calls move</b> — the machines stay put</span>
+    </div>
+    <p class="concept"><b>One handler fans out across three runtimes.</b> Each stage below is one <code>loadRemote</code> + plain calls — no SDKs, no per-language clients.</p>
+    <div class="card-code-label"><span class="actor host">runs in the host</span> apps/host/src/server.ts</div>
+    <code class="card-code"><span class="kw">const</span> strings = <span class="kw">await</span> host.loadRemote(<span class="str">'java_machine/strings'</span>);   <span class="cm">// jvm</span>
+<span class="kw">const</span> data    = <span class="kw">await</span> host.loadRemote(<span class="str">'python_machine/data'</span>);    <span class="cm">// cpython</span>
+<span class="kw">const</span> text    = <span class="kw">await</span> host.loadRemote(<span class="str">'compute_machine/text'</span>);   <span class="cm">// node</span>
+<span class="kw">await</span> strings.sha256(input); <span class="kw">await</span> data.wordCount(input); <span class="kw">await</span> text.shout(input);</code>
     <textarea id="pipeline-input" placeholder="type some text… it will be hashed on the JVM, analyzed by CPython, and transformed by Node">boot once run everywhere</textarea>
     <div class="row">
       <button id="pipeline-run" class="btn-go">Run pipeline</button>
       <span class="chip" id="pipeline-ms" hidden></span>
     </div>
     <div class="result" id="pipeline-result"><span class="placeholder">— awaiting dispatch</span></div>
+    <details class="wiretrace" id="pipeline-wire" hidden>
+      <summary>what just happened on the wire<span class="wcount"></span></summary>
+      <div class="wirebody"></div>
+    </details>
   </section>
 
-  <section class="panel reveal" id="panel-state" style="--d:4">
-    <h2>Machine-owned state</h2>
-    <p class="concept"><b>Concept: state has an address.</b> Each counter lives inside its machine, not in this app. Freeze a machine and its counter travels with it — that's the snapshot demo (<code>pnpm demo:snapshot</code>), and the real-VM variant freezes the whole microVM, heap and all (<code>pnpm demo:machinen</code>).</p>
+  <section class="panel reveal" id="panel-state" style="--d:6">
+    <h2><span class="actno">act 03 ·</span> Machine-owned state</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+      <span class="mvwhat"><b>calls move</b> — state doesn't</span>
+    </div>
+    <p class="concept"><b>State has an address.</b> Each counter lives inside its machine, not in this app — and because state lives in the machine, it can be frozen, shipped, and forked. That's act 04.</p>
+    <div class="card-code-label"><span class="actor host">runs in the host</span></div>
+    <code class="card-code"><span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'java_machine/counter'</span>);
+<span class="kw">await</span> counter.increment();</code>
     <div class="row counter-row" data-acc="node"><button data-counter="compute_machine">node +1</button><span class="counterval" id="c-compute_machine">—</span></div>
     <div class="row counter-row" data-acc="java"><button data-counter="java_machine">java +1</button><span class="counterval" id="c-java_machine">—</span></div>
     <div class="row counter-row" data-acc="python"><button data-counter="python_machine">python +1</button><span class="counterval" id="c-python_machine">—</span></div>
+    <details class="wiretrace" id="counter-wire" hidden>
+      <summary>what just happened on the wire<span class="wcount"></span></summary>
+      <div class="wirebody"></div>
+    </details>
   </section>
 
-  <section class="panel reveal" id="panel-compute" style="--d:5">
-    <h2>Compute playground</h2>
-    <p class="concept"><b>Concept: lazy attach.</b> If this card is your first click, you'll pay a one-time attach cost — watch the machine card warm up — then calls settle to transport latency.</p>
-    <div class="row">
-      <input class="num" id="add-a" type="number" value="20" aria-label="first addend" /> +
-      <input class="num" id="add-b" type="number" value="22" aria-label="second addend" />
-      <button id="add-run">add</button>
+  <section class="panel reveal" id="panel-lifecycle" style="--d:7">
+    <h2><span class="actno">act 04 ·</span> Machine lifecycle — freeze it, restore it, fork it by pull</h2>
+    <div class="row" style="gap:18px; margin:0 0 10px">
+      <span class="mv" data-mv="freeze">
+        <span class="mvname">freeze / restore</span>
+        <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
+        <span class="mvwhat">steps 2–3 — <b>nothing moves</b>, state survives death</span>
+      </span>
+      <span class="mv" data-mv="pull">
+        <span class="mvname">pull to me</span>
+        <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
+        <span class="mvwhat">steps 1, 4–5 — <b>the artifact moves</b>, a clone boots</span>
+      </span>
     </div>
-    <div class="row">
-      fib(<input class="num" id="fib-n" type="number" value="25" aria-label="fibonacci n" />)
-      <button id="fib-run">fib</button>
+    <p class="concept">
+      <b>One machine, one stepper, the whole lifecycle — and the host never reads machine code
+      from disk.</b> Step 1: <code>snap_machine</code>'s image is <b>pulled over HTTP</b> from
+      <code>compute_machine</code>'s published <code>/mf-image</code> (digest <b>MISS</b> — the
+      code crosses the wire exactly once) and booted from the host's own cache (process driver,
+      fixed port 3811), then worked to 3. Steps 2–3: <b>frozen</b> into a <code>.snap</code>
+      bundle (state captured over HTTP via <code>/mf/state</code>), killed, and <b>restored</b>.
+      Steps 4–5: the restored process serves <code>/mf-manifest.json</code>,
+      <code>/mf-image</code> and <code>/mf-snapshot</code> — <b>it is a registry of itself</b> — so a
+      <code>machinen+pull+http://</code> entry forks it: snapshot re-fetched fresh each time
+      (it's <code>no-store</code>), image already cached by digest — <b>HIT</b>, near-instant.
+      Step 5 also <b>pins</b> <code>?digest=</code> to the exact image step 4 pulled. Clones own
+      their state; divergence is the point. Pulls are deployment traffic — resolver-level fetches
+      that bypass the per-machine call circuit breaker by design.
+      <b>Attach to state you share; pull state you want to own.</b>
+      One honest limit: this lane only moves what the guest <b>chose</b> to put in
+      <code>dehydrate()</code> — the hot solver in the whole-VM lane below is deliberately not in
+      it, so freeze/restore here would lose that heap.
+    </p>
+    <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
+    <code class="card-code">host.registerRemotes([{ name: <span class="str">'snap_machine'</span>,                              <span class="cm">// 1 · boot: image arrives over HTTP</span>
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3801?artifact=image&amp;port=3811&amp;version=^1.0.0'</span> }]);
+<span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                                <span class="cm">// 2 · freeze -> .snap</span>
+host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <span class="str">'machinen://….snap?port=3811'</span> }], { force: <span class="kw">true</span> });  <span class="cm">// 3 · restore</span>
+host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,                                <span class="cm">// 4 · fork by pull</span>
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3811?artifact=snapshot&amp;port=3812&amp;version=^1.0.0&amp;clone=a'</span> }]);
+<span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'snap_clone_a/counter'</span>);   <span class="cm">// pulls, verifies, boots the clone</span></code>
+    <div class="row snap-steps">
+      <button id="snap-boot">1 · boot &amp; work</button>
+      <span class="sarrow">→</span>
+      <button id="snap-freeze" disabled>2 · freeze + kill</button>
+      <span class="sarrow">→</span>
+      <button id="snap-restore" disabled>3 · restore from .snap</button>
+      <span class="sarrow">→</span>
+      <button id="snap-pull-a" class="pull-step" disabled>4 · fork by pull</button>
+      <span class="sarrow">→</span>
+      <button id="snap-pull-b" class="pull-step" disabled>5 · fork again</button>
+      <span class="snap-phase" id="snap-phase" data-phase="cold"><i></i><span>cold</span></span>
     </div>
-    <div class="result" id="compute-result"><span class="placeholder">—</span></div>
+    <div class="lineage" aria-label="artifact lineage">
+      <span class="lin" id="lin-image">image</span><span class="larr">→</span>
+      <span class="lin" id="lin-process">process</span><span class="larr">→</span>
+      <span class="lin" id="lin-snap">.snap</span><span class="larr">→</span>
+      <span class="lin" id="lin-process2">process′</span><span class="larr">→</span>
+      <span class="lin pull-lin" id="lin-clone-a">clone a</span><span class="larr">/</span>
+      <span class="lin pull-lin" id="lin-clone-b">clone b</span>
+    </div>
+    <!-- Filled from LC_NARRATIVES.cold on init — single source for the cold story. -->
+    <div class="snap-narrative" id="snap-narrative"></div>
+    <div class="fleet">
+      <div class="member absent" data-acc="snap" id="fleet-origin">
+        <span class="mname">snap_machine · origin</span>
+        <span class="msub" id="fleet-origin-sub">not booted</span>
+        <span class="mval" id="fleet-origin-val">—</span>
+        <div class="row mrow"><button data-lcounter="origin" disabled>origin +1</button></div>
+      </div>
+      <div class="member absent" data-acc="pull" id="fleet-a">
+        <span class="mname">snap_clone_a</span>
+        <span class="msub" id="fleet-a-sub">step 4 pulls it</span>
+        <span class="mval" id="fleet-a-val">—</span>
+        <div class="row mrow"><button data-lcounter="a" disabled>clone a +1</button></div>
+      </div>
+      <div class="member absent" data-acc="pull" id="fleet-b">
+        <span class="mname">snap_clone_b</span>
+        <span class="msub" id="fleet-b-sub">step 5 pulls it</span>
+        <span class="mval" id="fleet-b-val">—</span>
+        <div class="row mrow"><button data-lcounter="b" disabled>clone b +1</button></div>
+      </div>
+    </div>
+    <details class="wiretrace" id="snap-wire" hidden>
+      <summary>what just happened on the wire<span class="wcount"></span></summary>
+      <div class="wirebody"></div>
+    </details>
+
+    <!-- Phase 2: the whole-VM lane. Live on KVM hardware; a clearly-labeled
+         recorded trace everywhere else. Every number is a real hook/request
+         value (live) or comes from the committed real-KVM trace (replay). -->
+    <div class="vm-lane" id="vm-lane">
+      <div class="vm-head">
+        <h3>whole VM — machinen driver</h3>
+        <span class="chip vm-badge" id="vm-badge" data-mode="checking">checking hardware…</span>
+        <span class="vm-meta" id="vm-meta"></span>
+        <span class="vm-skip" id="vm-skip" hidden></span>
+      </div>
+      <p class="concept">
+        <b>Same federation, zero cooperation.</b> A hot route solver runs inside a
+        <b>real microVM</b>; its heap — memo cache, RNG state, iteration count, a ticking
+        <code>setInterval</code> — is <b>not</b> in <code>dehydrate()</code>. The app-state lane
+        above cannot move it. <span class="vmc">This lane moves the whole heap; nothing opted
+        in:</span> <code>plugin.publishMachine()</code> dumps the VM mid-flight into a
+        content-addressed <code>machinen-vmstate@1</code> bundle (GB-scale, arch-bound), and a
+        second MF instance pulls it with a <code>machinen+pull+…?artifact=vmstate</code> entry
+        and resumes it — heap, timers, kernel — without the guest ever being asked.
+      </p>
+      <div class="row snap-steps vm-steps">
+        <button id="vm-boot" disabled>1 · boot VM + start solver</button>
+        <span class="sarrow">→</span>
+        <button id="vm-publish" disabled>2 · freeze + publish (one verb)</button>
+        <span class="sarrow">→</span>
+        <button id="vm-restore" disabled>3 · pull vmstate to a second host</button>
+        <span class="sarrow">→</span>
+        <span class="vm-step4" id="vm-step4">4 · resumed — heap intact</span>
+        <button id="vm-replay-btn" hidden>▶ play recorded VM move</button>
+        <button id="vm-reset" disabled title="dispose VMs + reclaim the GB-scale artifacts">reset</button>
+        <span class="snap-phase" id="vm-phase" data-phase="cold"><i></i><span>cold</span></span>
+      </div>
+      <div class="vm-witness" id="vm-witness">
+        <div class="vm-strip" id="vm-strip-live" hidden>
+          <span class="wk">live heap — source VM</span>
+          <span>iteration <b data-f="iter">—</b></span>
+          <span>cache <b data-f="cache">—</b></span>
+          <span>best <b data-f="best">—</b></span>
+          <span>heap fp <b data-f="fp">—</b></span>
+          <span>pid <b data-f="pid">—</b></span>
+        </div>
+        <div class="vm-strip frozen" id="vm-strip-frozen" hidden>
+          <span class="wk">frozen at (the witness)</span>
+          <span>iteration <b data-f="iter">—</b></span>
+          <span>cache <b data-f="cache">—</b></span>
+          <span>best <b data-f="best">—</b></span>
+          <span>heap fp <b data-f="fp">—</b></span>
+          <span>pid <b data-f="pid">—</b></span>
+        </div>
+        <div class="vm-delta" id="vm-delta" hidden></div>
+      </div>
+      <div class="vm-stats" id="vm-publish-stats" hidden></div>
+      <div class="vm-stats" id="vm-pull-stats" hidden></div>
+      <!-- Race card: rendered only when BOTH bars have a real number for the
+           current mode (this run's timings, or the recorded trace's). -->
+      <div class="vm-race" id="vm-race" hidden>
+        <div class="vm-race-head">which is faster here? <span class="vm-race-src" id="vm-race-src"></span></div>
+        <div class="vm-race-sub">cold-cache GBs over a slow link lose to a fresh boot; warm caches and expensive
+          heaps flip it. No winner is hard-coded — the bars are this run's truth.</div>
+        <div class="vm-race-row">
+          <span class="vm-race-label">cold boot + first call</span>
+          <div class="vm-race-track"><div class="vm-race-fill cold" id="vm-race-cold"></div></div>
+          <span class="vm-race-ms" id="vm-race-cold-ms">—</span>
+        </div>
+        <div class="vm-race-row">
+          <span class="vm-race-label">pull warm VM + first call</span>
+          <div class="vm-race-track"><div class="vm-race-fill warm" id="vm-race-warm"></div></div>
+          <span class="vm-race-ms" id="vm-race-warm-ms">—</span>
+        </div>
+      </div>
+      <div class="snap-narrative" id="vm-narrative"></div>
+      <details class="wiretrace" id="vm-wire" hidden>
+        <summary>what just happened on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+      <div class="vm-narrative-note">
+        The pull protocol is deliberately unauthenticated and loopback-bound — publishing a
+        vmstate bundle means anyone who can reach the endpoint can take the machine's code
+        <b>and its memory</b>. CLI version of this lane: <code>pnpm demo:machinen</code>.
+      </div>
+    </div>
   </section>
 
-  <section class="panel reveal" id="panel-stream" style="--d:6">
-    <h2>Live stream — machine → host → browser</h2>
-    <p class="concept"><b>Concept: streaming bindings.</b> <code>countdown()</code> is an async iterable that crosses two boundaries: machine → host as NDJSON, host → you as server-sent events.</p>
+  <section class="panel reveal" id="panel-stream" style="--d:8">
+    <h2><span class="actno">act 05 ·</span> Live stream — machine → host → browser</h2>
+    <div class="mv" data-mv="attach" style="margin-bottom:10px">
+      <span class="mvname">attach</span>
+      <span class="mvdiag"><i>host</i><span class="mvwire" data-what="calls" data-dir="both"></span><i class="mvhot">machine</i></span>
+      <span class="mvwhat"><b>calls move</b> — this one streams back</span>
+    </div>
+    <p class="concept"><b>Streaming bindings.</b> <code>countdown()</code> is an async iterable crossing two boundaries: machine → host as NDJSON (the RPC response stays open), host → you as server-sent events.</p>
+    <div class="card-code-label"><span class="actor host">runs in the host</span></div>
+    <code class="card-code"><span class="kw">const</span> math = <span class="kw">await</span> host.loadRemote(<span class="str">'compute_machine/math'</span>);
+<span class="kw">for await</span> (<span class="kw">const</span> tick <span class="kw">of</span> math.countdown(n)) { <span class="cm">/* …sse to the browser */</span> }</code>
     <div class="row">
-      countdown(<input class="num" id="cd-from" type="number" value="8" aria-label="countdown start" />)
+      countdown(<input class="num" id="cd-from" type="number" value="8" min="1" max="30" aria-label="countdown start" />)
       <button id="cd-run">stream</button>
     </div>
     <div class="ticks" id="ticks"></div>
   </section>
 
-  <section class="panel reveal" id="panel-log" style="--d:7">
-    <h2>Activity — runtime plugin hooks, live</h2>
-    <p class="concept"><b>Concept: observable by construction.</b> Every boot, call, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener.</p>
+  <section class="panel reveal" id="panel-log" style="--d:9">
+    <h2><span class="actno">act 06 ·</span> Activity — runtime plugin hooks, live</h2>
+    <p class="concept"><b>Observable by construction.</b> Every boot, call, snapshot, artifact pull, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener in the host. The failure events are not theoretical: <b>cause one yourself.</b></p>
+    <div class="chaos">
+      <div class="row chaos-row">
+        <button id="chaos-kill">☠ kill compute_machine</button>
+        <span class="chip" id="chaos-chip" data-state="alive">machine alive</span>
+      </div>
+      <div class="chaos-narrative" id="chaos-narrative">
+        The kill is real: one federated call to an exposed admin function makes the machine
+        <b>process.exit()</b>, then a burst of calls hits the dead process — watch
+        <b>onMachineCrash</b> flip the card cold and the <b>circuit breaker</b> open. The host
+        cannot restart someone else's deployment (containment); the demo orchestrator supervises
+        the process and brings it back, and the first successful call <b>re-attaches</b>.
+      </div>
+      <details class="wiretrace" id="chaos-wire" hidden>
+        <summary>the kill, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+      <details class="wiretrace" id="chaos-recover-wire" hidden>
+        <summary>the recovery, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+    </div>
     <div id="log" aria-live="polite"></div>
   </section>
 </main>
 
+<script src="/demo-base.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-// Machines are untrusted third parties: escape every API-derived value
-// before it lands in innerHTML.
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const post = async (url, body) => {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
-  return data;
-};
 const ACCENT = { compute_machine: 'node', java_machine: 'java', python_machine: 'python' };
 const LABEL = { compute_machine: 'node', java_machine: 'jvm', python_machine: 'cpython' };
 const SHAPE = { compute_machine: 'hex', java_machine: 'diamond', python_machine: 'circle' };
 const MONOGRAM = { compute_machine: 'N', java_machine: 'J', python_machine: 'P' };
-const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPARK_SLOTS = 28;
 
-// Eased number tween for metric count-ups; snaps instantly under reduced motion.
-function countUp(el, from, to, fmt = (v) => String(Math.round(v))) {
-  if (REDUCED || from === to || !Number.isFinite(from)) { el.textContent = fmt(to); return; }
-  const t0 = performance.now(), dur = 550;
-  const step = (t) => {
-    const k = Math.min((t - t0) / dur, 1);
-    const e = 1 - Math.pow(1 - k, 3);
-    el.textContent = fmt(from + (to - from) * e);
-    if (k < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
+/* ---------- topology: one edge row per us-east machine ---------- */
+const edgeEls = new Map();   // machine name -> .tedge element
+const farNames = [];
+
+function buildTopo(machines) {
+  const edges = $('topo-edges');
+  for (const m of machines) {
+    if (ACCENT[m.name]) {
+      const row = document.createElement('div');
+      row.className = 'tedge';
+      row.dataset.m = m.name;
+      row.innerHTML = `<code>loadRemote(<b>'${esc(m.name)}/…'</b>)</code><span class="twire"></span>` +
+        `<span class="tnode" data-m="${esc(m.name)}"><span class="tled"></span><span class="tlabel">${esc(m.name)}</span><span class="tsub">${LABEL[m.name]}</span></span>`;
+      edges.appendChild(row);
+      edgeEls.set(m.name, row);
+    } else if (!farNames.includes(m.name)) {
+      farNames.push(m.name);
+    }
+  }
+  $('topo-far').textContent = farNames.join(' + ');
 }
 
-// Per-machine client-side state: DOM refs, previous values, p50 poll history.
+function pulseEdge(name) {
+  const row = edgeEls.get(name);
+  if (!row || REDUCED) return;
+  row.classList.remove('pulse');
+  void row.offsetWidth; // restart the animation
+  row.classList.add('pulse');
+}
+
+function updateTopo(machines) {
+  for (const m of machines) {
+    const row = edgeEls.get(m.name);
+    if (row) row.querySelector('.tnode').classList.toggle('on', !!m.attached);
+  }
+}
+
+/* Wire traces (shared renderWire) + this page's topology side effects:
+   artifact events flash the cache node, machine traffic pulses its edge. */
+const renderWireFx = (detailsId, apiLabel, wire) =>
+  renderWire(detailsId, apiLabel, wire, {
+    onEvent: (e) => {
+      if (e.type === 'artifact') flashCache(e.cacheHit ? 'flash-hit' : 'flash-fetch');
+      else if (e.machine && ['attach', 'call', 'snapshot'].includes(e.type)) pulseEdge(e.machine);
+    },
+  });
+
+/* ---------- machine cards (the three runtimes) ---------- */
 const cards = new Map();
 
-function buildCard(name, idx) {
+function buildCard(name, idx, entry) {
   const el = document.createElement('article');
   el.className = 'machine';
   el.dataset.accent = ACCENT[name];
@@ -433,7 +1103,9 @@ function buildCard(name, idx) {
         <div class="name">${esc(name)}</div>
         <div class="state"><span class="led"></span><span data-f="state">cold · not loaded</span></div>
       </div>
+      <span class="chip artcap" data-f="artcap" hidden>artifacts</span>
     </div>
+    <div class="mc-entry" title="${esc(entry ?? '')}"><b>entry</b> ${esc(entry ?? '—')}</div>
     <dl class="mc-metrics">
       <div><dt>runtime</dt><dd data-f="runtime">${LABEL[name]}</dd></div>
       <div><dt>version</dt><dd data-f="version">—</dd></div>
@@ -441,47 +1113,95 @@ function buildCard(name, idx) {
       <div><dt>p50 / p95</dt><dd data-f="lat">—</dd></div>
     </dl>
     <div class="spark" data-f="spark" aria-hidden="true"></div>
-    <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>`;
+    <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>
+    <details class="types">
+      <summary>published types — /mf-types.ts</summary>
+      <pre></pre>
+    </details>
+    ${name === 'java_machine' ? `
+    <div class="vneg">
+      <div class="row vneg-row">
+        <button id="vneg-btn" title="register a second remote name for this same machine with ?version=^2.0.0, then loadRemote it">demand ^2.0.0</button>
+        <span class="vneg-status" id="vneg-status">what if an entry required <b>^2.0.0</b>?</span>
+      </div>
+      <details class="wiretrace" id="vneg-wire" hidden>
+        <summary>the rejection, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+    </div>` : ''}`;
   $('machines').appendChild(el);
+  if (name === 'java_machine') $('vneg-btn').onclick = () => demandVersion($('vneg-btn'));
+  // Lazy-load the machine's published bindings on first expand. The browser
+  // can't reach machine addresses, so the host proxies GET <entry>/mf-types.ts.
+  const types = el.querySelector('details.types');
+  types.addEventListener('toggle', async () => {
+    if (!types.open || types.dataset.loaded) return;
+    const pre = types.querySelector('pre');
+    pre.textContent = 'fetching the machine\u2019s /mf-types.ts through the host\u2026';
+    try {
+      const r = await fetch(`/api/types?machine=${encodeURIComponent(name)}`).then((x) => x.json());
+      pre.textContent = r.error ? `error: ${r.error}` : r.types;
+      if (!r.error) types.dataset.loaded = '1';
+    } catch (error) {
+      pre.textContent = `error: ${error}`;
+    }
+  });
   const f = (k) => el.querySelector(`[data-f=${k}]`);
   const card = {
     el, state: f('state'), runtime: f('runtime'), version: f('version'),
-    calls: f('calls'), lat: f('lat'), spark: f('spark'),
+    calls: f('calls'), lat: f('lat'), spark: f('spark'), artcap: f('artcap'),
     prevCalls: 0, prevAttached: false, history: new Array(SPARK_SLOTS).fill(0),
   };
   cards.set(name, card);
   return card;
 }
 
+/** Assign only on change: the 1.5s poll must not dirty unchanged DOM. */
+function setText(el, value) {
+  if (el.textContent !== value) el.textContent = value;
+}
+
 function renderSpark(card) {
   const max = Math.max(...card.history, 1);
-  card.spark.innerHTML = card.history.map((v) =>
+  const html = card.history.map((v) =>
     v > 0
       ? `<i style="height:${Math.max(8, (v / max) * 100)}%"></i>`
       : '<i class="empty"></i>',
   ).join('');
+  if (card.sparkHtml !== html) {
+    card.sparkHtml = html;
+    card.spark.innerHTML = html;
+  }
 }
 
 function updateCard(m, idx) {
-  const card = cards.get(m.name) ?? buildCard(m.name, idx);
+  if (!ACCENT[m.name]) return; // far-region machines live in the topology + page 02
+  const card = cards.get(m.name) ?? buildCard(m.name, idx, m.entry);
   if (m.attached && !card.prevAttached) {
     card.el.classList.add('warming');
     setTimeout(() => card.el.classList.remove('warming'), 1500);
   }
   card.prevAttached = m.attached;
   card.el.classList.toggle('warm', !!m.attached);
-  card.state.textContent = m.attached ? 'warm · attached' : 'cold · not loaded';
-  card.runtime.textContent = m.runtime ?? LABEL[m.name];
-  card.version.textContent = m.version ?? '—';
+  setText(card.state, m.attached ? 'warm · attached' : 'cold · not loaded');
+  // Capability-as-presence: the manifest advertises an artifacts block.
+  card.artcap.hidden = !m.artifacts?.length;
+  if (m.artifacts?.length) card.artcap.title = `publishes: ${m.artifacts.join(' + ')} — pullable`;
+  setText(card.runtime, m.runtime ?? LABEL[m.name]);
+  setText(card.version, m.version ?? '—');
   const calls = m.metrics?.calls ?? 0;
-  if (calls !== card.prevCalls) countUp(card.calls, card.prevCalls, calls);
+  if (calls !== card.prevCalls) {
+    countUp(card.calls, card.prevCalls, calls);
+    if (card.prevCalls > 0) pulseEdge(m.name); // background activity also lights the edge
+  }
   card.prevCalls = calls;
-  card.lat.textContent = m.metrics ? `${m.metrics.p50Ms.toFixed(1)} / ${m.metrics.p95Ms.toFixed(1)} ms` : '—';
+  setText(card.lat, m.metrics ? `${m.metrics.p50Ms.toFixed(1)} / ${m.metrics.p95Ms.toFixed(1)} ms` : '—');
   card.history.push(m.metrics?.p50Ms ?? 0);
   card.history.shift();
   renderSpark(card);
 }
 
+let topoBuilt = false;
 let dashSeq = 0;
 async function refreshDashboard() {
   const seq = ++dashSeq;
@@ -492,44 +1212,86 @@ async function refreshDashboard() {
     return; // host restarting — keep polling
   }
   if (seq !== dashSeq) return; // a newer refresh is in flight — drop this stale response
-  payload.machines.forEach(updateCard);
-  $('log').innerHTML = payload.events.slice().reverse().map((e) => {
-    const t = new Date(e.ts).toLocaleTimeString('en-GB');
-    return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
-  }).join('');
+  if (!topoBuilt) { buildTopo(payload.machines); topoBuilt = true; }
+  updateTopo(payload.machines);
+  let cardIdx = 0;
+  for (const m of payload.machines) {
+    if (ACCENT[m.name]) updateCard(m, cardIdx++);
+  }
+  if (payload.cache) renderCache(payload.cache);
+  if (payload.lifecycle) syncLifecycleFromPoll(payload.lifecycle);
+  if (payload.vm) syncVmFromPoll(payload.vm);
+  renderLog(payload.events);
+}
+
+const TIME_FMT = new Intl.DateTimeFormat('en-GB', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+let logSig = '';
+/** Key of the newest rendered row — the event stream is append-only. */
+let logNewestKey = '';
+// Mirrors the server-side event ring capacity (dashboard.ts): the DOM list
+// keeps at most this many rows, trimming the oldest off the bottom.
+const LOG_RING = 200;
+const logKey = (e) => `${e.ts}|${e.kind}|${e.detail}`;
+function logLineHtml(e) {
+  const t = TIME_FMT.format(new Date(e.ts));
+  return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
+}
+/** The event ring is append-only, so endpoints + length identify its content. */
+function renderLog(events) {
+  const sig = `${events.length}:${events[0]?.ts ?? 0}:${events[events.length - 1]?.ts ?? 0}`;
+  if (sig === logSig) return;
+  logSig = sig;
+  const el = $('log');
+  if (!events.length) {
+    logNewestKey = '';
+    el.innerHTML = '<div class="wempty">no hook events yet — run any card above and every attach, call, snapshot, and pull lands here</div>';
+    return;
+  }
+  // Append-only diff: events arrive newest-last; everything after the newest
+  // already-rendered row is new. -1 means the window turned over completely
+  // (or the host restarted) — rebuild from scratch.
+  let firstNew = 0;
+  if (logNewestKey) {
+    firstNew = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (logKey(events[i]) === logNewestKey) { firstNew = i + 1; break; }
+    }
+  }
+  const fresh = firstNew === -1 ? events : events.slice(firstNew);
+  const html = fresh.slice().reverse().map(logLineHtml).join('');
+  if (firstNew === -1 || !logNewestKey) {
+    el.innerHTML = html; // full rebuild also clears the empty-state placeholder
+  } else if (html) {
+    el.insertAdjacentHTML('afterbegin', html); // the list renders newest-first
+    while (el.children.length > LOG_RING) el.lastElementChild.remove();
+  }
+  logNewestKey = logKey(events[events.length - 1]);
 }
 
 $('pipeline-run').onclick = async () => {
   $('pipeline-ms').hidden = true;
   $('pipeline-result').innerHTML = '<span class="running">fanning out across three runtimes…</span>';
+  ['java_machine', 'python_machine', 'compute_machine'].forEach(pulseEdge);
   const r = await post('/api/pipeline', { text: $('pipeline-input').value });
   if (r.error) { $('pipeline-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
   $('pipeline-ms').hidden = false;
   $('pipeline-ms').textContent = `total ${r.totalMs.toFixed(1)}ms`;
   const words = Object.entries(r.python.wordCount).map(([w, c]) => `${w}\u00d7${c}`).join(' · ');
-  const stage = (acc, name, ms, ops, d) => `
+  const stage = (acc, name, s, ops, d) => `
     <article class="stage" data-accent="${acc}" style="--d:${d}">
-      <header><span class="sdot"></span><span class="sname">${name}</span><span class="chip">${ms.toFixed(1)}ms</span></header>
+      <header><span class="sdot"></span><span class="sname">${name}</span><span class="chip">${s.ms.toFixed(1)}ms</span></header>
+      <div class="sremote">loadRemote('${esc(s.remote)}')</div>
       ${ops.map(([k, v]) => `<div class="op"><span class="opk">${k}</span><span class="opv">${esc(v)}</span></div>`).join('')}
     </article>`;
   $('pipeline-result').innerHTML = `<div class="stages">
-    ${stage('java', 'jvm', r.java.ms, [['sha256', r.java.sha256.slice(0, 24) + '…'], ['upper', r.java.upper]], 0)}
-    ${stage('python', 'cpython', r.python.ms, [['words', words], ['wordlen', `mean ${r.python.meanWordLength.toFixed(2)} · median ${r.python.medianWordLength}`]], 1)}
-    ${stage('node', 'node', r.node.ms, [['shout', r.node.shouted], ['reverse', r.node.reversed]], 2)}
+    ${stage('java', 'jvm', r.java, [['sha256', r.java.sha256.slice(0, 24) + '…'], ['upper', r.java.upper]], 0)}
+    ${stage('python', 'cpython', r.python, [['words', words], ['wordlen', `mean ${r.python.meanWordLength.toFixed(2)} · median ${r.python.medianWordLength}`]], 1)}
+    ${stage('node', 'node', r.node, [['shout', r.node.shouted], ['reverse', r.node.reversed]], 2)}
   </div>`;
+  renderWireFx('pipeline-wire', 'POST /api/pipeline', r.wire);
   refreshDashboard();
-};
-
-$('add-run').onclick = async () => {
-  const r = await post('/api/compute', { op: 'add', a: $('add-a').value, b: $('add-b').value });
-  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
-  $('compute-result').textContent = `add → ${r.result}`;
-};
-$('fib-run').onclick = async () => {
-  $('compute-result').innerHTML = '<span class="running">fib…</span>';
-  const r = await post('/api/compute', { op: 'fib', n: $('fib-n').value });
-  if (r.error) { $('compute-result').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`; return; }
-  $('compute-result').textContent = `fib(${r.n}) → ${r.result}`;
 };
 
 const counterPrev = {};
@@ -544,16 +1306,741 @@ document.querySelectorAll('[data-counter]').forEach((btn) => {
       el.title = '';
       countUp(el, counterPrev[machine] ?? r.value, r.value);
       counterPrev[machine] = r.value;
+      renderWireFx('counter-wire', 'POST /api/counter', r.wire);
     } finally {
       btn.disabled = false;
     }
   };
 });
 
+/* ---------- artifact cache node ---------- */
+let prevCache = null;
+let cacheSubHtml = '';
+function renderCache(cache) {
+  const html =
+    `${cache.artifacts} artifact${cache.artifacts === 1 ? '' : 's'} · ${fmtBytes(cache.bytes)} fetched<br />` +
+    `${cache.hits} hit / ${cache.misses} miss`;
+  if (cacheSubHtml !== html) {
+    cacheSubHtml = html;
+    $('topo-cache-sub').innerHTML = html;
+  }
+  $('topo-cache').classList.toggle('on', cache.artifacts > 0);
+  if (prevCache && !REDUCED) {
+    if (cache.misses > prevCache.misses) flashCache('flash-fetch');
+    else if (cache.hits > prevCache.hits) flashCache('flash-hit');
+  }
+  prevCache = cache;
+}
+function flashCache(cls) {
+  const node = $('topo-cache');
+  if (!node || REDUCED) return;
+  node.classList.remove('flash-fetch', 'flash-hit');
+  void node.offsetWidth;
+  node.classList.add(cls);
+  setTimeout(() => node.classList.remove(cls), 1600);
+}
+
+/* ---------- lifecycle story (act 04) ---------- */
+const ORIGIN_ALIVE = ['running', 'restored', 'forked'];
+
+const LC_NARRATIVES = {
+  cold: () => `No machine yet. Step 1 <span class="pullc">pulls</span> <b>snap_machine</b>'s image over HTTP from <b>compute_machine</b>'s published <code>/mf-image</code>, boots it, and increments its counter three times. The host never reads machine code from disk. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)`,
+  running: (s) => `<b>snap_machine</b> is alive (a real child process on :${s.originPort}) — its image arrived <span class="pullc">over HTTP</span> (digest MISS, sha256-verified), counter at <b>${s.value}</b>. Now <span class="snapc">freeze</span> it.`,
+  snapshotted: (s) => `Process <b>killed</b>. The counter exists only inside <span class="snapc">${esc(s.snapFile ?? '.snap')}</span> (${s.snapBytes ?? '?'} bytes). Nothing crossed the network. Restore it.`,
+  restored: (s, extra) => `Restored from the bundle: a <b>new process</b> resumed at <b>${extra?.resumed ?? (s.value != null ? s.value - 1 : '?')}</b> and continued to <b>${s.value}</b>. And because it serves <span class="pullc">/mf-image + /mf-snapshot</span>, it is a registry of itself — step 4 forks it over plain HTTP.`,
+  forked: (s, extra) => {
+    if (extra?.clone === 'a' && !s.clones.b) {
+      const a = s.clones.a;
+      return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh (<b>${fmtBytes(a?.pulledBytes ?? 0)}</b>, sha256-verified), image digest <b>HIT</b> — the code already crossed the wire once, at boot — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again, pinned.`;
+    }
+    if (extra?.clone === 'b') {
+      // The server guarantees clone b is pinned (it refuses the pull otherwise).
+      const pin = s.clones.b.pinnedDigest;
+      return `<span class="pullc">Forked again — this time pinned:</span> the entry carried ` +
+        `<span class="pullc">digest=${esc(String(pin).slice(0, 17))}…</span>` +
+        ` (the image digest learned from step 4), so the resolver verified the pulled image against the pin before boot — ` +
+        `any other code would have been <b>refused</b>. The snapshot was re-fetched (tiny, by design — it's no-store) but the image was a digest cache <b>HIT</b> — near-instant boot. ` +
+        `Increment the three counters separately: <b>clones own their state — divergence is the point.</b>`;
+    }
+    return `One warm machine, forked over plain HTTP. <b>Attach to state you share; pull state you want to own.</b> Step 1 resets the arc.`;
+  },
+};
+// Initial render: the cold story has one source of truth.
+$('snap-narrative').innerHTML = LC_NARRATIVES.cold();
+
+function light(id, on) { $(id).classList.toggle('lit', !!on); }
+
+function setMember(key, alive, value, sub) {
+  const el = $(`fleet-${key}`);
+  el.classList.toggle('alive', alive);
+  el.classList.toggle('absent', !alive);
+  $(`fleet-${key}-val`).textContent = value ?? '—';
+  $(`fleet-${key}-sub`).innerHTML = sub;
+  el.querySelector('button').disabled = !alive;
+}
+
+function cloneSub(clone, step) {
+  if (!clone) return `step ${step} pulls it`;
+  return `resumed at ${clone.resumed} · ${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'}` +
+    (clone.pinnedDigest ? ` · pinned ${esc(String(clone.pinnedDigest).slice(0, 14))}…` : '');
+}
+
+let topoLifecycleSig = '';
+/** The host-column "local machines" group: origin + pulled clones, live. */
+function renderLifecycleTopo(s) {
+  const sig = JSON.stringify([s.phase, s.clones.a?.entry, s.clones.b?.entry]);
+  if (sig === topoLifecycleSig) return;
+  topoLifecycleSig = sig;
+  const local = $('topo-local');
+  const edges = $('topo-local-edges');
+  if (s.phase === 'cold') { local.hidden = true; edges.innerHTML = ''; return; }
+  local.hidden = false;
+  const alive = ORIGIN_ALIVE.includes(s.phase);
+  let html = `<span class="tnode origin-node${alive ? ' on' : ''}"><span class="tled"></span>` +
+    `<span class="tlabel">snap_machine</span><span class="tsub">:${esc(s.originPort)} · ${esc(s.phase === 'snapshotted' ? 'frozen' : 'pull origin')}</span></span>`;
+  for (const id of ['a', 'b']) {
+    const clone = s.clones?.[id];
+    if (!clone) continue;
+    const label = `${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'} · ${clone.pullMs}ms`;
+    html += `<div class="tclone" data-clone="${id}">` +
+      `<div class="tpull">⇣ <b>artifact</b> pulled · <b>${esc(label)}</b></div>` +
+      `<span class="tnode clone on" title="pulled from ${esc(clone.entry)}"><span class="tled"></span>` +
+      `<span class="tlabel">snap_clone_${id}</span><span class="tsub">clone</span></span></div>`;
+  }
+  edges.innerHTML = html;
+}
+
+/** Glow the clone's artifact pipe right after its pull. */
+function animateClonePull(id) {
+  const row = $('topo-local-edges').querySelector(`[data-clone=${id}]`);
+  if (!row || REDUCED) return;
+  row.classList.add('pulse');
+  setTimeout(() => row.classList.remove('pulse'), 2600);
+}
+
+function setLifecycleUI(s, extra) {
+  $('snap-phase').dataset.phase = s.phase;
+  $('snap-phase').querySelector('span').textContent = s.phase;
+  $('snap-boot').disabled = false;
+  $('snap-freeze').disabled = s.phase !== 'running';
+  $('snap-restore').disabled = s.phase !== 'snapshotted';
+  $('snap-pull-a').disabled = !(s.phase === 'restored' && !s.clones.a);
+  $('snap-pull-b').disabled = !(s.phase === 'forked' && s.clones.a && !s.clones.b);
+  const everBooted = s.phase !== 'cold';
+  light('lin-image', everBooted);
+  light('lin-process', everBooted);
+  light('lin-snap', ['snapshotted', 'restored', 'forked'].includes(s.phase));
+  light('lin-process2', ['restored', 'forked'].includes(s.phase));
+  light('lin-clone-a', !!s.clones.a);
+  light('lin-clone-b', !!s.clones.b);
+  const alive = ORIGIN_ALIVE.includes(s.phase);
+  setMember('origin', alive, (alive || s.phase === 'snapshotted') ? s.value : undefined,
+    s.phase === 'cold' ? 'not booted'
+      : s.phase === 'snapshotted' ? `frozen — state lives in ${esc(s.snapFile ?? '.snap')}`
+      : `live child process · :${esc(s.originPort)}`);
+  setMember('a', !!s.clones.a, s.clones.a?.value, cloneSub(s.clones.a, 4));
+  setMember('b', !!s.clones.b, s.clones.b?.value, cloneSub(s.clones.b, 5));
+  const narrative = LC_NARRATIVES[s.phase];
+  if (narrative) $('snap-narrative').innerHTML = narrative(s, extra);
+  renderLifecycleTopo(s);
+}
+
+let lcPhase = 'cold';
+/** Background poll: adopt state changes made elsewhere without churning the narrative. */
+function syncLifecycleFromPoll(s) {
+  if (s.phase !== lcPhase) {
+    lcPhase = s.phase;
+    setLifecycleUI(s);
+    return;
+  }
+  renderLifecycleTopo(s);
+}
+
+/**
+ * A failed step must not wedge the stepper: re-derive every button from the
+ * server's actual phase (the server clears `busy` even on errors), then keep
+ * the error visible on top of the refreshed narrative.
+ */
+async function recoverLifecycleUI(message) {
+  try {
+    const d = await fetch('/api/dashboard').then((res) => res.json());
+    if (d.lifecycle) {
+      lcPhase = d.lifecycle.phase;
+      setLifecycleUI(d.lifecycle);
+    }
+  } catch {
+    // Host unreachable — leave the buttons alone; the poll loop recovers.
+  }
+  $('snap-narrative').innerHTML = `<span class="err">error: ${esc(message)}</span>`;
+}
+
+async function lcAction(btn, url, apiLabel) {
+  btn.disabled = true;
+  try {
+    const r = await post(url, {});
+    if (r.error) {
+      await recoverLifecycleUI(r.error);
+      return null;
+    }
+    lcPhase = r.phase;
+    setLifecycleUI(r, r);
+    renderWireFx('snap-wire', apiLabel, r.wire);
+    refreshDashboard();
+    return r;
+  } catch (error) {
+    await recoverLifecycleUI(String(error));
+    return null;
+  } finally {
+    if (btn === $('snap-boot')) btn.disabled = false;
+  }
+}
+$('snap-boot').onclick = () => lcAction($('snap-boot'), '/api/lifecycle/boot', 'POST /api/lifecycle/boot');
+$('snap-freeze').onclick = () => lcAction($('snap-freeze'), '/api/lifecycle/freeze', 'POST /api/lifecycle/freeze');
+$('snap-restore').onclick = () => lcAction($('snap-restore'), '/api/lifecycle/restore', 'POST /api/lifecycle/restore');
+const pullAction = async (btn) => {
+  const r = await lcAction(btn, '/api/lifecycle/pull', 'POST /api/lifecycle/pull');
+  if (r?.clone) animateClonePull(r.clone);
+};
+$('snap-pull-a').onclick = () => pullAction($('snap-pull-a'));
+$('snap-pull-b').onclick = () => pullAction($('snap-pull-b'));
+
+document.querySelectorAll('[data-lcounter]').forEach((btn) => {
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await post('/api/lifecycle/counter', { target: btn.dataset.lcounter });
+      if (r.error) {
+        await recoverLifecycleUI(r.error);
+        return;
+      }
+      lcPhase = r.phase;
+      setLifecycleUI(r);
+      renderWireFx('snap-wire', 'POST /api/lifecycle/counter', r.wire);
+    } finally {
+      btn.disabled = !btn.closest('.member').classList.contains('alive');
+    }
+  };
+});
+
+/* ---------- whole-VM lane (act 04 · phase 2) ----------
+   Live mode drives the real /api/vm/* routes (KVM hardware); replay mode
+   schedules the committed real-KVM trace on its own timeline, renders into
+   THIS lane only, and is unmissably labeled. Never both at once. */
+const VM_CLI_POINTER = 'live version: pnpm demo:machinen, or any Linux box with /dev/kvm';
+let vmCap = null;
+let vmMode = 'off'; // 'live' | 'replay' | 'off'
+let vmPhase = 'cold';
+let vmBusy = false;
+let vmPollTimer = null;
+let vmTrace = null;
+let vmReplayActive = false;
+let vmReplayTimer = null;
+
+const fmtIter = (n) => Number(n ?? 0).toLocaleString('en-US');
+const fmtSec = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+function vmStrip(id, p, label) {
+  const el = $(id);
+  if (!p) { el.hidden = true; return; }
+  el.hidden = false;
+  if (label) el.querySelector('.wk').textContent = label;
+  const set = (k, v) => {
+    const slot = el.querySelector(`[data-f=${k}]`);
+    if (slot.textContent !== v) slot.textContent = v;
+  };
+  set('iter', fmtIter(p.iteration));
+  set('cache', `${p.cacheSize}/${p.cacheCapacity}`);
+  set('best', p.best === -1 ? '—' : String(p.best));
+  set('fp', p.fingerprint);
+  set('pid', String(p.pid));
+}
+
+function vmBadge(mode, text, title) {
+  const b = $('vm-badge');
+  b.dataset.mode = mode;
+  b.textContent = text;
+  b.title = title ?? '';
+}
+
+function vmChip(phase, label) {
+  $('vm-phase').dataset.phase = phase;
+  $('vm-phase').querySelector('span').textContent = label ?? phase;
+}
+
+function updateVmControls() {
+  const live = vmMode === 'live';
+  $('vm-boot').disabled = !live || vmBusy;
+  $('vm-publish').disabled = !live || vmBusy || vmPhase !== 'running';
+  $('vm-restore').disabled = !live || vmBusy || vmPhase !== 'published';
+  $('vm-reset').disabled = !live || vmBusy || vmPhase === 'cold';
+  $('vm-replay-btn').disabled = vmReplayActive;
+  $('vm-step4').classList.toggle('lit', vmPhase === 'restored');
+}
+
+/* Lane copy per phase — every interpolated number is server/trace data. */
+const VM_NARR = {
+  cold: () => `No microVM yet. Step 1 boots <b>vm_machine</b> as a <b>real microVM</b> (machinen driver) from the same guest bundle and starts the hot solver. Watch the witness strip fill with heap the app-state lane can't see.`,
+  running: (s) => `A real microVM is solving — booted in <b>${fmtSec(s.timings.bootMs)}</b>. The strip above is live heap, read over <code>/mf/call</code> every 500ms: telemetry, not serialization. Step 2 freezes the <b>whole VM</b> mid-flight — heap, timers, kernel — and publishes it as a content-addressed <code>machinen-vmstate@1</code> bundle with one verb: <code>plugin.publishMachine()</code>.`,
+  published: (s) => `Frozen mid-solve + published. The witness strip is now the <span class="snapc">freeze-point heap</span>: the restore must beat it or the demo fails loudly. ` +
+    (s.published?.sourceDead
+      ? `<b>The dump stopped the source VM</b> on this machinen version (a fixed engine would keep it running) — either way, <span class="vmc">the bundle is the machine now</span>. `
+      : `The source VM <b>survived the dump</b> (non-destructive checkpoint on this engine). `) +
+    `Step 3 pulls the bundle into a <b>second MF instance</b> — the "second host" — over the plugin's own artifact endpoint.`,
+  restored: (s) => `<b>The heap moved.</b> The clone resumed at iteration <b>${fmtIter(s.progress?.iteration)}</b> (frozen at ${fmtIter(s.frozenAt?.iteration)}) — same memo cache, same RNG stream, the solver's <code>setInterval</code> still ticking, and <b>nothing called rehydrate()</b>. The whole event loop was in the artifact.`,
+};
+
+function renderVmPublished(s, { replay } = {}) {
+  const p = s.published;
+  if (!p) { $('vm-publish-stats').hidden = true; return; }
+  $('vm-publish-stats').hidden = false;
+  $('vm-publish-stats').innerHTML =
+    `vmstate <code>${esc(p.digest.slice(0, 19))}…</code> · <b>${fmtBytes(p.bytes)}</b> · ` +
+    `dump + publish <b>${fmtSec(p.publishMs)}</b> · source VM ` +
+    (p.sourceDead
+      ? `<b>stopped by the dump</b> (this machinen version — it would survive on a fixed engine)`
+      : `<b>still running</b> (non-destructive checkpoint)`) +
+    (replay ? ` · <span class="repc">recorded</span>` : '');
+}
+
+function renderVmRestored(s, { replay } = {}) {
+  const pull = s.pull;
+  if (!pull) { $('vm-pull-stats').hidden = true; $('vm-delta').hidden = true; return; }
+  $('vm-pull-stats').hidden = false;
+  $('vm-pull-stats').innerHTML =
+    `pulled <b>${fmtBytes(pull.bytes)}</b> in <b>${fmtSec(pull.ms)}</b> · cache <b>${pull.cacheHit ? 'HIT' : 'MISS'}</b> · ` +
+    `pull + restore + first call <b>${fmtSec(s.timings.restoreMs)}</b>` +
+    (replay ? ` · <span class="repc">recorded</span>` : '') +
+    (s.entry ? `<br />the clone's whole deployment story: <code>${esc(s.entry)}</code>` : '');
+  if (s.progress && s.frozenAt) {
+    $('vm-delta').hidden = false;
+    $('vm-delta').innerHTML =
+      `resumed at iteration <b>${fmtIter(s.progress.iteration)}</b> (frozen at ${fmtIter(s.frozenAt.iteration)}) — ` +
+      `same heap, same RNG stream, same guest pid ${esc(s.progress.pid)}; nothing called rehydrate().`;
+  }
+}
+
+/* Topology rail: the whole-VM group under the host column. Same artifact-edge
+   taxonomy as the Phase 1 local group, GB scale. data: a lane state (live or
+   from the trace); flight: the pull request is in the air — indeterminate
+   train only, because no honest progress number exists until runtime 2b. */
+let vmLastState = null;
+function renderVmTopo(s, { replay = false, flight = false } = {}) {
+  const group = $('topo-vm');
+  const edges = $('topo-vm-edges');
+  $('topo-vm-replay').hidden = !replay;
+  if (!s || s.phase === 'cold') {
+    group.hidden = true;
+    edges.innerHTML = '';
+    return;
+  }
+  group.hidden = false;
+  const plat = s.capability?.platform ?? '';
+  const srcOn = s.phase === 'running';
+  const srcDead = (s.phase === 'published' || s.phase === 'restored') && !!s.published?.sourceDead;
+  const rep = replay ? ' · <span class="rep">replay</span>' : '';
+  let html =
+    `<span class="tnode vm-node${srcOn ? ' on' : ''}${srcDead ? ' dead' : ''}">` +
+    `<span class="tled"></span><span class="tlabel">vm_machine · source</span>` +
+    `<span class="tsub">${srcOn ? 'real microVM · solving' : srcDead ? '<span class="tkilled">killed</span> by the dump' : 'real microVM'}</span></span>`;
+  if (s.published) {
+    html +=
+      `<div class="tpull" data-scale="gb">⇣ <b>vmstate published</b> · <b>${fmtBytes(s.published.bytes)}</b> · ` +
+      `${esc(s.published.digest.slice(0, 16))}… · ${esc(plat)}${rep}</div>` +
+      `<span class="tnode vm-registry on"><span class="tled"></span><span class="tlabel">vmstate registry</span>` +
+      `<span class="tsub">plugin-owned · lazily started</span></span>`;
+  }
+  if (flight) {
+    html +=
+      `<div class="tpull flight" data-scale="gb">⇣ <b>vmstate transferring…</b> resolves to real totals${rep}</div>` +
+      `<span class="tnode vm-node"><span class="tled"></span><span class="tlabel">vm_machine · clone</span>` +
+      `<span class="tsub">second host · restoring</span></span>`;
+  } else if (s.phase === 'restored' && s.pull) {
+    html +=
+      `<div class="tpull done" data-scale="gb">⇣ <b>vmstate pulled</b> · <b>${fmtBytes(s.pull.bytes)}</b> in ` +
+      `<b>${fmtSec(s.pull.ms)}</b> · ${s.pull.cacheHit ? 'HIT' : 'MISS'}${rep}</div>` +
+      `<span class="tnode vm-node on"><span class="tled"></span><span class="tlabel">vm_machine · clone</span>` +
+      `<span class="tsub">second host · resumed</span></span>`;
+  }
+  edges.innerHTML = html;
+}
+
+/** Race card: both bars must be real numbers for the current mode, or hide. */
+function renderVmRace(s, { replay = false } = {}) {
+  const t = s?.timings ?? {};
+  if (!(t.bootMs > 0) || !(t.restoreMs > 0)) {
+    $('vm-race').hidden = true;
+    return;
+  }
+  $('vm-race').hidden = false;
+  $('vm-race-src').textContent = replay
+    ? `recorded trace, ${s.capability?.platform ?? '?'}`
+    : 'this run';
+  const max = Math.max(t.bootMs, t.restoreMs);
+  $('vm-race-cold').style.width = `${(t.bootMs / max) * 100}%`;
+  $('vm-race-warm').style.width = `${(t.restoreMs / max) * 100}%`;
+  $('vm-race-cold-ms').textContent = fmtSec(t.bootMs);
+  $('vm-race-warm-ms').textContent = fmtSec(t.restoreMs);
+}
+
+/** Render a full lane state (live responses + polled phase adoptions). */
+function applyVmState(s) {
+  vmPhase = s.phase;
+  vmLastState = s;
+  const live = s.phase === 'running' || s.phase === 'restored';
+  if (s.progress && live) {
+    vmStrip('vm-strip-live', s.progress,
+      s.phase === 'restored' ? 'live heap — restored clone' : 'live heap — source VM');
+  } else {
+    $('vm-strip-live').hidden = true;
+  }
+  vmStrip('vm-strip-frozen', s.phase === 'published' || s.phase === 'restored' ? s.frozenAt : null);
+  if (s.phase === 'published' || s.phase === 'restored') renderVmPublished(s);
+  else $('vm-publish-stats').hidden = true;
+  if (s.phase === 'restored') renderVmRestored(s);
+  else { $('vm-pull-stats').hidden = true; $('vm-delta').hidden = true; }
+  vmChip(s.phase);
+  const narr = VM_NARR[s.phase];
+  if (narr) $('vm-narrative').innerHTML = narr(s);
+  renderVmTopo(s);
+  renderVmRace(s.phase === 'restored' ? s : null);
+  updateVmControls();
+  vmPollLoop();
+}
+
+/** 500ms witness poll while a VM is live (lighter than the 1.5s dashboard). */
+function vmPollLoop() {
+  clearTimeout(vmPollTimer);
+  if (vmMode !== 'live' || !['running', 'restored'].includes(vmPhase)) return;
+  vmPollTimer = setTimeout(async () => {
+    if (!document.hidden && !vmBusy) {
+      try {
+        const s = await fetch('/api/vm/state').then((r) => r.json());
+        if (s.phase === vmPhase && s.progress) {
+          vmStrip('vm-strip-live', s.progress,
+            vmPhase === 'restored' ? 'live heap — restored clone' : 'live heap — source VM');
+        } else if (s.phase !== vmPhase) {
+          applyVmState(s);
+          return;
+        }
+      } catch { /* host hiccup — keep polling */ }
+    }
+    vmPollLoop();
+  }, 500);
+}
+
+/** Background dashboard poll: adopt phase changes made elsewhere. */
+function syncVmFromPoll(vm) {
+  if (vmMode !== 'live' || vmReplayActive || vmBusy) return;
+  if (vm.phase !== vmPhase) applyVmState(vm);
+}
+
+async function vmAction(route, runningLabel) {
+  vmBusy = true;
+  updateVmControls();
+  vmChip(vmPhase, `${vmPhase} · working…`);
+  $('vm-narrative').innerHTML = `<span class="running">${esc(runningLabel)}</span>`;
+  // The GB transfer is in the air between this request and its response:
+  // animate the rail indeterminately (there is no honest percent yet).
+  if (route === '/api/vm/restore' && vmLastState) {
+    renderVmTopo(vmLastState, { flight: true });
+  }
+  try {
+    const r = await post(route, {});
+    if (r.error) {
+      $('vm-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+      renderVmTopo(vmLastState); // drop any in-flight animation
+      try {
+        const s = await fetch('/api/vm/state').then((x) => x.json());
+        vmPhase = s.phase;
+        vmChip(s.phase);
+      } catch { /* host unreachable — the poll loop recovers */ }
+      return null;
+    }
+    applyVmState(r);
+    if (r.wire) renderWireFx('vm-wire', `POST ${route}`, r.wire);
+    return r;
+  } catch (error) {
+    $('vm-narrative').innerHTML = `<span class="err">error: ${esc(String(error))}</span>`;
+    renderVmTopo(vmLastState);
+    return null;
+  } finally {
+    vmBusy = false;
+    updateVmControls();
+  }
+}
+$('vm-boot').onclick = () =>
+  vmAction('/api/vm/boot', 'booting a real microVM (KVM) + starting the solver — 10–30s on this box, longer on a first run while base assets fetch…');
+$('vm-publish').onclick = () =>
+  vmAction('/api/vm/publish', 'freezing the whole VM mid-flight + publishing the vmstate bundle (GB-scale, content-addressed)…');
+$('vm-restore').onclick = () =>
+  vmAction('/api/vm/restore', 'pulling the vmstate bundle into a second MF instance + restoring — GBs are moving…');
+$('vm-reset').onclick = () =>
+  vmAction('/api/vm/reset', 'disposing VMs + reclaiming the GB-scale artifacts…');
+
+/* ---- replay: the committed real-KVM trace, scheduled on its own timeline ---- */
+const VM_GAP_CAP_MS = 2000;
+const VM_SKIP_LABEL = { running: 'boot', published: 'the vmstate dump + publish', restored: 'the pull + restore' };
+
+function vmShowSkip(skippedMs, nextKind) {
+  const el = $('vm-skip');
+  el.hidden = false;
+  el.textContent = `⏩ skipping ${Math.round(skippedMs / 1000)}s of ${VM_SKIP_LABEL[nextKind] ?? 'recorded time'}`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, VM_GAP_CAP_MS - 100);
+}
+
+let vmReplayState = null; // last trace state seen — feeds the topology rail
+function applyReplayEvent(e, restoredYet) {
+  const src = restoredYet ? 'recorded heap — restored clone' : 'recorded heap — source VM';
+  switch (e.kind) {
+    case 'boot-start':
+      vmChip('cold', 'replay · booting');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: booting a real microVM on the capture host…</span>';
+      break;
+    case 'running':
+      vmReplayState = e.state;
+      vmStrip('vm-strip-live', e.state.progress, src);
+      vmChip('running', 'replay · running');
+      $('vm-narrative').innerHTML = VM_NARR.running(e.state);
+      renderVmTopo(e.state, { replay: true });
+      break;
+    case 'progress':
+      vmStrip('vm-strip-live', e.progress, src);
+      break;
+    case 'publish-start':
+      vmChip('running', 'replay · publishing');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: freezing the whole VM + publishing the vmstate bundle…</span>';
+      break;
+    case 'published':
+      vmReplayState = e.state;
+      $('vm-strip-live').hidden = true;
+      vmStrip('vm-strip-frozen', e.state.frozenAt);
+      renderVmPublished(e.state, { replay: true });
+      vmChip('published', 'replay · published');
+      $('vm-narrative').innerHTML = VM_NARR.published(e.state);
+      renderVmTopo(e.state, { replay: true });
+      break;
+    case 'restore-start':
+      vmChip('published', 'replay · pulling');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: pulling the vmstate bundle to a second host + restoring…</span>';
+      renderVmTopo(vmReplayState, { replay: true, flight: true });
+      break;
+    case 'restored':
+      vmReplayState = e.state;
+      vmStrip('vm-strip-live', e.state.progress, 'recorded heap — restored clone');
+      vmStrip('vm-strip-frozen', e.state.frozenAt);
+      renderVmRestored(e.state, { replay: true });
+      vmChip('restored', 'replay · restored');
+      $('vm-step4').classList.add('lit');
+      $('vm-narrative').innerHTML = VM_NARR.restored(e.state);
+      renderVmTopo(e.state, { replay: true });
+      renderVmRace(e.state, { replay: true });
+      break;
+  }
+}
+
+async function playVmReplay() {
+  if (vmReplayActive) return;
+  if (!vmTrace) {
+    try {
+      const res = await fetch('/api/vm/replay');
+      if (!res.ok) throw new Error(`replay trace: HTTP ${res.status}`);
+      vmTrace = await res.json();
+    } catch (error) {
+      $('vm-narrative').innerHTML = `<span class="err">error: ${esc(String(error))}</span>`;
+      return;
+    }
+  }
+  vmReplayActive = true;
+  $('vm-lane').dataset.replay = '1';
+  updateVmControls();
+  // Reset lane-local renderings (and nothing else: replay never touches live
+  // counters, the activity log, or the topology's live state).
+  $('vm-strip-live').hidden = true;
+  $('vm-strip-frozen').hidden = true;
+  $('vm-delta').hidden = true;
+  $('vm-publish-stats').hidden = true;
+  $('vm-pull-stats').hidden = true;
+  $('vm-race').hidden = true;
+  $('vm-step4').classList.remove('lit');
+  vmReplayState = null;
+  renderVmTopo(null);
+  const events = vmTrace.events;
+  let cursor = 0;
+  let restoredYet = false;
+  const step = () => {
+    if (cursor >= events.length) {
+      vmReplayActive = false;
+      vmReplayTimer = null;
+      $('vm-replay-btn').textContent = '↻ play the recording again';
+      updateVmControls();
+      return;
+    }
+    const e = events[cursor];
+    if (e.kind === 'restored') restoredYet = true;
+    applyReplayEvent(e, restoredYet);
+    cursor++;
+    if (cursor >= events.length) { step(); return; }
+    const gap = events[cursor].atMs - e.atMs;
+    const wait = Math.min(gap, VM_GAP_CAP_MS);
+    if (gap > VM_GAP_CAP_MS) vmShowSkip(gap - wait, events[cursor].kind);
+    vmReplayTimer = setTimeout(step, wait);
+  };
+  step();
+}
+$('vm-replay-btn').onclick = playVmReplay;
+
+async function initVmLane() {
+  // ?vm-replay forces the replay track for preview — still honestly labeled
+  // (it IS a recording); live controls stay disabled while it's set.
+  const forceReplay = new URLSearchParams(location.search).has('vm-replay');
+  try {
+    vmCap = await fetch('/api/vm/capability').then((r) => r.json());
+  } catch { vmCap = null; }
+  if (vmCap?.available && !forceReplay) {
+    vmMode = 'live';
+    vmBadge('live', 'Live: KVM', vmCap.detail);
+    $('vm-meta').textContent = `${vmCap.platform} · @machinen/runtime ${vmCap.runtime}`;
+    $('vm-narrative').innerHTML = VM_NARR.cold();
+    // Adopt whatever phase the server is already in (e.g. page reload mid-arc).
+    try {
+      const s = await fetch('/api/vm/state').then((r) => r.json());
+      if (s.phase !== 'cold') applyVmState(s);
+    } catch { /* poll loop recovers */ }
+    updateVmControls();
+    return;
+  }
+  const reason = forceReplay
+    ? 'replay preview forced (?vm-replay)'
+    : (vmCap?.detail ?? 'capability check failed');
+  let trace = null;
+  try {
+    const res = await fetch('/api/vm/replay');
+    if (res.ok) trace = await res.json();
+  } catch { /* fall through to the disabled lane */ }
+  for (const id of ['vm-boot', 'vm-publish', 'vm-restore', 'vm-reset']) $(id).title = reason;
+  if (trace) {
+    vmMode = 'replay';
+    vmTrace = trace;
+    vmBadge('replay', 'Replay: real KVM trace', reason);
+    $('vm-meta').textContent =
+      `captured ${trace.capturedAt.slice(0, 10)} on ${trace.platform}` +
+      (trace.runtime ? ` · @machinen/runtime ${trace.runtime}` : '') + ` — ${VM_CLI_POINTER}`;
+    $('vm-replay-btn').hidden = false;
+    $('vm-narrative').innerHTML =
+      `Live VM controls are disabled here: <b>${esc(reason)}</b>. ` +
+      `The recording is a real KVM run of this exact lane — nothing executes on this host. ` +
+      `<span class="repc">▶ play recorded VM move</span> to watch it.`;
+  } else {
+    vmMode = 'off';
+    vmBadge('off', vmCap?.reason ?? 'unavailable', reason);
+    $('vm-meta').textContent = VM_CLI_POINTER;
+    $('vm-narrative').innerHTML =
+      `Live VM track unavailable: <b>${esc(reason)}</b> — and no replay trace is committed. ` +
+      `${esc(VM_CLI_POINTER)}.`;
+  }
+  updateVmControls();
+}
+initVmLane();
+
+/* ---------- version negotiation: demand ^2.0.0, get refused ---------- */
+async function demandVersion(btn) {
+  btn.disabled = true;
+  const status = $('vneg-status');
+  status.innerHTML = '<span class="running">registering strict entry, negotiating…</span>';
+  try {
+    const r = await post('/api/version/demand', {});
+    if (r.rejected === undefined) {
+      status.innerHTML = `<span class="err">error: ${esc(r.error ?? 'unexpected response')}</span>`;
+      return;
+    }
+    if (r.rejected) {
+      status.innerHTML = `<span class="err">refused</span> — required <b>${esc(r.required)}</b>, ` +
+        `manifest reports <b>${esc(r.reported ?? '?')}</b> (${esc(r.errorName)})`;
+    } else {
+      // Honest fallback: only reachable if the machine actually satisfies ^2.0.0.
+      status.innerHTML = `accepted — the machine satisfies <b>${esc(r.required)}</b>`;
+    }
+    renderWireFx('vneg-wire', 'POST /api/version/demand', r.wire);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------- chaos: kill compute_machine, watch it heal (act 06) ---------- */
+let chaosTimer = null;
+
+function chaosChip(state, label) {
+  const chip = $('chaos-chip');
+  chip.dataset.state = state;
+  chip.textContent = label;
+}
+
+$('chaos-kill').onclick = async () => {
+  const btn = $('chaos-kill');
+  btn.disabled = true;
+  $('chaos-recover-wire').hidden = true;
+  chaosChip('dead', 'killing…');
+  $('chaos-narrative').innerHTML = '<span class="running">sending the kill call…</span>';
+  const r = await post('/api/chaos/kill', {});
+  if (r.error) {
+    chaosChip('alive', 'kill failed');
+    $('chaos-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+    btn.disabled = false;
+    return;
+  }
+  renderWireFx('chaos-wire', 'POST /api/chaos/kill', r.wire);
+  chaosChip('open', r.circuitOpened ? 'machine dead · circuit open' : 'machine dead');
+  $('chaos-narrative').innerHTML =
+    `<b>compute_machine</b> (pid ${esc(r.killed?.pid)}) killed itself mid-demo. ` +
+    `${esc(r.burst?.failed)}/${esc(r.burst?.attempted)} concurrent calls hit the dead machine — every one a real transport failure` +
+    (r.circuitOpened
+      ? `, and the breaker's threshold tripped: <b class="hotc">the circuit is open</b>, so calls now fail fast without touching the network.`
+      : '.') +
+    ' Probing for recovery…';
+  refreshDashboard();
+  chaosProbeLoop(performance.now());
+};
+
+function chaosProbeLoop(startedAt) {
+  clearTimeout(chaosTimer);
+  chaosTimer = setTimeout(async () => {
+    let r;
+    try {
+      r = await post('/api/chaos/probe', {});
+    } catch {
+      chaosProbeLoop(startedAt); // host hiccup — keep probing
+      return;
+    }
+    const elapsed = ((performance.now() - startedAt) / 1000).toFixed(0);
+    if (!r.recovered) {
+      const circuitOpen = r.errorName === 'MachineCircuitOpenError';
+      chaosChip(circuitOpen ? 'open' : 'dead',
+        circuitOpen ? `circuit open · failing fast · ${elapsed}s` : `unreachable · ${elapsed}s`);
+      $('chaos-narrative').innerHTML = circuitOpen
+        ? `Probe rejected without touching the network: <span class="hotc">${esc(r.error)}</span><br />` +
+          `The supervisor may already have respawned the process (watch the card) — the breaker holds for its 10s reset window, then lets one half-open probe through.`
+        : `Probe failed: <span class="hotc">${esc(r.error)}</span><br />The machine process is still down — the deployment supervisor respawns it shortly.`;
+      chaosProbeLoop(startedAt);
+      return;
+    }
+    chaosChip('alive', 'machine alive · circuit closed');
+    $('chaos-narrative').innerHTML =
+      `<b>Recovered after ${esc(elapsed)}s.</b> The deployment supervisor (the demo orchestrator — not the host) respawned the ` +
+      `process, the host re-attached, and the breaker's half-open probe succeeded: <b>onCircuitClose</b> fired and the card warmed back up. ` +
+      `The counter restarted at <b>${esc(r.value)}</b> — the crash dropped the machine's in-memory state, ` +
+      `which is exactly what act 04's snapshots exist to survive.`;
+    renderWireFx('chaos-recover-wire', 'POST /api/chaos/probe', r.wire);
+    $('chaos-kill').disabled = false;
+    refreshDashboard();
+  }, 1500);
+}
+
 let es = null;
 $('cd-run').onclick = () => {
   es?.close();
   $('ticks').innerHTML = '';
+  pulseEdge('compute_machine');
   es = new EventSource('/api/countdown?from=' + encodeURIComponent($('cd-from').value));
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
@@ -575,7 +2062,11 @@ $('cd-run').onclick = () => {
 };
 
 refreshDashboard();
-setInterval(refreshDashboard, 1500);
+// Pause polling in hidden tabs; refresh immediately on return.
+setInterval(() => { if (!document.hidden) refreshDashboard(); }, 1500);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshDashboard();
+});
 </script>
 </body>
 </html>

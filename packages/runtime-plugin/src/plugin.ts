@@ -1,8 +1,17 @@
 import type { ModuleFederationRuntimePlugin } from '@module-federation/runtime';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
+import { resolvePullEntry } from './artifacts.js';
+import { isMachinenSnapshotDir } from './drivers/machinen.js';
 import { isTransportFailure, MachineCircuitOpenError, MachineVersionError } from './errors.js';
 import { createMachineHooks, type MachineHooks } from './hooks.js';
+import {
+  DEFAULT_PUBLISH_DIR,
+  publishSnapshotDir,
+  startArtifactEndpoint,
+  type ArtifactEndpoint,
+  type PublishedMachine,
+} from './publish.js';
 import {
   CircuitBreaker,
   DEFAULT_POLICY,
@@ -27,10 +36,22 @@ export interface MachinenPluginOptions {
   driver: MachineDriver;
   /** Reboot the machine and retry once when a call exhausts transport retries. */
   restartOnCrash?: boolean;
-  /** Timeout for boot + manifest fetch. Default 30s. */
+  /** Timeout for boot + manifest fetch (including pull-entry artifact fetches). Default 30s. */
   bootTimeoutMs?: number;
   /** Per-call resilience policy (timeout, retries, circuit breaker). */
   calls?: CallPolicy;
+  /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
+  artifactCacheDir?: string;
+  /** Deadline for a pull entry's header/small fetches (manifest, snapshot). Default 30s. */
+  artifactFetchTimeoutMs?: number;
+  /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
+  artifactStreamIdleTimeoutMs?: number;
+  /**
+   * Enables plugin-owned vmstate publication: publishMachine() writes
+   * content-addressed bundles under `dir` and a lazily started loopback
+   * endpoint serves them. Plumbing the plugin owns — nothing to deploy.
+   */
+  publish?: { dir?: string; hostname?: string; port?: number };
 }
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
@@ -43,12 +64,19 @@ export type MachinenPlugin = ModuleFederationRuntimePlugin & {
   snapshotMachine(remoteName: string): Promise<unknown>;
   /** Fork a booted machine by remote name (driver permitting). */
   forkMachine(remoteName: string): Promise<unknown>;
+  /**
+   * Snapshot a booted machine's whole VM and publish it as a
+   * machinen-vmstate@1 bundle served by the plugin's artifact endpoint.
+   * Requires `publish` options and a whole-VM-snapshotting driver
+   * (machinenDriver()).
+   */
+  publishMachine(remoteName: string): Promise<PublishedMachine>;
   /** Dispose every machine this plugin booted (kills child processes etc). */
   disposeMachines(): Promise<void>;
 };
 
 interface BootedMachine {
-  /** The raw entry string this machine is cached under (may carry auth). */
+  /** The raw entry string this machine is cached under. */
   key: string;
   /** Boot generation for the key; guards crash() against evicting a newer boot. */
   generation: number;
@@ -77,11 +105,13 @@ function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void 
   if (!actual || !semverValid(actual)) {
     throw new MachineVersionError(
       `[machinen-plugin] entry for "${spec.remoteName}" requires version "${required}" but the machine manifest has no valid version (got "${actual}")`,
+      { required, reported: actual },
     );
   }
   if (!semverSatisfies(actual, required)) {
     throw new MachineVersionError(
       `[machinen-plugin] machine "${spec.remoteName}" version mismatch: required "${required}", machine reports "${actual}"`,
+      { required, reported: actual },
     );
   }
 }
@@ -135,6 +165,51 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     }
   }
 
+  /**
+   * Pull-entry resolutions, memoized per entry string and deliberately NOT
+   * evicted on crash: restartOnCrash must reboot from the artifact already
+   * pulled, never re-fetch newer state mid-incident. Cleared only by
+   * disposeMachines(); a failed resolution evicts itself so retries can pull.
+   */
+  const resolutions = new Map<string, Promise<MachineSpec>>();
+
+  /** Lazily started artifact endpoint; closed by disposeMachines(). */
+  let endpoint: Promise<ArtifactEndpoint> | undefined;
+
+  function ensureEndpoint(
+    publish: NonNullable<MachinenPluginOptions['publish']>,
+  ): Promise<ArtifactEndpoint> {
+    endpoint ??= startArtifactEndpoint({
+      layoutDir: publish.dir ?? DEFAULT_PUBLISH_DIR,
+      hostname: publish.hostname,
+      port: publish.port,
+    });
+    return endpoint;
+  }
+
+  function resolveSpec(remoteName: string, entry: string): Promise<MachineSpec> {
+    const parsed = parseMachineEntry(remoteName, entry);
+    if (parsed.kind !== 'pull') return Promise.resolve(parsed);
+    let resolving = resolutions.get(entry);
+    if (!resolving) {
+      resolving = (async () => {
+        await machineHooks.beforeArtifactFetch.emit({ spec: parsed });
+        const resolution = await resolvePullEntry(parsed, {
+          cacheDir: options.artifactCacheDir,
+          fetchTimeoutMs: options.artifactFetchTimeoutMs,
+          streamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
+        });
+        await machineHooks.onArtifactFetched.emit({ spec: parsed, resolution });
+        return resolution.spec;
+      })();
+      resolving.catch(() => {
+        if (resolutions.get(entry) === resolving) resolutions.delete(entry);
+      });
+      resolutions.set(entry, resolving);
+    }
+    return resolving;
+  }
+
   function ensureMachine(remoteName: string, entry: string): Promise<BootedMachine> {
     knownRemotes.set(remoteName, entry);
     const cached = machines.get(entry);
@@ -144,7 +219,9 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     generations.set(entry, generation);
 
     const boot = (async (): Promise<BootedMachine> => {
-      const spec = parseMachineEntry(remoteName, entry);
+      // Pull entries resolve (fetch + cache + rewrite) to local image specs
+      // here; drivers only ever see what they already know how to boot.
+      const spec = await resolveSpec(remoteName, entry);
       await machineHooks.beforeMachineBoot.emit({ spec });
       const handle = await options.driver.boot(spec);
       try {
@@ -319,8 +396,8 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
         `[machinen-plugin] machine "${machine.spec.remoteName}" does not expose "${key}" (available: ${available})`,
       );
     }
-    // Bindings capture the raw cache key (not the redacted spec.entry) so a
-    // post-crash reboot re-parses the original entry, auth included.
+    // Bindings capture the raw cache key so a post-crash reboot re-parses
+    // the original entry.
     const { remoteName } = machine.spec;
     const moduleExports: Record<string, unknown> = { __esModule: true };
     for (const [fn, signature] of Object.entries(signatures)) {
@@ -398,13 +475,59 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       return fork;
     },
 
+    async publishMachine(remoteName) {
+      const publish = options.publish;
+      if (!publish) {
+        throw new Error(
+          `[machinen-plugin] publishMachine("${remoteName}") needs publish options — ` +
+            'pass createMachines({ publish: { dir: ".machinen/registry" } })',
+        );
+      }
+      const machine = await findMachine(remoteName);
+      if (!machine.handle.snapshot) {
+        throw new Error(`[machinen-plugin] driver for "${remoteName}" does not support snapshot`);
+      }
+      await machineHooks.beforePublish.emit({ spec: machine.spec });
+      await machineHooks.beforeSnapshot.emit({ spec: machine.spec });
+      const snapshot = await machine.handle.snapshot();
+      await machineHooks.onSnapshotted.emit({ spec: machine.spec, snapshot });
+
+      const snapDir = (snapshot as { snapDir?: unknown } | undefined)?.snapDir;
+      if (typeof snapDir !== 'string' || !(await isMachinenSnapshotDir(snapDir))) {
+        throw new Error(
+          `[machinen-plugin] publishMachine("${remoteName}"): the driver's snapshot is not a ` +
+            'machinen vmstate bundle directory — whole-VM publication needs machinenDriver() ' +
+            '(app-state snapshots travel through ?artifact=snapshot instead)',
+        );
+      }
+      const result = await publishSnapshotDir({
+        snapDir,
+        name: remoteName,
+        manifest: machine.manifest,
+        layoutDir: publish.dir ?? DEFAULT_PUBLISH_DIR,
+      });
+      const live = await ensureEndpoint(publish);
+      const published: PublishedMachine = {
+        ...result,
+        url: `${live.url}/machines/${remoteName}`,
+      };
+      await machineHooks.onPublished.emit({ spec: machine.spec, published });
+      return published;
+    },
+
     async disposeMachines() {
+      const closingEndpoint = endpoint;
+      endpoint = undefined;
+      if (closingEndpoint) {
+        await closingEndpoint.then((live) => live.close()).catch(() => {});
+      }
       const booted = await Promise.allSettled(machines.values());
       machines.clear();
       generations.clear();
       breakers.clear();
       recorders.clear();
       knownRemotes.clear();
+      resolutions.clear();
       // allSettled: one throwing dispose must not abandon the rest.
       await Promise.allSettled(
         booted

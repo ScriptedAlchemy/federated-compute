@@ -45,14 +45,6 @@ export class MachineRequestError extends Error {
   }
 }
 
-/** The guest rejected the request's credentials (401). Never retried. */
-export class MachineAuthError extends MachineRequestError {
-  constructor(message: string) {
-    super(message, 401);
-    this.name = 'MachineAuthError';
-  }
-}
-
 /**
  * The machine's circuit is open: recent calls kept failing at the transport
  * level, so calls fail fast without hitting the machine. Deliberately NOT a
@@ -68,9 +60,16 @@ export class MachineCircuitOpenError extends Error {
 
 /** The machine's manifest version does not satisfy the entry's required range. */
 export class MachineVersionError extends Error {
-  constructor(message: string) {
+  /** The semver range the entry required (`?version=`). */
+  required?: string;
+  /** The version the manifest reported — possibly invalid semver, or undefined when absent. */
+  reported?: string;
+
+  constructor(message: string, opts: { required?: string; reported?: string } = {}) {
     super(message);
     this.name = 'MachineVersionError';
+    this.required = opts.required;
+    this.reported = opts.reported;
   }
 }
 

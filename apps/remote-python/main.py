@@ -14,10 +14,7 @@ from machinen_guest.state import CounterState
 
 
 def main() -> None:
-    config = ServerConfig(
-        port=int(os.environ.get("PORT", "3803")),
-        token=os.environ.get("MACHINEN_TOKEN") or None,
-    )
+    config = ServerConfig(port=int(os.environ.get("PORT", "3803")))
     state = CounterState()
     registry = Registry(default_modules(state))
     try:

@@ -5,9 +5,13 @@
   "type": "module",
   "description": "Analytics machine: the code that moved to the data. Deployed next to db_machine; consumes it through federation bindings.",
   "scripts": {
-    "start": "node src/index.mjs"
+    "build": "rsbuild build",
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@federated-compute/machinen-plugin": "workspace:*"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^2.0.9"
   }
 }

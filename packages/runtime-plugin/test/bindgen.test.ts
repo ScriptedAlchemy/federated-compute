@@ -1,6 +1,12 @@
 import http from 'node:http';
 import { afterAll, describe, expect, test } from 'vitest';
-import { fetchBindingsSource, generateBindings } from '../src/bindgen.js';
+import {
+  bindingExportNames,
+  fetchBindingsSource,
+  fetchMachineManifest,
+  generateBarrel,
+  generateBindings,
+} from '../src/bindgen.js';
 import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
 import type { MachineExposeManifest } from '../src/types.js';
 
@@ -157,5 +163,78 @@ describe('fetchBindingsSource (host-side, network only)', () => {
     await expect(fetchBindingsSource(`http://127.0.0.1:${port}`)).rejects.toThrow(
       /guest protocol 2, expected 3/,
     );
+  });
+});
+
+describe('barrel generation', () => {
+  test('bindingExportNames returns sorted legal identifiers for expose paths', () => {
+    expect(
+      bindingExportNames({
+        name: 'edge_machine',
+        protocol: 3,
+        version: '1.0.0',
+        exposes: {
+          './delete': { it: { params: [], returns: 'boolean' } },
+          './math': { add: { params: [], returns: 'number' } },
+        },
+      }),
+    ).toEqual(['delete_', 'math']);
+  });
+
+  test('emits a namespace export per machine plus flat re-exports for unique names', () => {
+    const src = generateBarrel([
+      { name: 'compute_machine', exportNames: ['counter', 'math'] },
+      { name: 'java_machine', exportNames: ['counter', 'strings'] },
+    ]);
+    expect(src).toContain("export * as compute_machine from './compute_machine';");
+    expect(src).toContain("export * as java_machine from './java_machine';");
+    // Unique names re-export flat; colliding ones (counter) only via namespaces.
+    expect(src).toContain("export { math } from './compute_machine';");
+    expect(src).toContain("export { strings } from './java_machine';");
+    expect(src).not.toMatch(/export \{[^}]*\bcounter\b[^}]*\}/);
+  });
+
+  test('flat re-exports never collide with machine namespace exports', () => {
+    const src = generateBarrel([
+      { name: 'math', exportNames: ['solve'] },
+      { name: 'compute_machine', exportNames: ['math'] },
+    ]);
+    expect(src).toContain("export * as math from './math';");
+    expect(src).toContain("export { solve } from './math';");
+    // 'math' flat re-export would duplicate the namespace export.
+    expect(src).not.toMatch(/export \{[^}]*\bmath\b[^}]*\}/);
+  });
+
+  test('is deterministic regardless of input order', () => {
+    const a = generateBarrel([
+      { name: 'b_machine', exportNames: ['beta'] },
+      { name: 'a_machine', exportNames: ['alpha'] },
+    ]);
+    const b = generateBarrel([
+      { name: 'a_machine', exportNames: ['alpha'] },
+      { name: 'b_machine', exportNames: ['beta'] },
+    ]);
+    expect(a).toBe(b);
+    expect(a.indexOf('a_machine')).toBeLessThan(a.indexOf('b_machine'));
+  });
+});
+
+describe('fetchMachineManifest', () => {
+  const servers: GuestServer[] = [];
+  afterAll(async () => {
+    await Promise.all(servers.map((s) => s.close()));
+  });
+
+  test('fetches and validates a protocol-3 manifest', async () => {
+    const guest = createGuestRuntime({
+      name: 'manifest_machine',
+      version: '1.0.0',
+      exposes: { './math': { add: { handler: (a: number, b: number) => a + b, returns: 'number' } } },
+    });
+    const server = await serveGuest(guest, { port: 0 });
+    servers.push(server);
+    const manifest = await fetchMachineManifest(`http://127.0.0.1:${server.port}`);
+    expect(manifest.name).toBe('manifest_machine');
+    expect(manifest.protocol).toBe(3);
   });
 });

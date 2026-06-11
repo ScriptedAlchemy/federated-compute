@@ -84,7 +84,6 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
 
   async function bootProcess(spec: MachineSpec, image: string, restoreState?: unknown) {
     const port = Number(spec.params.get('port')) || (await getFreePort());
-    const token = spec.auth?.token;
 
     const [cmd, ...cmdArgs] = resolveBootCommand(image, opts.commands);
     const child: ChildProcess = spawn(cmd, cmdArgs, {
@@ -92,7 +91,6 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
         ...buildGuestEnv(),
         ...(opts.env ?? {}),
         PORT: String(port),
-        ...(token ? { MACHINEN_TOKEN: token } : {}),
       },
       stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -109,7 +107,7 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
     });
     spawnFailure.catch(() => {}); // raced below; never let it go unhandled
 
-    const handle = httpMachineHandle(`http://127.0.0.1:${port}`, { token });
+    const handle = httpMachineHandle(`http://127.0.0.1:${port}`);
     // HTTP handles always carry these; check once so later uses need no `!`.
     const { health, getState, setState } = handle;
     if (!health || !getState || !setState) {

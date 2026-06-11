@@ -72,14 +72,18 @@ export function startLatencyProxy({ port, targetPort, latencyMs = 75 }) {
 
 /**
  * Start one latency proxy per WAN_PORTS entry — every simulated region link
- * into the data region. Returns the proxy handles plus the REGION_LINKS
- * string the host consumes.
+ * into the data region — plus any `extra` `{ port, targetPort }` links (the
+ * web demo adds the region-agent control path and the artifact path).
+ * Returns the proxy handles plus the REGION_LINKS string the host consumes;
+ * a latency change applies to every link, artifact transfers included.
  */
-export async function startWanLinks({ latencyMs = 75 } = {}) {
+export async function startWanLinks({ latencyMs = 75, extra = [] } = {}) {
+  const wanted = [
+    ...Object.entries(WAN_PORTS).map(([name, port]) => ({ port, targetPort: PORTS[name] })),
+    ...extra,
+  ];
   const links = await Promise.all(
-    Object.entries(WAN_PORTS).map(([name, port]) =>
-      startLatencyProxy({ port, targetPort: PORTS[name], latencyMs }),
-    ),
+    wanted.map(({ port, targetPort }) => startLatencyProxy({ port, targetPort, latencyMs })),
   );
   return {
     links,

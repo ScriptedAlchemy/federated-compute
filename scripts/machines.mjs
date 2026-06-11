@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { envKeyFor } from '../packages/runtime-plugin/dist/client.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -18,11 +19,31 @@ export const PORTS = {
   analytics_machine: 3805,
 };
 
+// Deploy-by-pull infrastructure (web demo): the analytics ORIGIN runs in
+// us-east and publishes its image; the eu-west region agent pulls it through
+// the WAN and boots the clone at PORTS.analytics_machine — so the host's
+// existing WAN entry (3898 -> 3805) routes to the deployed clone unchanged.
+export const ANALYTICS_ORIGIN_PORT = 3806;
+export const REGION_AGENT_PORT = 3810;
+// Page 01 lifecycle origin: the host boots snap_machine at this fixed port so
+// its machinen+pull+ entries are static (`?port=` on the image entry).
+// NOTE: the lifecycle clones boot at LIFECYCLE_PORT+1 and +2 (3812/3813) —
+// see clonePort() in apps/host/src/lifecycle.ts.
+export const LIFECYCLE_PORT = 3811;
+// The vm lane's plugin-owned artifact endpoint (vmstate publish). Fixed so
+// the consumer's pull entry is a static, displayable string; 3814 because
+// 3812/3813 belong to the lifecycle clones above.
+export const VM_PUBLISH_PORT = 3814;
+
 // Simulated WAN links into the data region (latency proxies in front of these).
 export const WAN_PORTS = {
   db_machine: 3899,
   analytics_machine: 3898,
 };
+// WAN link: host -> region agent control API (the deploy command crosses once).
+export const WAN_AGENT_PORT = 3897;
+// WAN link: region agent -> analytics origin (the artifact pays WAN latency).
+export const WAN_ORIGIN_PORT = 3896;
 
 /** Machine entry at its real (same-region) address. */
 export function localEntry(name) {
@@ -38,7 +59,7 @@ export function wanEntry(name) {
 export function remoteEnv(names = Object.keys(PORTS), { wan = [] } = {}) {
   return Object.fromEntries(
     names.map((name) => [
-      `MACHINEN_REMOTE_${name.toUpperCase()}`,
+      envKeyFor(name),
       wan.includes(name) ? wanEntry(name) : localEntry(name),
     ]),
   );
@@ -49,8 +70,13 @@ const COMMANDS = {
   java_machine: ['java', '-jar', path.join(ROOT, 'apps/remote-java/dist/java-machine.jar')],
   python_machine: ['python3', path.join(ROOT, 'apps/remote-python/main.py')],
   db_machine: ['node', path.join(ROOT, 'apps/machine-db/src/index.mjs')],
-  analytics_machine: ['node', path.join(ROOT, 'apps/machine-analytics/src/index.mjs')],
+  analytics_machine: ['node', path.join(ROOT, 'apps/machine-analytics/dist/index.js')],
 };
+
+/** Command line for a machine's guest program (also used for the origin copy). */
+export function commandFor(name) {
+  return COMMANDS[name];
+}
 
 const ENV = {
   // The java guest's build publishes its static /mf-types.ts artifact here.
@@ -66,51 +92,70 @@ export const MACHINES = Object.entries(PORTS).map(([name, port]) => ({
   env: ENV[name],
 }));
 
-async function waitForManifest(port, token, name, child) {
-  const deadline = Date.now() + 30_000;
+/**
+ * Poll `url` until it answers 2xx (returning the response); fail fast when
+ * the owning child process exits first. Per-probe timeout: a stalled socket
+ * must not defeat the deadline (or the exit-code check).
+ */
+export async function waitForHttpOk(url, { child, what = url, timeoutMs = 30_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`machine ${name} exited (code ${child.exitCode}) before becoming ready`);
+    if (child && child.exitCode !== null) {
+      throw new Error(`${what} exited (code ${child.exitCode}) before becoming ready`);
     }
     try {
-      // Per-probe timeout: a stalled socket must not defeat the deadline
-      // (or the exit-code check above).
-      const health = await fetch(`http://127.0.0.1:${port}/mf/health`, {
-        signal: AbortSignal.timeout(2_000),
-      });
-      if (health.ok) {
-        const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`, {
-          headers: token ? { authorization: `Bearer ${token}` } : {},
-          signal: AbortSignal.timeout(2_000),
-        });
-        if (res.ok) return await res.json();
-      }
+      const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+      if (res.ok) return res;
     } catch {
       // not up yet
     }
     await sleep(150);
   }
-  throw new Error(`machine ${name} did not become ready on :${port}`);
+  throw new Error(`${what} did not become ready within ${Math.round(timeoutMs / 1000)}s`);
 }
 
-export async function startMachines({ token }) {
+async function waitForManifest(port, name, child) {
+  await waitForHttpOk(`http://127.0.0.1:${port}/mf/health`, { child, what: `machine ${name}` });
+  const res = await waitForHttpOk(`http://127.0.0.1:${port}/mf-manifest.json`, {
+    child,
+    what: `machine ${name} manifest`,
+  });
+  return await res.json();
+}
+
+/**
+ * The one place a machine process is spawned: env composition and stdio must
+ * not drift between initial startup and supervised respawns.
+ */
+export function spawnMachineProcess({ command, port, env }) {
+  const [cmd, ...args] = command;
+  return spawn(cmd, args, {
+    env: { ...process.env, PORT: String(port), ...(env ?? {}) },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+}
+
+/** Spawn one guest process and wait until it serves the protocol. */
+export async function startGuest({ name, command, port, env }) {
+  const child = spawnMachineProcess({ command, port, env });
+  try {
+    const manifest = await waitForManifest(port, name, child);
+    return { name, port, child, manifest, stop: () => child.kill() };
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+}
+
+export async function startMachines({ exclude = [] } = {}) {
+  const wanted = MACHINES.filter((machine) => !exclude.includes(machine.name));
   const started = [];
-  for (const machine of MACHINES) {
-    const [cmd, ...args] = machine.command;
-    const child = spawn(cmd, args, {
-      env: {
-        ...process.env,
-        PORT: String(machine.port),
-        ...(token ? { MACHINEN_TOKEN: token } : {}),
-        ...(machine.env ?? {}),
-      },
-      stdio: ['ignore', 'inherit', 'inherit'],
-    });
-    started.push({ ...machine, child });
+  for (const machine of wanted) {
+    started.push({ ...machine, child: spawnMachineProcess(machine) });
   }
   try {
     for (const machine of started) {
-      machine.manifest = await waitForManifest(machine.port, token, machine.name, machine.child);
+      machine.manifest = await waitForManifest(machine.port, machine.name, machine.child);
     }
   } catch (error) {
     // Partial startup must not orphan children — they'd hold the demo ports

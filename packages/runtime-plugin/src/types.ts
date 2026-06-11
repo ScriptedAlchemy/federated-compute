@@ -1,22 +1,26 @@
 /** Parsed form of a machine entry.
  *
- * Two transports:
- * - `machinen://<image>?...`        boot a machine from an image (driver owns transport)
- * - `machinen+http://host:port?...` attach to an independently deployed machine
+ * Three transports:
+ * - `machinen://<image>?...`             boot a machine from a local image (driver owns transport)
+ * - `machinen+http://host:port?...`      attach to an independently deployed machine
+ * - `machinen+pull+http://host:port?...` fetch the machine's published artifact, then boot it locally
  */
 export interface MachineSpec {
   remoteName: string;
-  /** The entry string with auth redacted — safe for map keys, hooks, and error messages. */
+  /** The normalized entry string — used for map keys, hooks, and error messages. */
   entry: string;
-  kind: 'image' | 'attach';
+  kind: 'image' | 'attach' | 'pull';
   /** Image/path portion for `kind: 'image'`. */
   image?: string;
-  /** Base URL for `kind: 'attach'`. */
+  /** Base URL for `kind: 'attach'` and `kind: 'pull'`. */
   url?: string;
-  /** Entry params with auth stripped; never carries the token. */
+  /** Entry params, parsed verbatim from the query string. */
   params: URLSearchParams;
-  /** Credentials carried out-of-band so they never leak into entry strings or errors. */
-  auth?: { token?: string };
+  /**
+   * Provenance: the original `machinen+pull+...` entry this spec was resolved
+   * from. Set only on specs rewritten by the artifact resolver.
+   */
+  pulledFrom?: string;
 }
 
 export interface FunctionSignature {
@@ -37,6 +41,27 @@ export interface MachineMetaData {
 }
 
 /**
+ * Where one of a machine's published artifacts lives and how to verify it —
+ * the analog of mf-manifest.json's `remoteEntry` field.
+ */
+export interface ArtifactDescriptor {
+  /** Artifact URL, relative to the manifest origin (or absolute). */
+  href: string;
+  /** Consumer-side dispatch key: `guest-bundle`, `app-state@1`, `machinen-vmstate@1` (Phase 2). */
+  format: string;
+  /** `sha256:<hex>` of the artifact bytes. Required for immutable artifacts (image). */
+  digest?: string;
+  /** File extension (".js", ".jar", ".py"...) the cached artifact must keep so drivers can boot it. */
+  ext?: string;
+  /** Informational content type (e.g. "application/java-archive"). */
+  mediaType?: string;
+  /** Artifact size in bytes, when known. */
+  bytes?: number;
+  /** `any` for app-level artifacts; `linux/amd64` etc. for arch-bound bundles. */
+  platform?: string;
+}
+
+/**
  * Protocol v3 manifest: the machine analog of `mf-manifest.json`.
  * Served at `/mf-manifest.json`.
  */
@@ -46,6 +71,22 @@ export interface MachineExposeManifest {
   /** Semver version of the machine's API surface; negotiated against entry `?version=` ranges. */
   version: string;
   metaData?: MachineMetaData;
+  /**
+   * Published artifacts for pull-and-boot federation. Presence is the
+   * capability advertisement — like mf-manifest.json's `remoteEntry` field.
+   */
+  artifacts?: {
+    /** The machine's program — the remoteEntry.js analog. */
+    image?: ArtifactDescriptor;
+    /** A freshly dehydrated warm snapshot (state + image digest reference). */
+    snapshot?: ArtifactDescriptor;
+    /**
+     * A whole-VM vmstate bundle manifest (Phase 2). Published HOST-side by
+     * the plugin that owns the VMM — a guest cannot dump the VM it is
+     * inside — and restored by machinenDriver().
+     */
+    vmstate?: ArtifactDescriptor;
+  };
   exposes: Record<string, Record<string, FunctionSignature>>;
 }
 
@@ -100,14 +141,16 @@ export interface CallContext {
 
 const IMAGE_PROTOCOL = 'machinen://';
 const ATTACH_PREFIX = 'machinen+';
+// Must be claimed before the generic attach prefix: the attach test would
+// otherwise read "pull" as the transport and attach to a nonsense URL.
+const PULL_PREFIX = 'machinen+pull+';
 
 export function isMachineEntry(entry: string): boolean {
-  return entry.startsWith(IMAGE_PROTOCOL) || /^machinen\+\w+:\/\//.test(entry);
-}
-
-/** Mask any token value in a raw entry string so it can appear in errors and logs. */
-export function redactEntry(entry: string): string {
-  return entry.replace(/([?&]token=)[^&]*/g, '$1[REDACTED]');
+  return (
+    entry.startsWith(IMAGE_PROTOCOL) ||
+    entry.startsWith(PULL_PREFIX) ||
+    /^machinen\+\w+:\/\//.test(entry)
+  );
 }
 
 export function parseMachineEntry(remoteName: string, entry: string): MachineSpec {
@@ -115,36 +158,48 @@ export function parseMachineEntry(remoteName: string, entry: string): MachineSpe
   const base = queryIndex === -1 ? entry : entry.slice(0, queryIndex);
   const params = new URLSearchParams(queryIndex === -1 ? '' : entry.slice(queryIndex + 1));
 
-  // Auth moves out-of-band: the token never stays in params or the stored
-  // entry, so cache keys, hook payloads, and error messages can't leak it.
-  const token = params.get('token') ?? undefined;
-  params.delete('token');
-
   let spec: MachineSpec;
   if (base.startsWith(IMAGE_PROTOCOL)) {
     spec = { remoteName, entry, kind: 'image', image: base.slice(IMAGE_PROTOCOL.length), params };
+  } else if (base.startsWith(PULL_PREFIX)) {
+    const url = base.slice(PULL_PREFIX.length);
+    if (!/^https?:\/\/.+/.test(url)) {
+      throw new Error(
+        `[machinen-plugin] pull entries must use http(s) (machinen+pull+http://... or machinen+pull+https://...), got "${entry}"`,
+      );
+    }
+    spec = { remoteName, entry, kind: 'pull', url, params };
   } else if (base.startsWith(ATTACH_PREFIX)) {
     spec = { remoteName, entry, kind: 'attach', url: base.slice(ATTACH_PREFIX.length), params };
   } else {
-    throw new Error(`[machinen-plugin] not a machine entry: "${redactEntry(entry)}"`);
+    throw new Error(`[machinen-plugin] not a machine entry: "${entry}"`);
   }
-  if (token) spec.auth = { token };
-  spec.entry = formatMachineEntry(spec, { redact: true });
+  spec.entry = formatMachineEntry(spec);
   return spec;
 }
 
 /**
  * Inverse of parseMachineEntry: serialize a spec (with possibly edited params)
- * back to an entry string. By default the auth token is re-included (the entry
- * string is the only channel through MF's registerRemotes); pass
- * `{ redact: true }` for any string that may reach errors or logs.
+ * back to an entry string. Deterministic, so the result is safe as a map key.
  */
-export function formatMachineEntry(spec: MachineSpec, opts: { redact?: boolean } = {}): string {
-  const base = spec.kind === 'image' ? `${IMAGE_PROTOCOL}${spec.image}` : `${ATTACH_PREFIX}${spec.url}`;
-  const params = new URLSearchParams(spec.params);
-  params.delete('token');
-  if (!opts.redact && spec.auth?.token) params.set('token', spec.auth.token);
-  const query = params.toString();
+export function formatMachineEntry(spec: MachineSpec): string {
+  let base: string;
+  switch (spec.kind) {
+    case 'image':
+      base = `${IMAGE_PROTOCOL}${spec.image}`;
+      break;
+    case 'pull':
+      base = `${PULL_PREFIX}${spec.url}`;
+      break;
+    case 'attach':
+      base = `${ATTACH_PREFIX}${spec.url}`;
+      break;
+    default: {
+      const unreachable: never = spec.kind;
+      throw new Error(`[machinen-plugin] unknown entry kind: ${String(unreachable)}`);
+    }
+  }
+  const query = spec.params.toString();
   return query ? `${base}?${query}` : base;
 }
 

@@ -68,9 +68,9 @@ if (process.exitCode) {
 
 /**
  * Generates dist/mf-types.ts, the static artifact GuestServer serves at
- * GET /mf-types.ts: boot the jar on a free port with a throwaway token, run
- * machinen-bindgen against it (the jar serves no types yet, so the CLI
- * renders from the manifest), then stop the jar.
+ * GET /mf-types.ts: boot the jar on a free port, run machinen-bindgen
+ * against it (the jar serves no types yet, so the CLI renders from the
+ * manifest), then stop the jar.
  */
 async function publishTypesArtifact() {
   if (!existsSync(bindgenCli)) {
@@ -83,11 +83,10 @@ async function publishTypesArtifact() {
   rmSync(typesFile, { force: true });
 
   const port = await freePort();
-  const token = `bindgen-${process.pid}`;
   console.log(`[build] booting the jar on :${port} to generate ${typesFile}`);
   const guest = spawn("java", ["-jar", jarFile], {
     cwd: root,
-    env: { ...process.env, PORT: String(port), MACHINEN_TOKEN: token },
+    env: { ...process.env, PORT: String(port) },
     stdio: ["ignore", "ignore", "inherit"],
   });
   try {
@@ -96,7 +95,6 @@ async function publishTypesArtifact() {
       bindgenCli,
       "--url", `http://127.0.0.1:${port}`,
       "--out", typesFile,
-      "--token", token,
     ], { stdio: "inherit" });
   } catch (err) {
     console.error(`[build] mf-types generation failed: ${err.message}`);

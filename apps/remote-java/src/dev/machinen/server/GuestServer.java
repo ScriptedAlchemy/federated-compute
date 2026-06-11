@@ -8,8 +8,6 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +17,7 @@ import java.util.concurrent.Executors;
 import dev.machinen.runtime.Exposes;
 import dev.machinen.state.MachineState;
 
-/** HTTP face of the guest: routing, bearer auth, and the JSON envelopes. */
+/** HTTP face of the guest: routing and the JSON envelopes. */
 public final class GuestServer {
 
   static final String NAME = "java_machine";
@@ -29,13 +27,11 @@ public final class GuestServer {
 
   private final HttpServer server;
   private final ExecutorService dispatcher;
-  private final String token;
   private final Exposes exposes;
   private final MachineState state;
 
-  public GuestServer(int port, String token, Exposes exposes, MachineState state)
+  public GuestServer(int port, Exposes exposes, MachineState state)
       throws IOException {
-    this.token = token;
     this.exposes = exposes;
     this.state = state;
     this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
@@ -82,7 +78,6 @@ public final class GuestServer {
   }
 
   private void handleManifest(HttpExchange ex) throws IOException {
-    if (unauthorized(ex)) return;
     if (!ex.getRequestMethod().equals("GET")) {
       send(ex, 404, "{}");
       return;
@@ -105,7 +100,6 @@ public final class GuestServer {
    * the artifact was not published — consumers fall back to the manifest.
    */
   private void handleTypes(HttpExchange ex) throws IOException {
-    if (unauthorized(ex)) return;
     if (!ex.getRequestMethod().equals("GET")) {
       send(ex, 404, "{}");
       return;
@@ -119,7 +113,6 @@ public final class GuestServer {
   }
 
   private void handleCall(HttpExchange ex) throws IOException {
-    if (unauthorized(ex)) return;
     if (!ex.getRequestMethod().equals("POST")) {
       send(ex, 404, "{}");
       return;
@@ -144,7 +137,6 @@ public final class GuestServer {
   }
 
   private void handleState(HttpExchange ex) throws IOException {
-    if (unauthorized(ex)) return;
     if (ex.getRequestMethod().equals("GET")) {
       send(ex, 200, Json.write(Map.of("ok", true, "state", state.dehydrate())));
       return;
@@ -202,28 +194,6 @@ public final class GuestServer {
     send(ex, 400, Json.write(Map.of(
         "ok", false,
         "error", Map.of("message", "malformed request body", "type", "ParseError"))));
-  }
-
-  private boolean unauthorized(HttpExchange ex) throws IOException {
-    if (token == null || token.isEmpty()) return false;
-    String header = ex.getRequestHeaders().getFirst("Authorization");
-    if (authorized(header)) return false;
-    send(ex, 401, Json.write(Map.of(
-        "ok", false,
-        "error", Map.of("message", "unauthorized", "type", "AuthError"))));
-    return true;
-  }
-
-  /** Constant-time bearer check: compare SHA-256 digests, never the strings. */
-  private boolean authorized(String header) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      byte[] expected = md.digest(("Bearer " + token).getBytes(StandardCharsets.UTF_8));
-      byte[] presented = md.digest((header == null ? "" : header).getBytes(StandardCharsets.UTF_8));
-      return MessageDigest.isEqual(expected, presented);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException("SHA-256 unavailable", e);
-    }
   }
 
   /** Reads the request body, or sends 413 and returns null if it exceeds the cap. */

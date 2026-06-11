@@ -36,11 +36,17 @@ jobs:
       - name: Build all packages
         run: pnpm -r build
 
+      - name: Bindgen drift check (generated bindings match deployed manifests)
+        run: node scripts/bindgen.mjs --check
+
       - name: End-to-end demo (3 machines + host)
         run: node scripts/demo.mjs
 
       - name: Snapshot demo (boot once, run everywhere)
         run: node scripts/demo-snapshot.mjs
+
+      - name: Pull demo (fork-by-fetch image federation)
+        run: node scripts/demo-pull.mjs
 
       - name: Data gravity demo (move the code to the data)
         run: node scripts/demo-gravity.mjs

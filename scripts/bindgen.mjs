@@ -9,16 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { remoteEnv, startMachines } from './machines.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const token = process.env.MACHINEN_TOKEN ?? 'bindgen-secret';
 
-const { stop } = await startMachines({ token });
+const { stop } = await startMachines();
 try {
   const code = await new Promise((resolve) => {
-    const child = spawn('pnpm', ['--filter', 'host', 'bindgen'], {
+    const child = spawn('pnpm', ['--filter', 'host', 'bindgen', ...process.argv.slice(2)], {
       cwd: ROOT,
       env: {
         ...process.env,
-        MACHINEN_TOKEN: token,
         ...remoteEnv(),
       },
       stdio: 'inherit',

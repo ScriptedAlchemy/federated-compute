@@ -29,13 +29,61 @@ function renderFunction(name: string, sig: FunctionSignature): string {
   return `  ${name}(${params}): ${returns};`;
 }
 
-function identifier(exposePath: string): string {
-  const id = stripExposePrefix(exposePath).replace(/[^a-zA-Z0-9_$]/g, '_');
-  // Foreign manifests may not have gone through guest-side validation, so a
-  // reserved word ('./delete' -> delete) or leading digit ('./3d' -> 3d)
-  // must still emit a legal export name.
+// Foreign manifests may not have gone through guest-side validation, so a
+// reserved word ('delete') or leading digit ('3d') must still emit a legal
+// export name.
+function legalIdentifier(raw: string): string {
+  const id = raw.replace(/[^a-zA-Z0-9_$]/g, '_');
   if (/^\d/.test(id)) return `_${id}`;
   return isJsReservedWord(id) ? `${id}_` : id;
+}
+
+function identifier(exposePath: string): string {
+  return legalIdentifier(stripExposePrefix(exposePath));
+}
+
+/** Sorted, legal binding export names for a manifest's exposes (matches generateBindings). */
+export function bindingExportNames(manifest: MachineExposeManifest): string[] {
+  return Object.keys(manifest.exposes)
+    .sort((a, b) => a.localeCompare(b))
+    .map((p) => identifier(p));
+}
+
+/** Machine names from foreign manifests must still be legal `export * as` identifiers. */
+function namespaceIdentifier(machineName: string): string {
+  return legalIdentifier(machineName);
+}
+
+/**
+ * Barrel for a config-driven bindgen run: one namespace export per machine,
+ * plus flat re-exports for binding names that are unambiguous across machines.
+ */
+export function generateBarrel(machines: { name: string; exportNames: string[] }[]): string {
+  const sorted = [...machines].sort((a, b) => a.name.localeCompare(b.name));
+  const namespaceNames = new Set(sorted.map((machine) => namespaceIdentifier(machine.name)));
+  const counts = new Map<string, number>();
+  for (const machine of sorted) {
+    for (const exportName of machine.exportNames) {
+      counts.set(exportName, (counts.get(exportName) ?? 0) + 1);
+    }
+  }
+  const lines: string[] = [
+    '// AUTO-GENERATED barrel by machinen bindgen. Do not edit by hand.',
+    '// Names shared by several machines are only reachable through their namespace.',
+  ];
+  for (const machine of sorted) {
+    lines.push(`export * as ${namespaceIdentifier(machine.name)} from './${machine.name}';`);
+  }
+  for (const machine of sorted) {
+    // A flat re-export must be unique across machines and must not shadow a
+    // namespace export — both would be duplicate exports of the same name.
+    const unique = machine.exportNames.filter(
+      (exportName) => counts.get(exportName) === 1 && !namespaceNames.has(exportName),
+    );
+    if (unique.length) lines.push(`export { ${unique.join(', ')} } from './${machine.name}';`);
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 /** Machine names come from manifests of arbitrary guests — make them valid type names. */
@@ -88,26 +136,10 @@ export function generateBindings(manifest: MachineExposeManifest): string {
   return lines.join('\n');
 }
 
-/**
- * Host-side type distribution, MF-style: a machine publishes its own types
- * next to its manifest. Prefer the machine's `/mf-types.ts` artifact; fall
- * back to rendering from its manifest (which carries full signatures) when
- * the machine doesn't serve one. Network only — the host never reads another
- * repo's disk.
- */
-export async function fetchBindingsSource(
-  machineUrl: string,
-  opts: { token?: string } = {},
-): Promise<string> {
+/** Fetch and validate a machine's protocol-3 manifest. */
+export async function fetchMachineManifest(machineUrl: string): Promise<MachineExposeManifest> {
   const base = machineUrl.replace(/\/$/, '');
-  const headers: Record<string, string> = opts.token
-    ? { authorization: `Bearer ${opts.token}` }
-    : {};
-
-  const published = await fetch(`${base}/mf-types.ts`, { headers });
-  if (published.ok) return await published.text();
-
-  const res = await fetch(`${base}/mf-manifest.json`, { headers });
+  const res = await fetch(`${base}/mf-manifest.json`);
   if (!res.ok) {
     throw new Error(`bindgen: manifest request failed with ${res.status} for ${machineUrl}`);
   }
@@ -117,5 +149,21 @@ export async function fetchBindingsSource(
       `bindgen: machine at ${machineUrl} speaks guest protocol ${String(manifest.protocol)}, expected 3`,
     );
   }
-  return generateBindings(manifest);
+  return manifest;
+}
+
+/**
+ * Host-side type distribution, MF-style: a machine publishes its own types
+ * next to its manifest. Prefer the machine's `/mf-types.ts` artifact; fall
+ * back to rendering from its manifest (which carries full signatures) when
+ * the machine doesn't serve one. Network only — the host never reads another
+ * repo's disk.
+ */
+export async function fetchBindingsSource(machineUrl: string): Promise<string> {
+  const base = machineUrl.replace(/\/$/, '');
+
+  const published = await fetch(`${base}/mf-types.ts`);
+  if (published.ok) return await published.text();
+
+  return generateBindings(await fetchMachineManifest(machineUrl));
 }

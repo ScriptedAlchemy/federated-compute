@@ -8,13 +8,14 @@
     "build": "rsbuild build",
     "start": "node dist/index.js",
     "serve": "node dist/server.js",
-    "bindgen": "node bindgen.mjs"
+    "bindgen": "node node_modules/@federated-compute/machinen-plugin/dist/cli.js"
   },
   "dependencies": {
     "@federated-compute/machinen-plugin": "workspace:*",
     "@module-federation/runtime": "^2.5.1"
   },
   "devDependencies": {
+    "@machinen/runtime": "0.4.0",
     "@rsbuild/core": "^2.0.9",
     "typescript": "^5.7.0"
   }

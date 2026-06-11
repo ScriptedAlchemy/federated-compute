@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { formatMachineEntry, isMachineEntry, parseMachineEntry, redactEntry } from '../src/types.js';
+import { formatMachineEntry, isMachineEntry, parseMachineEntry } from '../src/types.js';
 
 describe('machine entries', () => {
   test('recognizes image and attach entries', () => {
@@ -17,9 +17,10 @@ describe('machine entries', () => {
   });
 
   test('parses attach entries into a base url + params', () => {
-    const spec = parseMachineEntry('m', 'machinen+http://127.0.0.1:3802?token=secret');
+    const spec = parseMachineEntry('m', 'machinen+http://127.0.0.1:3802?cpus=2');
     expect(spec.kind).toBe('attach');
     expect(spec.url).toBe('http://127.0.0.1:3802');
+    expect(spec.params.get('cpus')).toBe('2');
   });
 
   test('attach entries keep any path component', () => {
@@ -28,37 +29,60 @@ describe('machine entries', () => {
     expect(spec.url).toBe('https://machines.example.com/math');
   });
 
-  test('tokens move out-of-band: spec.auth carries them, params/entry never do', () => {
-    const spec = parseMachineEntry('m', 'machinen+http://127.0.0.1:3802?token=secret&cpus=2');
-    expect(spec.auth?.token).toBe('secret');
-    expect(spec.params.has('token')).toBe(false);
-    expect(spec.params.get('cpus')).toBe('2');
-    expect(spec.entry).not.toContain('secret');
-    expect(spec.entry).toBe('machinen+http://127.0.0.1:3802?cpus=2');
+  test('formatMachineEntry round-trips a parsed spec deterministically', () => {
+    const spec = parseMachineEntry('m', 'machinen://images/m.img?cpus=1');
+    expect(formatMachineEntry(spec)).toBe('machinen://images/m.img?cpus=1');
   });
 
-  test('formatMachineEntry re-includes auth by default and omits it when redacting', () => {
-    const spec = parseMachineEntry('m', 'machinen://images/m.img?cpus=1&token=hush');
-    expect(formatMachineEntry(spec)).toContain('token=hush');
-    const redacted = formatMachineEntry(spec, { redact: true });
-    expect(redacted).not.toContain('hush');
-    expect(redacted).toContain('cpus=1');
-  });
-
-  test('parse errors for non-machine entries never echo the token', () => {
-    expect(() => parseMachineEntry('m', 'https://cdn.example.com/x.js?token=hush')).toThrow(
+  test('rejects non-machine entries', () => {
+    expect(() => parseMachineEntry('m', 'https://cdn.example.com/x.js')).toThrow(
       /not a machine entry/,
     );
-    try {
-      parseMachineEntry('m', 'https://cdn.example.com/x.js?token=hush');
-    } catch (error) {
-      expect((error as Error).message).not.toContain('hush');
-    }
+  });
+});
+
+describe('pull entries (machinen+pull+http(s)://)', () => {
+  test('recognizes pull entries', () => {
+    expect(isMachineEntry('machinen+pull+http://127.0.0.1:3802')).toBe(true);
+    expect(isMachineEntry('machinen+pull+https://registry.example/java_machine')).toBe(true);
   });
 
-  test('redactEntry masks every token value in a raw entry string', () => {
-    expect(redactEntry('machinen+http://h:1?a=1&token=hush&b=2')).toBe(
-      'machinen+http://h:1?a=1&token=[REDACTED]&b=2',
+  test('parses a pull entry into kind, base url, and params', () => {
+    const spec = parseMachineEntry(
+      'java_machine',
+      'machinen+pull+http://127.0.0.1:3802?artifact=snapshot&version=^1.0.0',
+    );
+    expect(spec.kind).toBe('pull');
+    expect(spec.url).toBe('http://127.0.0.1:3802');
+    expect(spec.image).toBeUndefined();
+    expect(spec.params.get('artifact')).toBe('snapshot');
+    expect(spec.params.get('version')).toBe('^1.0.0');
+  });
+
+  test('pull entries keep any path component (registry layout)', () => {
+    const spec = parseMachineEntry('m', 'machinen+pull+https://registry.example/machines/java_machine');
+    expect(spec.kind).toBe('pull');
+    expect(spec.url).toBe('https://registry.example/machines/java_machine');
+  });
+
+  test('pull entries are never mistaken for attach entries', () => {
+    const spec = parseMachineEntry('m', 'machinen+pull+http://127.0.0.1:3802');
+    expect(spec.kind).toBe('pull');
+    // And plain attach keeps working untouched.
+    expect(parseMachineEntry('m', 'machinen+http://127.0.0.1:3802').kind).toBe('attach');
+  });
+
+  test('formatMachineEntry round-trips pull entries deterministically', () => {
+    const entry = 'machinen+pull+http://127.0.0.1:3802?artifact=image';
+    expect(formatMachineEntry(parseMachineEntry('m', entry))).toBe(entry);
+  });
+
+  test('rejects pull entries with non-http(s) transports', () => {
+    expect(() => parseMachineEntry('m', 'machinen+pull+ftp://files.example/m')).toThrow(
+      /pull entries must use http/i,
+    );
+    expect(() => parseMachineEntry('m', 'machinen+pull+://no-scheme')).toThrow(
+      /pull entries must use http/i,
     );
   });
 });

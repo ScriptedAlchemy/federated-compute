@@ -1,8 +1,41 @@
 export { machinenPlugin, type MachinenPlugin, type MachinenPluginOptions } from './plugin.js';
+export {
+  DEFAULT_ARTIFACT_CACHE_DIR,
+  joinArtifactUrl,
+  resolvePullEntry,
+  type PullArtifactKind,
+  type PullResolution,
+  type ResolvePullOptions,
+} from './artifacts.js';
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
 export {
+  DEFAULT_PUBLISH_DIR,
+  publishSnapshotDir,
+  startArtifactEndpoint,
+  type ArtifactEndpoint,
+  type ArtifactEndpointOptions,
+  type PublishSnapshotDirOptions,
+  type PublishedMachine,
+  type PublishedVmstate,
+} from './publish.js';
+export {
+  VMSTATE_FORMAT,
+  buildVmstateBundle,
+  ensureBlobCached,
+  installedMachinenRuntimeVersion,
+  materializeVmstateDir,
+  ociHostPlatform,
+  parseVmstateBundleManifest,
+  sha256File,
+  vmstateCompatibilityError,
+  type BuiltVmstateBundle,
+  type VmstateBundleManifest,
+  type VmstateCompatibility,
+  type VmstateFileEntry,
+  type VmstateHost,
+} from './vmstate.js';
+export {
   GuestError,
-  MachineAuthError,
   MachineCircuitOpenError,
   MachineRequestError,
   MachineTimeoutError,
@@ -12,12 +45,27 @@ export {
 } from './errors.js';
 export {
   CircuitBreaker,
+  DEFAULT_POLICY,
   MetricsRecorder,
   type CallPolicy,
   type CircuitBreakerConfig,
   type MachineMetrics,
 } from './policy.js';
-export { fetchBindingsSource, generateBindings, isJsReservedWord } from './bindgen.js';
+export {
+  runBindgenFromConfig,
+  type BindgenFileStatus,
+  type BindgenMachineResult,
+  type BindgenRunOptions,
+  type BindgenRunResult,
+} from './bindgen-run.js';
+export {
+  bindingExportNames,
+  fetchBindingsSource,
+  fetchMachineManifest,
+  generateBarrel,
+  generateBindings,
+  isJsReservedWord,
+} from './bindgen.js';
 export {
   configureMachines,
   createMachines,
@@ -31,12 +79,20 @@ export {
   type MachinesOptions,
 } from './client.js';
 export {
+  MACHINEN_CONFIG_FILENAME,
+  findMachinenConfigPath,
+  loadMachinenConfig,
+  parseMachinenConfig,
+  type MachinenConfig,
+  type MachinenConfigMachine,
+} from './config.js';
+export {
   formatMachineEntry,
   isMachineEntry,
   normalizeExpose,
   parseMachineEntry,
-  redactEntry,
   stripExposePrefix,
+  type ArtifactDescriptor,
   type CallContext,
   type CallOptions,
   type FunctionSignature,
@@ -47,7 +103,7 @@ export {
 } from './types.js';
 export { inProcessDriver } from './drivers/in-process.js';
 export { httpAttachDriver, httpMachineHandle } from './drivers/http.js';
-export { processDriver, resolveBootCommand, type BootCommandMap } from './drivers/process.js';
+export { getFreePort, processDriver, resolveBootCommand, type BootCommandMap } from './drivers/process.js';
 export {
   isMachinenSnapshotDir,
   machinenDriver,
