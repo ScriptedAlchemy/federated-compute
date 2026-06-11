@@ -105,7 +105,19 @@ type WireEvent =
       ms: number;
     }
   | { type: 'crash'; machine: string; error: string }
-  | { type: 'circuit'; machine: string; state: 'open' | 'closed' };
+  | { type: 'circuit'; machine: string; state: 'open' | 'closed' }
+  | {
+      /**
+       * Version negotiation refused an attach. No plugin hook fires for a
+       * rejected boot (onMachineReady never runs), so the route records this
+       * event itself — `error` is the plugin's MachineVersionError verbatim.
+       */
+      type: 'reject';
+      machine: string;
+      entry: string;
+      required: string;
+      error: string;
+    };
 
 const wireStore = new AsyncLocalStorage<WireEvent[]>();
 
@@ -518,6 +530,57 @@ async function handleChaosProbe(_req: http.IncomingMessage, res: http.ServerResp
 }
 // ----------------------------------------------------------------------------
 
+// ---- version negotiation rejection ------------------------------------------
+// Every other trace shows the happy path. This control registers a SECOND
+// remote name for the same running java machine, demanding ^2.0.0: the
+// runtime fetches the manifest, compares versions, and refuses to attach
+// (MachineVersionError — a real error from the real negotiation). force:true
+// on every attempt drops any cached container so the demo is repeatable.
+const STRICT_NAME = 'java_machine_strict';
+const STRICT_REQUIRED = '^2.0.0';
+
+/** The entry with its ?version= requirement replaced. */
+function withVersionParam(entry: string, required: string): string {
+  const [base, query = ''] = entry.split('?');
+  const params = query
+    .split('&')
+    .filter((pair) => pair && !pair.startsWith('version='));
+  // Raw (unencoded) param style, matching how entries are written everywhere.
+  return `${base}?${[...params, `version=${required}`].join('&')}`;
+}
+
+async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerResponse) {
+  const javaEntry = remotes.find((r) => r.name === 'java_machine')!.entry;
+  const entry = withVersionParam(javaEntry, STRICT_REQUIRED);
+  host.registerRemotes([{ name: STRICT_NAME, entry }], { force: true });
+  try {
+    await host.loadRemote(`${STRICT_NAME}/strings`);
+    // Reaching here would mean the negotiation accepted ^2.0.0 — report it
+    // honestly instead of fabricating a rejection.
+    json(res, 200, { rejected: false, entry, required: STRICT_REQUIRED, wire: wire() });
+  } catch (error) {
+    const message = errorMessage(error);
+    wire().push({
+      type: 'reject',
+      machine: STRICT_NAME,
+      entry,
+      required: STRICT_REQUIRED,
+      error: message,
+    });
+    json(res, 200, {
+      rejected: true,
+      entry,
+      required: STRICT_REQUIRED,
+      errorName: error instanceof Error ? error.name : 'Error',
+      error: message,
+      // The version the machine reported, extracted from the plugin's error.
+      reported: /machine reports "([^"]+)"/.exec(message)?.[1],
+      wire: wire(),
+    });
+  }
+}
+// ----------------------------------------------------------------------------
+
 // ---- machine lifecycle story ------------------------------------------------
 // The five machines above are attached deployments (httpAttachDriver), so the
 // host can't freeze them. The lifecycle card boots its OWN machine from an
@@ -924,6 +987,7 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/counter', handleCounter],
   ['POST /api/chaos/kill', handleChaosKill],
   ['POST /api/chaos/probe', handleChaosProbe],
+  ['POST /api/version/demand', handleVersionDemand],
   ['POST /api/lifecycle/boot', handleLifecycleBoot],
   ['POST /api/lifecycle/freeze', handleLifecycleFreeze],
   ['POST /api/lifecycle/restore', handleLifecycleRestore],

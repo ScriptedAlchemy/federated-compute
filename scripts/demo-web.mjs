@@ -272,6 +272,22 @@ async function runSmoke(base) {
   expect(redeploy.alreadyDeployed === true, 'second deploy should be idempotent');
   console.log('[smoke] second deploy -> alreadyDeployed');
 
+  // ---- version negotiation: demanding ^2.0.0 must be refused, repeatably ---
+  for (const attempt of [1, 2]) {
+    const demand = await postJson(base, '/api/version/demand');
+    expect(demand.rejected === true, `version demand ${attempt} should be rejected: ${JSON.stringify(demand)}`);
+    expect(demand.errorName === 'MachineVersionError',
+      `rejection should be a MachineVersionError (got ${demand.errorName})`);
+    expect(String(demand.error).includes('^2.0.0'), 'rejection error should carry the required range');
+    expect((demand.wire ?? []).some((e) => e.type === 'reject'),
+      'version demand wire should carry the reject event');
+    if (attempt === 1) {
+      expect(typeof demand.reported === 'string' && demand.reported.length > 0,
+        'rejection should report the version the manifest actually carries');
+    }
+  }
+  console.log('[smoke] POST /api/version/demand -> MachineVersionError, twice (repeatable)');
+
   // ---- chaos: kill compute_machine, watch the breaker open, wait for heal --
   // Runs LAST: the machine is dead/failing-fast for ~12s (respawn + breaker
   // reset window) and nothing after this may depend on it.

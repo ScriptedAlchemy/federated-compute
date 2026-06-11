@@ -422,6 +422,16 @@
   /* artifacts capability chip on machine cards (capability-as-presence). */
   .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
 
+  /* version negotiation control (java card): demand a version the machine
+     can't satisfy and watch the attach get refused. */
+  .vneg { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--panel-edge); }
+  .vneg-row { gap: 10px; margin-top: 0; }
+  .vneg button { padding: 5px 12px; font-size: 10px; color: var(--java); border-color: rgba(240, 136, 62, .4); }
+  .vneg button:hover:not(:disabled) { border-color: var(--java); box-shadow: 0 0 16px -6px rgba(240, 136, 62, .6); }
+  .vneg button:disabled { opacity: .35; cursor: not-allowed; }
+  .vneg-status { font-size: 10.5px; color: var(--ink-dim); }
+  .vneg-status b { color: var(--ink); font-weight: 500; }
+
   /* ---------- stream ---------- */
   .ticks { display: flex; gap: 9px; margin-top: 14px; min-height: 46px; flex-wrap: wrap; align-items: center; }
   .tick {
@@ -883,8 +893,20 @@ function buildCard(name, idx, entry) {
       <div><dt>p50 / p95</dt><dd data-f="lat">—</dd></div>
     </dl>
     <div class="spark" data-f="spark" aria-hidden="true"></div>
-    <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>`;
+    <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>
+    ${name === 'java_machine' ? `
+    <div class="vneg">
+      <div class="row vneg-row">
+        <button id="vneg-btn" title="register a second remote name for this same machine with ?version=^2.0.0, then loadRemote it">demand ^2.0.0</button>
+        <span class="vneg-status" id="vneg-status">what if an entry required <b>^2.0.0</b>?</span>
+      </div>
+      <details class="wiretrace" id="vneg-wire" hidden>
+        <summary>the rejection, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+    </div>` : ''}`;
   $('machines').appendChild(el);
+  if (name === 'java_machine') $('vneg-btn').onclick = () => demandVersion($('vneg-btn'));
   const f = (k) => el.querySelector(`[data-f=${k}]`);
   const card = {
     el, state: f('state'), runtime: f('runtime'), version: f('version'),
@@ -1221,6 +1243,30 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
     }
   };
 });
+
+/* ---------- version negotiation: demand ^2.0.0, get refused ---------- */
+async function demandVersion(btn) {
+  btn.disabled = true;
+  const status = $('vneg-status');
+  status.innerHTML = '<span class="running">registering strict entry, negotiating…</span>';
+  try {
+    const r = await post('/api/version/demand', {});
+    if (r.rejected === undefined) {
+      status.innerHTML = `<span class="err">error: ${esc(r.error ?? 'unexpected response')}</span>`;
+      return;
+    }
+    if (r.rejected) {
+      status.innerHTML = `<span class="err">refused</span> — required <b>${esc(r.required)}</b>, ` +
+        `manifest reports <b>${esc(r.reported ?? '?')}</b> (${esc(r.errorName)})`;
+    } else {
+      // Honest fallback: only reachable if the machine actually satisfies ^2.0.0.
+      status.innerHTML = `accepted — the machine satisfies <b>${esc(r.required)}</b>`;
+    }
+    renderWireFx('vneg-wire', 'POST /api/version/demand', r.wire);
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 /* ---------- chaos: kill compute_machine, watch it heal (act 06) ---------- */
 let chaosTimer = null;
