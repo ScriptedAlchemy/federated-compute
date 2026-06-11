@@ -233,10 +233,19 @@ async function runSmoke(base) {
   expect(artifactWire.length === 1, 'pull a should record one artifact wire event');
   console.log(`[smoke] lifecycle pull a -> resumed 4, ${pullA.clones.a.pulledBytes} bytes, image MISS`);
 
+  expect(String(pullA.imageDigest).startsWith('sha256:'),
+    `pull a should learn the image digest from the clone manifest (got ${pullA.imageDigest})`);
+
   const pullB = await postJson(base, '/api/lifecycle/pull');
   expect(pullB.clone === 'b' && pullB.clones.b.imageCacheHit === true,
     'second pull should be an image cache HIT');
-  console.log('[smoke] lifecycle pull b -> image cache HIT');
+  expect(pullB.clones.b.pinnedDigest === pullA.imageDigest,
+    `pull b should pin the digest learned in step 4: ${JSON.stringify({
+      pinned: pullB.clones.b.pinnedDigest, learned: pullA.imageDigest,
+    })}`);
+  expect(pullB.clones.b.entry.includes(`digest=${pullA.imageDigest}`),
+    `clone b entry should carry the ?digest= pin (got ${pullB.clones.b.entry})`);
+  console.log(`[smoke] lifecycle pull b -> image cache HIT, entry pinned ${pullB.clones.b.pinnedDigest.slice(0, 19)}…`);
 
   const bumpA = await postJson(base, '/api/lifecycle/counter', { target: 'a' });
   expect(bumpA.targetValue === 5 && bumpA.value === 4,

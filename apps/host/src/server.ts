@@ -80,6 +80,8 @@ type WireEvent =
       runtime?: string;
       /** Set when this boot came from a pulled artifact (provenance). */
       pulledFrom?: string;
+      /** The sha256 digest of the image artifact the machine publishes. */
+      imageDigest?: string;
     }
   | {
       type: 'call';
@@ -144,6 +146,7 @@ function recordWire(p: MachinenPlugin): void {
       requires: spec.params.get('version') ?? undefined,
       runtime: manifest.metaData?.runtime,
       pulledFrom: spec.pulledFrom,
+      imageDigest: manifest.artifacts?.image?.digest,
     });
   });
   p.machineHooks.onArtifactFetched.on(({ spec, resolution }) => {
@@ -636,6 +639,8 @@ interface CloneState {
   pulledBytes: number;
   imageCacheHit: boolean;
   pullMs: number;
+  /** Set when the entry pinned ?digest= and the resolver verified it (clone b). */
+  pinnedDigest?: string;
 }
 
 interface LifecycleState {
@@ -645,6 +650,11 @@ interface LifecycleState {
   snapBytes?: number;
   clones: Partial<Record<CloneId, CloneState>>;
   busy: boolean;
+  /**
+   * The image digest learned from the step-4 pull (the booted clone's
+   * manifest advertises the artifact it runs). Step 5 pins its entry to it.
+   */
+  imageDigest?: string;
 }
 
 const lifecycle: LifecycleState = { phase: 'cold', clones: {}, busy: false };
@@ -690,6 +700,7 @@ async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerR
     await rm(PULL_CACHE_DIR, { recursive: true, force: true });
     cacheStats.reset();
     lifecycle.clones = {};
+    lifecycle.imageDigest = undefined;
     snapHost.registerRemotes([{ name: SNAP_NAME, entry: ORIGIN_ENTRY }], { force: true });
     const counter = (await snapHost.loadRemote<CounterModule>(`${SNAP_NAME}/counter`))!;
     await counter.increment();
@@ -739,7 +750,11 @@ async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerR
     const id = CLONE_IDS.find((c) => !lifecycle.clones[c]);
     if (!id) throw new HttpError(409, 'both clones already exist — step 1 resets the arc');
     const name = cloneName(id);
-    const entry = cloneEntry(id);
+    // Step 5 demonstrates ?digest= pinning: clone b's entry pins the image
+    // digest learned from the step-4 pull, so the resolver refuses to boot
+    // anything but exactly that code.
+    const pin = id === 'b' ? lifecycle.imageDigest : undefined;
+    const entry = cloneEntry(id) + (pin ? `&digest=${pin}` : '');
     // force: after a reset the MF runtime may still cache the previous
     // clone's container under this name.
     snapHost.registerRemotes([{ name, entry }], { force: true });
@@ -753,6 +768,13 @@ async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerR
         e.type === 'artifact' && e.machine === name,
     );
     if (!pull) throw new Error(`pull of "${name}" produced no artifact hook event`);
+    // The booted clone's own manifest advertises the image it runs — that
+    // digest (real hook data) is what step 5 will pin.
+    const ready = wire().find(
+      (e): e is Extract<WireEvent, { type: 'attach' }> =>
+        e.type === 'attach' && e.machine === name,
+    );
+    if (ready?.imageDigest) lifecycle.imageDigest = ready.imageDigest;
     lifecycle.clones[id] = {
       resumed,
       value: resumed,
@@ -760,6 +782,7 @@ async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerR
       pulledBytes: pull.bytes,
       imageCacheHit: pull.cacheHit,
       pullMs: pull.ms,
+      pinnedDigest: pin,
     };
     lifecycle.phase = 'forked';
     return { clone: id, resumed, loadRemote: `${name}/counter` };

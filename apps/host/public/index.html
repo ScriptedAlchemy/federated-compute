@@ -704,7 +704,8 @@
       bundle. Steps 4–5: the restored process serves <code>/mf-manifest.json</code>,
       <code>/mf-image</code> and <code>/mf-snapshot</code> — <b>it is a registry of itself</b> — so a
       <code>machinen+pull+http://</code> entry forks it: snapshot re-fetched fresh each time
-      (it's <code>no-store</code>), image by digest — <b>MISS</b> then <b>HIT</b>. Clones own their
+      (it's <code>no-store</code>), image by digest — <b>MISS</b> then <b>HIT</b>. Step 5 also
+      <b>pins</b> <code>?digest=</code> to the exact image step 4 pulled. Clones own their
       state; divergence is the point. <b>Attach to state you share; pull state you want to own.</b>
     </p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
@@ -1085,7 +1086,12 @@ const LC_NARRATIVES = {
       return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh, image digest <b>MISS</b> — <b>${fmtBytes(a?.pulledBytes ?? 0)}</b> moved, sha256-verified — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again: the image is now cached.`;
     }
     if (extra?.clone === 'b') {
-      return `<span class="pullc">Forked again:</span> the snapshot was re-fetched (tiny, by design — it's no-store) but the image was a digest cache <b>HIT</b> — near-instant boot. One warm machine, forked twice over plain HTTP. Increment the three counters separately: <b>clones own their state — divergence is the point.</b>`;
+      const pin = s.clones.b?.pinnedDigest;
+      return `<span class="pullc">Forked again — this time pinned:</span> the entry carried ` +
+        (pin ? `<span class="pullc">digest=${esc(String(pin).slice(0, 17))}…</span>` : `a <span class="pullc">?digest=</span> pin`) +
+        ` (the image digest learned from step 4), so the resolver verified the pulled image against the pin before boot — ` +
+        `any other code would have been <b>refused</b>. The snapshot was re-fetched (tiny, by design — it's no-store) but the image was a digest cache <b>HIT</b> — near-instant boot. ` +
+        `Increment the three counters separately: <b>clones own their state — divergence is the point.</b>`;
     }
     return `One warm machine, forked over plain HTTP. <b>Attach to state you share; pull state you want to own.</b> Step 1 resets the arc.`;
   },
@@ -1104,7 +1110,8 @@ function setMember(key, alive, value, sub) {
 
 function cloneSub(clone, step) {
   if (!clone) return `step ${step} pulls it`;
-  return `resumed at ${clone.resumed} · ${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'}`;
+  return `resumed at ${clone.resumed} · ${fmtBytes(clone.pulledBytes)} · image ${clone.imageCacheHit ? 'HIT' : 'MISS'}` +
+    (clone.pinnedDigest ? ` · pinned ${esc(String(clone.pinnedDigest).slice(0, 14))}…` : '');
 }
 
 let topoLifecycleSig = '';
