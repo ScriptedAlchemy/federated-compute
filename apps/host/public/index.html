@@ -115,7 +115,7 @@
   #panel-topo { grid-column: span 12; --sec: var(--node); }
   .topo {
     display: grid;
-    grid-template-columns: minmax(130px, 170px) minmax(60px, 90px) minmax(210px, 260px) 1fr;
+    grid-template-columns: minmax(150px, 205px) minmax(70px, 110px) minmax(210px, 265px) 1fr;
     gap: 0; align-items: stretch;
   }
   .tregion {
@@ -133,6 +133,7 @@
   .tregion .rbody { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: center; }
   .tnode {
     display: inline-flex; align-items: center; gap: 8px;
+    max-width: 100%;
     border: 1px solid var(--panel-edge); border-radius: 5px;
     padding: 7px 12px; font-size: 11.5px;
     background: linear-gradient(180deg, #0e1620, #0a1018);
@@ -140,7 +141,7 @@
   .tnode .tled { width: 7px; height: 7px; border-radius: 50%; background: #2c3640; flex: none; transition: background .4s, box-shadow .4s; }
   .tnode.on .tled { background: var(--tacc, var(--node)); box-shadow: 0 0 8px var(--tacc, var(--node)); }
   .tnode .tlabel { color: var(--ink); }
-  .tnode .tsub { color: var(--ink-faint); font-size: 9.5px; margin-left: auto; padding-left: 10px; text-align: right; }
+  .tnode .tsub { color: var(--ink-faint); font-size: 9.5px; margin-left: auto; padding-left: 10px; text-align: right; min-width: 0; overflow-wrap: anywhere; }
   .tnode[data-m=compute_machine] { --tacc: var(--node); }
   .tnode[data-m=java_machine] { --tacc: var(--java); }
   .tnode[data-m=python_machine] { --tacc: var(--python); }
@@ -162,7 +163,7 @@
   .tedge[data-m=compute_machine] { --tacc: var(--node); }
   .tedge[data-m=java_machine] { --tacc: var(--java); }
   .tedge[data-m=python_machine] { --tacc: var(--python); }
-  .tedge .twire { position: relative; height: 2px; min-width: 40px;
+  .tedge .twire { position: relative; height: 2px; min-width: 16px;
     background: repeating-linear-gradient(90deg, #243040 0 6px, transparent 6px 12px);
   }
   .tedge.pulse .twire::after {
