@@ -35,13 +35,19 @@ import {
   lifecycleBody,
   snapPlugin,
 } from './lifecycle.js';
-import { detectVmCapability } from './vm-capability.js';
+import {
+  disposeVmLane,
+  handleVmBoot,
+  handleVmPublish,
+  handleVmReset,
+  handleVmRestore,
+  handleVmState,
+  vmCapability,
+  vmLaneBody,
+} from './vm-lane.js';
 import { recordWire, wire, wireStore } from './wire.js';
 
 const PORT = Number(process.env.HOST_PORT ?? 3800);
-// Whole-VM lane hardware truth, detected once at startup; routes and the UI
-// render it verbatim (detect, never fake).
-const vmCapability = detectVmCapability();
 // All simulated WAN links into the data region (db + analytics paths).
 const REGION_LINKS = (process.env.REGION_LINKS ?? 'http://127.0.0.1:3899,http://127.0.0.1:3898')
   .split(',')
@@ -517,7 +523,8 @@ type RouteHandler = (
 const routes = new Map<string, RouteHandler>([
   [
     'GET /api/dashboard',
-    (req, res) => handleDashboard(req, res, { plugin, machines: MACHINES, remotes, lifecycleBody }),
+    (req, res) =>
+      handleDashboard(req, res, { plugin, machines: MACHINES, remotes, lifecycleBody, vmBody: vmLaneBody }),
   ],
   ['POST /api/pipeline', handlePipeline],
   ['GET /api/countdown', handleCountdown],
@@ -531,7 +538,13 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/lifecycle/restore', handleLifecycleRestore],
   ['POST /api/lifecycle/pull', handleLifecyclePull],
   ['POST /api/lifecycle/counter', handleLifecycleCounter],
+  // Whole-VM lane: capability truth + the live microVM arc (vm-lane.ts).
   ['GET /api/vm/capability', (_req, res) => json(res, 200, vmCapability)],
+  ['GET /api/vm/state', handleVmState],
+  ['POST /api/vm/boot', handleVmBoot],
+  ['POST /api/vm/publish', handleVmPublish],
+  ['POST /api/vm/restore', handleVmRestore],
+  ['POST /api/vm/reset', handleVmReset],
   ['GET /api/gravity/state', handleGravityState],
   ['POST /api/gravity/deploy', handleGravityDeploy],
   ['POST /api/report/remote', handleReportRemote],
@@ -562,15 +575,13 @@ server.listen(PORT, () => {
 
 // The lifecycle guests (origin + clones) are child processes of this host and
 // inherit its stdio — they must not outlive it, or they wedge piped demo
-// output and poison the fixed origin port for the next run.
+// output and poison the fixed origin port for the next run. The vm lane's
+// microVMs (and their GB-scale on-disk artifacts) go with them.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void snapPlugin
-      .disposeMachines()
-      .catch(() => {})
-      .finally(() => {
-        server.close(() => process.exit(0));
-        setTimeout(() => process.exit(0), 500).unref();
-      });
+    void Promise.allSettled([snapPlugin.disposeMachines(), disposeVmLane()]).finally(() => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 500).unref();
+    });
   });
 }

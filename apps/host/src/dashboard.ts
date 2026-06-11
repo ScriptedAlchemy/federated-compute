@@ -128,11 +128,13 @@ export function handleDashboard(
     machines,
     remotes,
     lifecycleBody,
+    vmBody,
   }: {
     plugin: MachinenPlugin;
     machines: readonly { readonly name: string; readonly region: string }[];
     remotes: readonly { readonly entry: string }[];
     lifecycleBody: () => unknown;
+    vmBody: () => unknown;
   },
 ) {
   const metrics = plugin.metrics();
@@ -145,6 +147,7 @@ export function handleDashboard(
       metrics: metrics[name] ?? null,
     })),
     lifecycle: lifecycleBody(),
+    vm: vmBody(),
     cache: {
       artifacts: cacheStats.paths.size,
       hits: cacheStats.hits,

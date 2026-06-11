@@ -108,7 +108,10 @@ export function recordWire(p: MachinenPlugin): void {
     });
   });
   p.machineHooks.onSnapshotted.on(({ spec, snapshot }) => {
-    const snapFile = (snapshot as { snapFile?: string })?.snapFile ?? '(driver descriptor)';
+    // Process driver descriptors carry snapFile; machinen (whole-VM) bundles
+    // carry snapDir.
+    const descriptor = snapshot as { snapFile?: string; snapDir?: string } | undefined;
+    const snapFile = descriptor?.snapFile ?? descriptor?.snapDir ?? '(driver descriptor)';
     wireStore.getStore()?.push({ type: 'snapshot', machine: spec.remoteName, snapFile });
   });
   p.machineHooks.onMachineCrash.on(({ spec, error }) => {

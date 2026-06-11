@@ -21,6 +21,9 @@ importers:
         specifier: ^2.5.1
         version: 2.5.1
     devDependencies:
+      '@machinen/runtime':
+        specifier: 0.4.0
+        version: 0.4.0
       '@rsbuild/core':
         specifier: ^2.0.9
         version: 2.0.11
