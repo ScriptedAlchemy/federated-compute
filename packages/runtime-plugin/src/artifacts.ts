@@ -240,8 +240,28 @@ async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean
   if (hash.digest('hex') === hex) return true;
   // Corrupt entry (partial write, disk fault): evict and re-download. An
   // eviction failure (file held open elsewhere) still degrades to a miss.
-  await rm(cachePath, { force: true }).catch(() => {});
+  await quarantineEvict(cachePath);
   return false;
+}
+
+/**
+ * Evict a corrupt cache entry without racing concurrent committers: an
+ * rm-by-path could TOCTOU-delete a freshly verified file that a sibling
+ * renamed onto the cache path between our hash mismatch and our delete.
+ * Renaming the corrupt file to a unique quarantine name first means the
+ * delete operates on a path no committer will ever rename onto. A failed
+ * rename (entry already replaced/removed, exotic fs) falls back to the
+ * direct rm — at worst the old behavior.
+ */
+async function quarantineEvict(cachePath: string): Promise<void> {
+  const quarantine = `${cachePath}.evict-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await rename(cachePath, quarantine);
+  } catch {
+    await rm(cachePath, { force: true }).catch(() => {});
+    return;
+  }
+  await rm(quarantine, { force: true }).catch(() => {});
 }
 
 function tempCachePath(cachePath: string): string {
