@@ -1033,17 +1033,46 @@ const TIME_FMT = new Intl.DateTimeFormat('en-GB', {
   hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 let logSig = '';
+/** Key of the newest rendered row — the event stream is append-only. */
+let logNewestKey = '';
+// Mirrors the server-side event ring capacity (dashboard.ts): the DOM list
+// keeps at most this many rows, trimming the oldest off the bottom.
+const LOG_RING = 200;
+const logKey = (e) => `${e.ts}|${e.kind}|${e.detail}`;
+function logLineHtml(e) {
+  const t = TIME_FMT.format(new Date(e.ts));
+  return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
+}
 /** The event ring is append-only, so endpoints + length identify its content. */
 function renderLog(events) {
   const sig = `${events.length}:${events[0]?.ts ?? 0}:${events[events.length - 1]?.ts ?? 0}`;
   if (sig === logSig) return;
   logSig = sig;
-  $('log').innerHTML = events.length
-    ? events.slice().reverse().map((e) => {
-        const t = TIME_FMT.format(new Date(e.ts));
-        return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
-      }).join('')
-    : '<div class="wempty">no hook events yet — run any card above and every attach, call, snapshot, and pull lands here</div>';
+  const el = $('log');
+  if (!events.length) {
+    logNewestKey = '';
+    el.innerHTML = '<div class="wempty">no hook events yet — run any card above and every attach, call, snapshot, and pull lands here</div>';
+    return;
+  }
+  // Append-only diff: events arrive newest-last; everything after the newest
+  // already-rendered row is new. -1 means the window turned over completely
+  // (or the host restarted) — rebuild from scratch.
+  let firstNew = 0;
+  if (logNewestKey) {
+    firstNew = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (logKey(events[i]) === logNewestKey) { firstNew = i + 1; break; }
+    }
+  }
+  const fresh = firstNew === -1 ? events : events.slice(firstNew);
+  const html = fresh.slice().reverse().map(logLineHtml).join('');
+  if (firstNew === -1 || !logNewestKey) {
+    el.innerHTML = html; // full rebuild also clears the empty-state placeholder
+  } else if (html) {
+    el.insertAdjacentHTML('afterbegin', html); // the list renders newest-first
+    while (el.children.length > LOG_RING) el.lastElementChild.remove();
+  }
+  logNewestKey = logKey(events[events.length - 1]);
 }
 
 $('pipeline-run').onclick = async () => {
