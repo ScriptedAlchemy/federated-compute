@@ -233,6 +233,9 @@ describe('resolvePullEntry: image artifacts', () => {
     expect(await readFile(a.localPath)).toEqual(IMAGE_BYTES);
     // No torn writes: exactly one cached artifact, no leftover temp files.
     expect((await readdir(cacheDir)).filter((f) => !f.endsWith('.snap'))).toHaveLength(1);
+    // In-flight coalescing: the second caller joined the first download
+    // instead of pulling the same bytes again.
+    expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(1);
   });
 
   test('a download whose bytes do not match the advertised digest fails and caches nothing', async () => {
@@ -570,8 +573,9 @@ describe('resolvePullEntry: adversarial origins (integrity)', () => {
     expect(await readFile(a.localPath)).toEqual(IMAGE_BYTES);
     // Exactly one cache entry, zero temp-file litter.
     expect(await readdir(cacheDir)).toEqual([path.basename(a.localPath)]);
-    // Both raced the miss: two downloads is acceptable, a torn file is not.
-    expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(2);
+    // Both raced the miss, but in-flight coalescing means the loser joined
+    // the winner's download: one fetch, and never a torn file.
+    expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(1);
   });
 });
 

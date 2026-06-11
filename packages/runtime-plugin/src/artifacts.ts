@@ -429,6 +429,16 @@ interface CachedImage {
 }
 
 /**
+ * In-flight downloads by cache path: concurrent pulls of one digest (one
+ * entry or many entries sharing an image) join a single download instead of
+ * each pulling the full artifact. Entries are removed when the download
+ * settles — success lands the file in the cache, failure lets a retry pull
+ * fresh. Joiners share the winner's result verbatim (including bytesFetched
+ * and any failure, whose message names the winner's entry).
+ */
+const inflightDownloads = new Map<string, Promise<CachedImage>>();
+
+/**
  * Ensure the image with `expectedDigest` is in the cache, downloading and
  * verifying it when missing. The cache key is the digest itself, so a hit
  * never goes to the network.
@@ -447,23 +457,36 @@ async function ensureImageCached(
     return { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
 
-  const url = joinArtifactUrl(spec.url!, descriptor.href);
-  // 'headers' scope: the body is a stream guarded by the idle timeout.
-  const res = await fetchOk(spec, url, 'image artifact', ctx.fetchTimeoutMs, 'headers');
-  const temp = tempCachePath(cachePath);
+  // No await between this check and the set below: exactly one caller per
+  // cache path becomes the downloader, everyone else joins its promise.
+  const inflight = inflightDownloads.get(cachePath);
+  if (inflight) return inflight;
+
+  const download = (async (): Promise<CachedImage> => {
+    const url = joinArtifactUrl(spec.url!, descriptor.href);
+    // 'headers' scope: the body is a stream guarded by the idle timeout.
+    const res = await fetchOk(spec, url, 'image artifact', ctx.fetchTimeoutMs, 'headers');
+    const temp = tempCachePath(cachePath);
+    try {
+      const bytesFetched = await streamVerifiedToTemp(
+        spec,
+        res,
+        expectedDigest,
+        temp,
+        ctx.streamIdleTimeoutMs,
+      );
+      await commitAtomic(temp, cachePath, hex);
+      return { localPath: cachePath, bytesFetched, fromCache: false };
+    } catch (error) {
+      await rm(temp, { force: true });
+      throw error;
+    }
+  })();
+  inflightDownloads.set(cachePath, download);
   try {
-    const bytesFetched = await streamVerifiedToTemp(
-      spec,
-      res,
-      expectedDigest,
-      temp,
-      ctx.streamIdleTimeoutMs,
-    );
-    await commitAtomic(temp, cachePath, hex);
-    return { localPath: cachePath, bytesFetched, fromCache: false };
-  } catch (error) {
-    await rm(temp, { force: true });
-    throw error;
+    return await download;
+  } finally {
+    inflightDownloads.delete(cachePath);
   }
 }
 
