@@ -88,6 +88,15 @@ describe('loadMachinenConfig', () => {
     expect(() => loadMachinenConfig(root)).toThrow(/machines\.index.*reserved for the generated barrel/);
   });
 
+  test('rejects a machine named "Index" on case-insensitive filesystems', () => {
+    const root = tmpdir();
+    writeFileSync(
+      path.join(root, 'machinen.config.json'),
+      JSON.stringify({ machines: { Index: { url: 'machinen+http://127.0.0.1:3801' } } }),
+    );
+    expect(() => loadMachinenConfig(root)).toThrow(/machines\.Index.*reserved for the generated barrel/i);
+  });
+
   test('rejects a missing machines object', () => {
     const root = tmpdir();
     writeFileSync(path.join(root, 'machinen.config.json'), '{}');
