@@ -12,6 +12,7 @@
 // what crossed which boundary.
 import { once } from 'node:events';
 import http from 'node:http';
+import net from 'node:net';
 import { createInstance } from '@module-federation/runtime';
 import {
   DEFAULT_POLICY,
@@ -19,6 +20,16 @@ import {
   httpAttachDriver,
   machinenPlugin,
 } from '@federated-compute/machinen-plugin';
+import {
+  androidVncPort,
+  disposeAndroidLab,
+  handleAndroidBoot,
+  handleAndroidFreeze,
+  handleAndroidLaunch,
+  handleAndroidReset,
+  handleAndroidResume,
+  handleAndroidStatus,
+} from './android-demo.js';
 import { handleDashboard, logHooks, machineStatus } from './dashboard.js';
 import type { ComputeMachineModules } from './generated/compute_machine';
 import type { JavaMachineModules } from './generated/java_machine';
@@ -553,6 +564,12 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/report/colocated', handleReportColocated],
   ['GET /api/region/latency', handleRegionLatency],
   ['POST /api/region/latency', handleRegionLatency],
+  ['GET /api/android/status', handleAndroidStatus],
+  ['POST /api/android/boot', handleAndroidBoot],
+  ['POST /api/android/launch', handleAndroidLaunch],
+  ['POST /api/android/freeze', handleAndroidFreeze],
+  ['POST /api/android/resume', handleAndroidResume],
+  ['POST /api/android/reset', handleAndroidReset],
 ]);
 
 const server = http.createServer(async (req, res) => {
@@ -570,6 +587,32 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// GET /vnc upgrade: splice the browser's websocket onto the android lab's
+// forwarded qemu VNC listener. qemu speaks the websocket protocol itself, so
+// this is a dumb TCP pipe — the original upgrade request is replayed verbatim
+// and qemu completes the handshake.
+server.on('upgrade', (req, socket, head) => {
+  const pathname = new URL(req.url ?? '/', `http://localhost:${PORT}`).pathname;
+  const target = pathname === '/vnc' ? androidVncPort() : undefined;
+  if (!target) {
+    socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+    return;
+  }
+  const upstream = net.connect(target, '127.0.0.1');
+  upstream.on('connect', () => {
+    // Path rewritten to '/': qemu's websocket server 404s anything else.
+    const lines = [`${req.method} / HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    }
+    upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('error', () => upstream.destroy());
+});
+
 server.listen(PORT, () => {
   console.log(`[host] web demo on http://localhost:${PORT}`);
   console.log('[host] machines attach on demand — watch the dashboard');
@@ -581,7 +624,11 @@ server.listen(PORT, () => {
 // microVMs (and their GB-scale on-disk artifacts) go with them.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void Promise.allSettled([snapPlugin.disposeMachines(), disposeVmLane()]).finally(() => {
+    void Promise.allSettled([
+      snapPlugin.disposeMachines(),
+      disposeVmLane(),
+      disposeAndroidLab(),
+    ]).finally(() => {
       server.close(() => process.exit(0));
       setTimeout(() => process.exit(0), 500).unref();
     });

@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — device screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
+<style>
+  :root {
+    --droid: #3ddc84;
+    --droid-rgb: 61, 220, 132;
+    --freeze: #c792ea;
+    --freeze-rgb: 199, 146, 234;
+    --vnc: #58a6ff;
+    --vnc-rgb: 88, 166, 255;
+    --hot: #e5534b;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 70% 42% at 30% -8%, rgba(88, 166, 255, .07), transparent),
+      radial-gradient(ellipse 60% 40% at 85% -10%, rgba(61, 220, 132, .06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, .012) 2px 4px);
+  }
+  body::before {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, var(--vnc) 0 50%, var(--droid) 50% 100%);
+    opacity: .8;
+  }
+  header h1 .accent { color: var(--vnc); text-shadow: 0 0 18px rgba(88, 166, 255, .5); }
+
+  main {
+    max-width: 1180px; margin: 0 auto;
+    padding: 28px 40px 72px;
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px;
+  }
+  .panel { padding: 22px 24px; }
+  #panel-screen { grid-column: span 8; --sec: var(--vnc); }
+  .sidecol      { grid-column: span 4; display: grid; gap: 16px; align-content: start; }
+  #panel-pipe   { grid-column: span 12; --sec: var(--droid); }
+
+  .lede { color: var(--ink-dim); font-size: 12.5px; max-width: 86ch; }
+  .lede b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- the live screen ---------- */
+  .crt-frame {
+    position: relative; margin: 4px auto 0; max-width: 760px;
+    border: 2px solid #2b3a4b; border-radius: 14px;
+    background: #000; padding: 14px 14px 22px;
+    box-shadow: 0 0 0 1px #0a0f16, 0 14px 44px -18px rgba(0, 0, 0, .9);
+  }
+  .crt-frame::after {
+    content: ''; position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 5px; border-radius: 3px; background: #1c2632;
+  }
+  #vnc-screen {
+    position: relative; aspect-ratio: 4 / 3; border-radius: 4px; overflow: hidden;
+    background: radial-gradient(ellipse 80% 60% at 50% 30%, #0d141d, #05070b);
+  }
+  /* noVNC injects its own div+canvas; let it fill the box. */
+  #vnc-screen > div { width: 100%; height: 100%; }
+  #overlay {
+    position: absolute; inset: 0; z-index: 3;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    color: var(--ink-faint); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    text-align: center; line-height: 2.2; padding: 0 30px;
+    background: radial-gradient(ellipse 80% 60% at 50% 30%, rgba(13, 20, 29, .92), rgba(5, 7, 11, .96));
+  }
+  #overlay[hidden] { display: none; }
+  #overlay .big { font-family: var(--display); font-size: 15px; font-weight: 700; color: var(--ink-dim); letter-spacing: .2em; }
+  #overlay.icy { color: var(--freeze); background: linear-gradient(160deg, rgba(var(--freeze-rgb), .14), rgba(5, 7, 11, .95)); }
+  #overlay.icy .big { color: var(--freeze); text-shadow: 0 0 14px rgba(var(--freeze-rgb), .8); }
+  #overlay .snow { font-size: 34px; }
+  #overlay .spin {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid rgba(var(--vnc-rgb), .25); border-top-color: var(--vnc);
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .screen-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .screen-foot .chip.live { color: var(--droid); border-color: rgba(var(--droid-rgb), .4); }
+  .screen-foot .chip.live::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--droid); box-shadow: 0 0 7px var(--droid);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .screen-foot label {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; color: var(--ink-dim); cursor: pointer; user-select: none;
+  }
+  .screen-foot .hintright { margin-left: auto; font-size: 10px; color: var(--ink-faint); }
+
+  /* ---------- side: lab controls ---------- */
+  .sidepanel { --sec: var(--droid); }
+  .ctl { display: grid; gap: 8px; }
+  .ctl button { width: 100%; text-align: center; }
+  .ctl button:disabled { opacity: .35; cursor: not-allowed; }
+  .ctl button.droid-btn { border-color: rgba(var(--droid-rgb), .45); color: var(--droid); }
+  .ctl button.droid-btn:hover:not(:disabled) { border-color: var(--droid); box-shadow: 0 0 18px -6px rgba(var(--droid-rgb), .7); }
+  .ctl button.freeze-btn { border-color: rgba(var(--freeze-rgb), .45); color: var(--freeze); }
+  .ctl button.freeze-btn:hover:not(:disabled) { border-color: var(--freeze); box-shadow: 0 0 18px -6px rgba(var(--freeze-rgb), .7); }
+  .statusline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .statusline .chip.busy::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--droid); animation: pulse 1s ease-in-out infinite;
+  }
+  #side-step { font-size: 10px; color: var(--ink-faint); line-height: 1.6; min-height: 16px; margin-bottom: 10px; }
+  .sidenote { font-size: 10.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 12px; }
+  .sidenote a { color: var(--droid); }
+  #side-err {
+    display: none; margin-top: 10px; padding: 8px 11px;
+    border: 1px solid rgba(229, 83, 75, .4); border-left: 3px solid var(--hot);
+    border-radius: 5px; font-size: 10.5px; color: var(--ink-dim); word-break: break-word;
+  }
+  #side-err.visible { display: block; }
+
+  /* ---------- the pipe diagram ---------- */
+  .pipe { display: flex; align-items: stretch; gap: 0; margin-top: 14px; font-size: 11px; flex-wrap: wrap; }
+  .hop {
+    border: 1px solid var(--panel-edge); border-radius: 7px;
+    background: var(--well); padding: 9px 13px; flex: 1; min-width: 130px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .hop .hname {
+    font-family: var(--display); font-size: 10px; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .hop .hdetail { color: var(--ink-faint); font-size: 10px; line-height: 1.5; }
+  .hop.h-vnc { border-color: rgba(var(--vnc-rgb), .4); }
+  .hop.h-vnc .hname { color: var(--vnc); }
+  .hop.h-droid { border-color: rgba(var(--droid-rgb), .45); }
+  .hop.h-droid .hname { color: var(--droid); }
+  .pipe .arrow { align-self: center; padding: 0 9px; color: var(--ink-faint); font-size: 13px; flex: none; }
+
+  @media (max-width: 1000px) {
+    #panel-screen, .sidecol { grid-column: span 12; }
+  }
+  @media (max-width: 900px) {
+    main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
+    #panel-screen, .sidecol, #panel-pipe { grid-column: span 1; }
+    .pipe { flex-direction: column; }
+    .pipe .arrow { transform: rotate(90deg); padding: 2px 0; margin-left: 24px; }
+    header { padding: 22px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="reveal" style="--d:0">
+  <h1>device <span class="accent">screen</span></h1>
+  <span class="sub">live VNC into the Android device — through every layer of the doll</span>
+  <nav>
+    <a href="/"><span class="tno">01</span>federation console</a>
+    <a href="/gravity"><span class="tno">02</span>data gravity</a>
+    <a href="/android"><span class="tno">03</span>android lab</a>
+    <a href="/screen" class="tab-active" aria-current="page"><span class="tno">04</span>device screen</a>
+  </nav>
+</header>
+
+<main>
+  <section class="panel reveal" id="panel-screen" style="--d:1">
+    <h2>The screen — live framebuffer, real input</h2>
+    <div class="crt-frame">
+      <div id="vnc-screen">
+        <div id="overlay">
+          <span class="big" id="ov-title">no device</span>
+          <span id="ov-detail">power one on from the panel on the right (or on page 03)</span>
+        </div>
+      </div>
+    </div>
+    <div class="screen-foot">
+      <span class="chip" id="vnc-chip">disconnected</span>
+      <label><input type="checkbox" id="view-only" /> view-only (uncheck to click around Android)</label>
+      <span class="hintright">single-core TCG emulation — expect a stately frame rate</span>
+    </div>
+  </section>
+
+  <div class="sidecol">
+    <section class="panel sidepanel reveal" style="--d:2">
+      <h2>Lab controls</h2>
+      <div class="statusline">
+        <span class="chip" id="side-phase">cold</span>
+      </div>
+      <div id="side-step"></div>
+      <div class="ctl">
+        <button id="btn-boot" class="droid-btn">power on</button>
+        <button id="btn-launch" class="droid-btn" disabled>launch app</button>
+        <button id="btn-freeze" class="freeze-btn" disabled>freeze</button>
+        <button id="btn-resume" class="freeze-btn" disabled>resume</button>
+      </div>
+      <div id="side-err"></div>
+      <p class="sidenote">
+        Same lab, same state machine as <a href="/android">page 03</a> — this page just points a
+        screen at it. Watch the boot animation during power-on; watch the screen die at freeze
+        and come back at resume, mid-frame, with the connection re-established automatically.
+      </p>
+    </section>
+
+    <section class="panel reveal" style="--d:3">
+      <h2>What you're touching</h2>
+      <p class="lede" style="font-size:11.5px">
+        Mouse and keyboard go the whole way down: noVNC encodes them as RFB events, qemu turns
+        them into <b>usb-tablet</b> absolute pointer reports, and Android 4.4 handles them as
+        touch input. When the lab freezes the VM, your session drops — because the far end of
+        this websocket <b>literally stops existing</b> — and reconnects against the thawed
+        device, which kept drawing the same frame.
+      </p>
+    </section>
+  </div>
+
+  <section class="panel reveal" id="panel-pipe" style="--d:4">
+    <h2>The pipe — browser to framebuffer</h2>
+    <p class="lede">
+      qemu speaks the websocket protocol natively, so there is no VNC gateway anywhere — the host
+      server splices your browser's <code>GET /vnc</code> upgrade onto a forwarded TCP port as a
+      dumb pipe, and the handshake completes inside the microVM.
+    </p>
+    <div class="pipe">
+      <div class="hop h-vnc">
+        <span class="hname">browser · noVNC</span>
+        <span class="hdetail">RFB over <code>ws(s)://…/vnc</code></span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="hop">
+        <span class="hname">host server</span>
+        <span class="hdetail">upgrade splice — raw TCP pipe, zero protocol logic</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="hop">
+        <span class="hname">gvproxy forward</span>
+        <span class="hdetail">host loopback port → microVM guest :15901</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="hop h-vnc">
+        <span class="hname">qemu vnc server</span>
+        <span class="hdetail">websocket listener, display backend of the inner device</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="hop h-droid">
+        <span class="hname">android framebuffer</span>
+        <span class="hdetail">SurfaceFlinger on the VBE framebuffer, 800×600</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/demo-base.js"></script>
+<script type="module">
+let RFB = null;
+let rfbLoadError = null;
+try {
+  const mod = await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.6.0/lib/rfb.js/+esm');
+  // jsdelivr serves noVNC's transpiled CJS build; its ESM wrapper leaves the
+  // class double-wrapped under default.default.
+  RFB = typeof mod.default === 'function' ? mod.default : mod.default?.default;
+  if (typeof RFB !== 'function') throw new Error('RFB class not found in module');
+} catch (err) {
+  rfbLoadError = String(err);
+}
+
+const PHASES = {
+  'cold':        'cold',
+  'powering-on': 'powering on…',
+  'device-ready':'device ready',
+  'app-running': 'app running',
+  'freezing':    'freezing…',
+  'frozen':      'frozen',
+  'restoring':   'thawing…',
+  'resumed':     'resumed',
+  'error':       'error',
+};
+
+let rfb = null;
+let connected = false;
+let lastStatus = null;
+
+function setOverlay(title, detail, { icy = false, spinner = false } = {}) {
+  const ov = $('overlay');
+  ov.hidden = false;
+  ov.classList.toggle('icy', icy);
+  $('ov-title').innerHTML = icy ? '<span class="snow">❄</span><br />frozen' : esc(title);
+  $('ov-detail').innerHTML = (spinner ? '<span class="spin" style="display:inline-block"></span><br />' : '') + esc(detail);
+}
+
+function connect() {
+  if (rfb || !RFB) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  try {
+    rfb = new RFB($('vnc-screen'), `${proto}://${location.host}/vnc`);
+  } catch (err) {
+    rfbLoadError = String(err);
+    return;
+  }
+  rfb.scaleViewport = true;
+  rfb.viewOnly = $('view-only').checked;
+  rfb.addEventListener('connect', () => {
+    connected = true;
+    $('overlay').hidden = true;
+    $('vnc-chip').textContent = 'live · rfb connected';
+    $('vnc-chip').classList.add('live');
+  });
+  rfb.addEventListener('disconnect', () => {
+    connected = false;
+    rfb = null;
+    $('vnc-chip').textContent = 'disconnected';
+    $('vnc-chip').classList.remove('live');
+    // The status poller decides what the overlay should say (frozen vs gone)
+    // and whether to reconnect on its next tick.
+    if (lastStatus) renderOverlay(lastStatus);
+  });
+}
+
+function disconnect() {
+  if (!rfb) return;
+  try { rfb.disconnect(); } catch { /* already torn down */ }
+  rfb = null;
+  connected = false;
+}
+
+$('view-only').onchange = () => { if (rfb) rfb.viewOnly = $('view-only').checked; };
+
+function renderOverlay(s) {
+  if (connected) { $('overlay').hidden = true; return; }
+  if (rfbLoadError) {
+    setOverlay('noVNC failed to load', `the viewer comes from cdn.jsdelivr.net — ${rfbLoadError}`);
+    return;
+  }
+  switch (s.phase) {
+    case 'cold':
+      setOverlay('no device', s.kvm ? 'power one on from the panel on the right' : 'this host has no /dev/kvm — the lab cannot run here');
+      break;
+    case 'powering-on':
+      setOverlay(
+        s.vncLive ? 'connecting to the framebuffer…' : 'preparing the lab…',
+        s.step ?? 'working…',
+        { spinner: true },
+      );
+      break;
+    case 'freezing':
+      setOverlay('', 'vmstate snapshot in progress — the device is paused mid-frame', { icy: true });
+      break;
+    case 'frozen':
+      setOverlay('', 'the running device is a ~1.9 GiB directory on disk. resume to thaw it.', { icy: true });
+      break;
+    case 'restoring':
+      setOverlay('', 'restoring RAM + vCPU + disk — reconnecting when it breathes again', { icy: true });
+      break;
+    case 'error':
+      setOverlay('lab error', s.error ?? 'see page 03 for details');
+      break;
+    default:
+      setOverlay('reconnecting…', 'the device is up — re-establishing the websocket', { spinner: true });
+  }
+}
+
+function render(s) {
+  lastStatus = s;
+  $('side-phase').textContent = PHASES[s.phase] ?? s.phase;
+  $('side-phase').classList.toggle('busy', !!s.busy);
+  $('side-step').textContent = s.busy && s.step ? s.step : '';
+
+  $('btn-boot').disabled   = s.busy || !s.kvm || !['cold', 'error'].includes(s.phase);
+  $('btn-launch').disabled = s.busy || !['device-ready', 'app-running', 'resumed'].includes(s.phase);
+  $('btn-freeze').disabled = s.busy || !['app-running', 'resumed'].includes(s.phase);
+  $('btn-resume').disabled = s.busy || s.phase !== 'frozen';
+
+  $('side-err').classList.toggle('visible', !!s.error);
+  if (s.error) $('side-err').textContent = s.error;
+
+  // Connection management: chase the framebuffer whenever it exists.
+  if (s.vncLive && !rfb) connect();
+  if (!s.vncLive && rfb) disconnect();
+  renderOverlay(s);
+}
+
+async function poll() {
+  try {
+    render(await (await fetch('/api/android/status')).json());
+  } catch { /* transient — next poll retries */ }
+}
+
+async function act(url) {
+  render(await post(url, {}));
+}
+
+$('btn-boot').onclick   = () => act('/api/android/boot');
+$('btn-launch').onclick = () => act('/api/android/launch');
+$('btn-freeze').onclick = () => act('/api/android/freeze');
+$('btn-resume').onclick = () => act('/api/android/resume');
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

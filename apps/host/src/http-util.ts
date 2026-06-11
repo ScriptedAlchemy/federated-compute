@@ -47,7 +47,12 @@ const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 // Pretty page routes -> files in PUBLIC_DIR; other assets (*.css, *.js) are
 // served by filename. The asset pattern admits no '/' so paths can't escape
 // the dir.
-const PAGES: Record<string, string> = { '/': 'index.html', '/gravity': 'gravity.html' };
+const PAGES: Record<string, string> = {
+  '/': 'index.html',
+  '/gravity': 'gravity.html',
+  '/android': 'android.html',
+  '/screen': 'screen.html',
+};
 const ASSET_RE = /^\/[A-Za-z0-9_-]+\.(css|js)$/;
 const ASSET_TYPES: Record<string, string> = { '.css': 'text/css', '.js': 'text/javascript' };
 

@@ -17,6 +17,7 @@
   "devDependencies": {
     "@machinen/runtime": "0.4.0",
     "@rsbuild/core": "^2.0.9",
+    "@types/node": "^22",
     "typescript": "^5.7.0"
   }
 }
