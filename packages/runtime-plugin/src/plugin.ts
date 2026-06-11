@@ -2,8 +2,16 @@ import type { ModuleFederationRuntimePlugin } from '@module-federation/runtime';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
 import { resolvePullEntry } from './artifacts.js';
+import { isMachinenSnapshotDir } from './drivers/machinen.js';
 import { isTransportFailure, MachineCircuitOpenError, MachineVersionError } from './errors.js';
 import { createMachineHooks, type MachineHooks } from './hooks.js';
+import {
+  DEFAULT_PUBLISH_DIR,
+  publishSnapshotDir,
+  startArtifactEndpoint,
+  type ArtifactEndpoint,
+  type PublishedMachine,
+} from './publish.js';
 import {
   CircuitBreaker,
   DEFAULT_POLICY,
@@ -38,6 +46,12 @@ export interface MachinenPluginOptions {
   artifactFetchTimeoutMs?: number;
   /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
   artifactStreamIdleTimeoutMs?: number;
+  /**
+   * Enables plugin-owned vmstate publication: publishMachine() writes
+   * content-addressed bundles under `dir` and a lazily started loopback
+   * endpoint serves them. Plumbing the plugin owns — nothing to deploy.
+   */
+  publish?: { dir?: string; hostname?: string; port?: number };
 }
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
@@ -50,6 +64,13 @@ export type MachinenPlugin = ModuleFederationRuntimePlugin & {
   snapshotMachine(remoteName: string): Promise<unknown>;
   /** Fork a booted machine by remote name (driver permitting). */
   forkMachine(remoteName: string): Promise<unknown>;
+  /**
+   * Snapshot a booted machine's whole VM and publish it as a
+   * machinen-vmstate@1 bundle served by the plugin's artifact endpoint.
+   * Requires `publish` options and a whole-VM-snapshotting driver
+   * (machinenDriver()).
+   */
+  publishMachine(remoteName: string): Promise<PublishedMachine>;
   /** Dispose every machine this plugin booted (kills child processes etc). */
   disposeMachines(): Promise<void>;
 };
@@ -151,6 +172,20 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
    * disposeMachines(); a failed resolution evicts itself so retries can pull.
    */
   const resolutions = new Map<string, Promise<MachineSpec>>();
+
+  /** Lazily started artifact endpoint; closed by disposeMachines(). */
+  let endpoint: Promise<ArtifactEndpoint> | undefined;
+
+  function ensureEndpoint(
+    publish: NonNullable<MachinenPluginOptions['publish']>,
+  ): Promise<ArtifactEndpoint> {
+    endpoint ??= startArtifactEndpoint({
+      layoutDir: publish.dir ?? DEFAULT_PUBLISH_DIR,
+      hostname: publish.hostname,
+      port: publish.port,
+    });
+    return endpoint;
+  }
 
   function resolveSpec(remoteName: string, entry: string): Promise<MachineSpec> {
     const parsed = parseMachineEntry(remoteName, entry);
@@ -440,7 +475,52 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       return fork;
     },
 
+    async publishMachine(remoteName) {
+      const publish = options.publish;
+      if (!publish) {
+        throw new Error(
+          `[machinen-plugin] publishMachine("${remoteName}") needs publish options — ` +
+            'pass createMachines({ publish: { dir: ".machinen/registry" } })',
+        );
+      }
+      const machine = await findMachine(remoteName);
+      if (!machine.handle.snapshot) {
+        throw new Error(`[machinen-plugin] driver for "${remoteName}" does not support snapshot`);
+      }
+      await machineHooks.beforePublish.emit({ spec: machine.spec });
+      await machineHooks.beforeSnapshot.emit({ spec: machine.spec });
+      const snapshot = await machine.handle.snapshot();
+      await machineHooks.onSnapshotted.emit({ spec: machine.spec, snapshot });
+
+      const snapDir = (snapshot as { snapDir?: unknown } | undefined)?.snapDir;
+      if (typeof snapDir !== 'string' || !(await isMachinenSnapshotDir(snapDir))) {
+        throw new Error(
+          `[machinen-plugin] publishMachine("${remoteName}"): the driver's snapshot is not a ` +
+            'machinen vmstate bundle directory — whole-VM publication needs machinenDriver() ' +
+            '(app-state snapshots travel through ?artifact=snapshot instead)',
+        );
+      }
+      const result = await publishSnapshotDir({
+        snapDir,
+        name: remoteName,
+        manifest: machine.manifest,
+        layoutDir: publish.dir ?? DEFAULT_PUBLISH_DIR,
+      });
+      const live = await ensureEndpoint(publish);
+      const published: PublishedMachine = {
+        ...result,
+        url: `${live.url}/machines/${remoteName}`,
+      };
+      await machineHooks.onPublished.emit({ spec: machine.spec, published });
+      return published;
+    },
+
     async disposeMachines() {
+      const closingEndpoint = endpoint;
+      endpoint = undefined;
+      if (closingEndpoint) {
+        await closingEndpoint.then((live) => live.close()).catch(() => {});
+      }
       const booted = await Promise.allSettled(machines.values());
       machines.clear();
       generations.clear();

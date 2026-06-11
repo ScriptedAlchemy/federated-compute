@@ -1,4 +1,5 @@
 import type { PullResolution } from './artifacts.js';
+import type { PublishedMachine } from './publish.js';
 import type { CallContext, MachineExposeManifest, MachineHandle, MachineSpec } from './types.js';
 
 type Listener<T> = (ctx: T) => void | Promise<void>;
@@ -47,6 +48,10 @@ export interface MachineHooks {
   onSnapshotted: AsyncSeriesHook<{ spec: MachineSpec; snapshot: unknown }>;
   beforeFork: AsyncSeriesHook<{ spec: MachineSpec }>;
   onForked: AsyncSeriesHook<{ spec: MachineSpec; fork: unknown }>;
+  /** publishMachine() is about to snapshot + publish this machine. */
+  beforePublish: AsyncSeriesHook<{ spec: MachineSpec }>;
+  /** The bundle landed in the layout and the artifact endpoint serves it. */
+  onPublished: AsyncSeriesHook<{ spec: MachineSpec; published: PublishedMachine }>;
   /** A pull entry is about to fetch its artifact (`spec` is the pull spec). */
   beforeArtifactFetch: AsyncSeriesHook<{ spec: MachineSpec }>;
   /** The artifact resolved: cache hit/miss, bytes moved, and the rewritten spec. */
@@ -67,6 +72,8 @@ export function createMachineHooks(): MachineHooks {
     onSnapshotted: new AsyncSeriesHook(),
     beforeFork: new AsyncSeriesHook(),
     onForked: new AsyncSeriesHook(),
+    beforePublish: new AsyncSeriesHook(),
+    onPublished: new AsyncSeriesHook(),
     beforeArtifactFetch: new AsyncSeriesHook(),
     onArtifactFetched: new AsyncSeriesHook(),
   };

@@ -9,6 +9,32 @@ export {
 } from './artifacts.js';
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
 export {
+  DEFAULT_PUBLISH_DIR,
+  publishSnapshotDir,
+  startArtifactEndpoint,
+  type ArtifactEndpoint,
+  type ArtifactEndpointOptions,
+  type PublishSnapshotDirOptions,
+  type PublishedMachine,
+  type PublishedVmstate,
+} from './publish.js';
+export {
+  VMSTATE_FORMAT,
+  buildVmstateBundle,
+  ensureBlobCached,
+  installedMachinenRuntimeVersion,
+  materializeVmstateDir,
+  ociHostPlatform,
+  parseVmstateBundleManifest,
+  sha256File,
+  vmstateCompatibilityError,
+  type BuiltVmstateBundle,
+  type VmstateBundleManifest,
+  type VmstateCompatibility,
+  type VmstateFileEntry,
+  type VmstateHost,
+} from './vmstate.js';
+export {
   GuestError,
   MachineCircuitOpenError,
   MachineRequestError,

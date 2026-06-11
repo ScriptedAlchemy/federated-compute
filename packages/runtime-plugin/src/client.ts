@@ -46,6 +46,12 @@ export interface MachinesOptions {
   artifactFetchTimeoutMs?: number;
   /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
   artifactStreamIdleTimeoutMs?: number;
+  /**
+   * Enables plugin-owned vmstate publication (plugin.publishMachine() +
+   * a lazily started loopback artifact endpoint over `dir`).
+   * Default dir: .machinen/registry
+   */
+  publish?: { dir?: string; hostname?: string; port?: number };
 }
 
 export interface MachineModuleOptions {
@@ -118,6 +124,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     artifactCacheDir: options.artifactCacheDir,
     artifactFetchTimeoutMs: options.artifactFetchTimeoutMs,
     artifactStreamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
+    publish: options.publish,
   });
 
   clientCounter++;
