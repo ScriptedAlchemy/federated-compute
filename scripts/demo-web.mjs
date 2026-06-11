@@ -294,6 +294,46 @@ async function runSmoke(base) {
   console.log(`[smoke] dashboard lifecycle+cache blocks -> ${dash.cache.artifacts} artifacts, ` +
     `${dash.cache.hits} hits / ${dash.cache.misses} misses`);
 
+  // ---- whole-VM lane: capability honesty + replay availability -------------
+  const cap = await fetch(`${base}/api/vm/capability`).then((r) => r.json());
+  expect(typeof cap.available === 'boolean' && typeof cap.reason === 'string',
+    `vm capability malformed: ${JSON.stringify(cap)}`);
+  console.log(`[smoke] GET /api/vm/capability -> ${cap.reason}`);
+  expect(dash.vm?.phase !== undefined, 'dashboard vm block missing');
+
+  const replayRes = await fetch(`${base}/api/vm/replay`);
+  expect(replayRes.status === 200, `GET /api/vm/replay -> ${replayRes.status} (fixture missing?)`);
+  const replay = await replayRes.json();
+  expect(replay.format === 'vm-demo-trace@1' && replay.events.length >= 10,
+    'replay trace malformed or too short');
+  console.log(`[smoke] GET /api/vm/replay -> ${replay.events.length} events (${replay.platform})`);
+
+  if (!cap.available) {
+    const refused = await fetch(`${base}/api/vm/boot`, { method: 'POST' });
+    expect(refused.status === 503, `vm boot without KVM must refuse with 503, got ${refused.status}`);
+    console.log('[smoke] POST /api/vm/boot honestly refuses without KVM');
+  }
+
+  // ---- opt-in live VM arc (KVM box + SMOKE_VM_LIVE=1; ~45s of real VMs) ----
+  if (cap.available && process.env.SMOKE_VM_LIVE === '1') {
+    const vmBoot = await postJson(base, '/api/vm/boot');
+    expect(vmBoot.phase === 'running' && vmBoot.progress.iteration >= 0
+      && vmBoot.timings.bootMs > 0, `vm boot failed: ${JSON.stringify(vmBoot.timings)}`);
+    await sleep(1500); // let the solver visibly work before the freeze
+    const pub = await postJson(base, '/api/vm/publish');
+    expect(String(pub.published.digest).startsWith('sha256:') && pub.published.bytes > 0,
+      `vm publish: ${JSON.stringify(pub.published)}`);
+    const restore = await postJson(base, '/api/vm/restore');
+    expect(restore.progress.iteration >= restore.frozenAt.iteration,
+      `restored VM lost heap: ${restore.progress.iteration} < ${restore.frozenAt.iteration}`);
+    expect(restore.pull.bytes > 0 && restore.pull.cacheHit === false,
+      'first vmstate pull must move bytes');
+    await postJson(base, '/api/vm/reset');
+    console.log(`[smoke] live VM arc: boot ${vmBoot.timings.bootMs}ms, ` +
+      `publish ${pub.published.publishMs}ms (source dead: ${pub.published.sourceDead}), ` +
+      `pull ${restore.pull.ms}ms, pull+restore+first call ${restore.timings.restoreMs}ms`);
+  }
+
   // ---- gravity: deploy-by-pull, then the co-located report -----------------
   const gravityState = await fetch(`${base}/api/gravity/state`).then((r) => r.json());
   expect(gravityState.agent === 'reachable', `region agent not reachable: ${JSON.stringify(gravityState)}`);
