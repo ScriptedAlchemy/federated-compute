@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
@@ -336,6 +336,22 @@ export async function handleVmReset(_req: http.IncomingMessage, res: http.Server
     json(res, 200, vmLaneBody());
   } finally {
     vmLane.busy = false;
+  }
+}
+
+// The committed replay fixture: a real KVM run of the routes above, recorded
+// by scripts/capture-vm-trace.mjs. Read at request time from the package dir
+// (sibling of dist/) — demo data with provenance fields, not a build artifact.
+const VM_TRACE_PATH = path.resolve(import.meta.dirname, '../vm-trace.json');
+
+/** GET /api/vm/replay — the recorded trace for hosts that can't run live. */
+export async function handleVmReplay(_req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const trace = JSON.parse(await readFile(VM_TRACE_PATH, 'utf8')) as { format?: string };
+    if (trace.format !== 'vm-demo-trace@1') throw new Error('unexpected trace format');
+    json(res, 200, trace);
+  } catch (error) {
+    json(res, 404, { error: `no replay trace available: ${errorMessage(error)}` });
   }
 }
 

@@ -1,0 +1,359 @@
+{
+  "format": "vm-demo-trace@1",
+  "capturedAt": "2026-06-11T09:42:35.673Z",
+  "platform": "linux/amd64",
+  "runtime": "0.4.0",
+  "events": [
+    {
+      "atMs": 22,
+      "kind": "boot-start"
+    },
+    {
+      "atMs": 10388,
+      "kind": "running",
+      "state": {
+        "phase": "running",
+        "capability": {
+          "available": true,
+          "reason": "live",
+          "detail": "real microVM track enabled (KVM/HVF + @machinen/runtime 0.4.0 present)",
+          "platform": "linux/amd64",
+          "runtime": "0.4.0"
+        },
+        "timings": {
+          "bootMs": 10362
+        },
+        "progress": {
+          "running": true,
+          "iteration": 0,
+          "cacheSize": 0,
+          "cacheCapacity": 4096,
+          "best": -1,
+          "fingerprint": "6b46ab3c",
+          "pid": 3031
+        },
+        "wire": [
+          {
+            "type": "attach",
+            "machine": "vm_machine",
+            "entry": "machinen:///home/zack/projects/federated-compute/apps/remote/dist/index.js?memory=1024",
+            "version": "1.0.0",
+            "runtime": "node v18.20.4",
+            "imageDigest": "sha256:99f0a21e5f501e8693b57f9064a912d2c894ac6dc32d55017942d68575a4972d"
+          },
+          {
+            "type": "call",
+            "machine": "vm_machine",
+            "module": "./solver",
+            "fn": "start",
+            "args": "[]",
+            "result": "{\"running\":true,\"iteration\":0,\"cacheSize\":0,\"cacheCapacity\":4096,\"best\":-1,\"fingerprint\":\"6b46ab3c\",\"pid\":3031}",
+            "ms": 4.098206999999093
+          }
+        ]
+      }
+    },
+    {
+      "atMs": 10893,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 2250,
+        "cacheSize": 4044,
+        "cacheCapacity": 4096,
+        "best": 1.1576,
+        "fingerprint": "75fa10f7",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 11397,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 4750,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 1.1576,
+        "fingerprint": "8bec9c6f",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 11902,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 7250,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 1.1576,
+        "fingerprint": "ee13ea63",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 12405,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 9750,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 1.1576,
+        "fingerprint": "27ee8867",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 12909,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 12250,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.9941,
+        "fingerprint": "ec50894a",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 13412,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 14750,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.9941,
+        "fingerprint": "66daeee6",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 13916,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 17250,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.9941,
+        "fingerprint": "62e89992",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 14421,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 19750,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.9941,
+        "fingerprint": "8f566dfe",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 14421,
+      "kind": "publish-start"
+    },
+    {
+      "atMs": 23568,
+      "kind": "published",
+      "state": {
+        "phase": "published",
+        "capability": {
+          "available": true,
+          "reason": "live",
+          "detail": "real microVM track enabled (KVM/HVF + @machinen/runtime 0.4.0 present)",
+          "platform": "linux/amd64",
+          "runtime": "0.4.0"
+        },
+        "timings": {
+          "bootMs": 10362,
+          "publishMs": 9143
+        },
+        "frozenAt": {
+          "running": true,
+          "iteration": 19750,
+          "cacheSize": 4096,
+          "cacheCapacity": 4096,
+          "best": 0.9941,
+          "fingerprint": "8f566dfe",
+          "pid": 3031
+        },
+        "published": {
+          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
+          "bytes": 2662113791,
+          "url": "http://127.0.0.1:3812/machines/vm_machine",
+          "publishMs": 9143,
+          "sourceDead": true
+        },
+        "wire": [
+          {
+            "type": "call",
+            "machine": "vm_machine",
+            "module": "./solver",
+            "fn": "progress",
+            "args": "[]",
+            "result": "{\"running\":true,\"iteration\":19750,\"cacheSize\":4096,\"cacheCapacity\":4096,\"best\":0.9941,\"fingerprint\":\"8f566dfe\",\"pid\":3031}",
+            "ms": 1.5844570000044769
+          },
+          {
+            "type": "snapshot",
+            "machine": "vm_machine",
+            "snapFile": "/home/zack/projects/federated-compute/apps/host/.machinen/web-vm-snapshots/vm_machine-mq9b6osp"
+          },
+          {
+            "type": "crash",
+            "machine": "vm_machine",
+            "error": "fetch failed"
+          }
+        ]
+      }
+    },
+    {
+      "atMs": 23568,
+      "kind": "restore-start"
+    },
+    {
+      "atMs": 33513,
+      "kind": "restored",
+      "state": {
+        "phase": "restored",
+        "capability": {
+          "available": true,
+          "reason": "live",
+          "detail": "real microVM track enabled (KVM/HVF + @machinen/runtime 0.4.0 present)",
+          "platform": "linux/amd64",
+          "runtime": "0.4.0"
+        },
+        "timings": {
+          "bootMs": 10362,
+          "publishMs": 9143,
+          "restoreMs": 9944
+        },
+        "frozenAt": {
+          "running": true,
+          "iteration": 19750,
+          "cacheSize": 4096,
+          "cacheCapacity": 4096,
+          "best": 0.9941,
+          "fingerprint": "8f566dfe",
+          "pid": 3031
+        },
+        "published": {
+          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
+          "bytes": 2662113791,
+          "url": "http://127.0.0.1:3812/machines/vm_machine",
+          "publishMs": 9143,
+          "sourceDead": true
+        },
+        "pull": {
+          "bytes": 2662113791,
+          "ms": 4005,
+          "cacheHit": false,
+          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f"
+        },
+        "entry": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=^1.0.0",
+        "progress": {
+          "running": true,
+          "iteration": 24000,
+          "cacheSize": 4096,
+          "cacheCapacity": 4096,
+          "best": 0.9941,
+          "fingerprint": "5a7c79e4",
+          "pid": 3031
+        },
+        "wire": [
+          {
+            "type": "artifact",
+            "machine": "vm_machine",
+            "origin": "http://127.0.0.1:3812/machines/vm_machine",
+            "entry": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
+            "artifact": "vmstate",
+            "bytes": 2662113791,
+            "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
+            "cacheHit": false,
+            "ms": 4005
+          },
+          {
+            "type": "attach",
+            "machine": "vm_machine",
+            "entry": "machinen:///home/zack/projects/federated-compute/apps/host/.machinen/web-vm-cache/vmstate/sha256-f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f?artifact=vmstate&version=%5E1.0.0",
+            "version": "1.0.0",
+            "requires": "^1.0.0",
+            "runtime": "node v18.20.4",
+            "pulledFrom": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
+            "imageDigest": "sha256:99f0a21e5f501e8693b57f9064a912d2c894ac6dc32d55017942d68575a4972d"
+          },
+          {
+            "type": "call",
+            "machine": "vm_machine",
+            "module": "./solver",
+            "fn": "progress",
+            "args": "[]",
+            "result": "{\"running\":true,\"iteration\":24000,\"cacheSize\":4096,\"cacheCapacity\":4096,\"best\":0.9941,\"fingerprint\":\"5a7c79e4\",\"pid\":3031}",
+            "ms": 1.4088909999991301
+          }
+        ]
+      }
+    },
+    {
+      "atMs": 34017,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 26500,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.9941,
+        "fingerprint": "02e06718",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 34523,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 29000,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.775,
+        "fingerprint": "55e60fd2",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 35026,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 31500,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.775,
+        "fingerprint": "2083d9b6",
+        "pid": 3031
+      }
+    },
+    {
+      "atMs": 35528,
+      "kind": "progress",
+      "progress": {
+        "running": true,
+        "iteration": 34000,
+        "cacheSize": 4096,
+        "cacheCapacity": 4096,
+        "best": 0.775,
+        "fingerprint": "4eee18da",
+        "pid": 3031
+      }
+    }
+  ]
+}
