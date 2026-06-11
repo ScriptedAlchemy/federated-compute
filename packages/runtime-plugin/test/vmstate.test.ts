@@ -7,9 +7,11 @@ import { describe, expect, test } from 'vitest';
 import {
   VMSTATE_FORMAT,
   buildVmstateBundle,
+  installedMachinenRuntimeVersion,
   ociHostPlatform,
   parseVmstateBundleManifest,
   sha256File,
+  vmstateCompatibilityError,
   type VmstateCompatibility,
 } from '../src/vmstate.js';
 
@@ -158,5 +160,45 @@ describe('parseVmstateBundleManifest', () => {
     expect(() =>
       parseVmstateBundleManifest(JSON.stringify(badBytes), 'at test://bundle'),
     ).toThrow(/bytes/);
+  });
+});
+
+describe('vmstateCompatibilityError', () => {
+  const host = { platform: 'linux/amd64', machinenRuntime: '0.4.0' };
+
+  test('compatible bundle returns undefined', () => {
+    expect(vmstateCompatibilityError(COMPAT, host)).toBeUndefined();
+  });
+
+  test('platform mismatch names both platforms', () => {
+    const message = vmstateCompatibilityError(
+      { ...COMPAT, platform: 'linux/arm64' },
+      host,
+    );
+    expect(message).toMatch(/requires "linux\/arm64".*this host is "linux\/amd64"/s);
+    expect(message).toMatch(/before download/);
+  });
+
+  test('runtime mismatch names both versions', () => {
+    const message = vmstateCompatibilityError(
+      { ...COMPAT, machinenRuntime: '0.5.1' },
+      host,
+    );
+    expect(message).toMatch(/requires @machinen\/runtime 0\.5\.1.*installed 0\.4\.0/s);
+  });
+
+  test('unknown snapshot engine is rejected by name', () => {
+    const message = vmstateCompatibilityError(
+      { ...COMPAT, snapshotEngine: 'criu-experimental' },
+      host,
+    );
+    expect(message).toMatch(/"criu-experimental"/);
+  });
+});
+
+describe('installedMachinenRuntimeVersion', () => {
+  test('reads the devDependency version without loading the native runtime', () => {
+    // @machinen/runtime@0.4.0 is a devDependency of this package.
+    expect(installedMachinenRuntimeVersion()).toBe('0.4.0');
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 /**
@@ -198,4 +199,80 @@ export function parseVmstateBundleManifest(raw: string, where: string): VmstateB
     },
     files,
   };
+}
+
+/**
+ * The installed @machinen/runtime version WITHOUT loading the (~18MB native)
+ * runtime — resolve-time negotiation must work before any VMM exists.
+ * Tries the package.json subpath first; falls back to walking up from the
+ * resolved entry file when "exports" hides package.json.
+ */
+export function installedMachinenRuntimeVersion(): string | undefined {
+  const require = createRequire(import.meta.url);
+  try {
+    const pkg = require('@machinen/runtime/package.json') as { version?: unknown };
+    if (typeof pkg.version === 'string') return pkg.version;
+  } catch {
+    // ERR_PACKAGE_PATH_NOT_EXPORTED or not installed — try walking up.
+  }
+  try {
+    let dir = path.dirname(require.resolve('@machinen/runtime'));
+    for (;;) {
+      try {
+        const pkg = require(path.join(dir, 'package.json')) as {
+          name?: unknown;
+          version?: unknown;
+        };
+        if (pkg.name === '@machinen/runtime' && typeof pkg.version === 'string') {
+          return pkg.version;
+        }
+      } catch {
+        // no package.json at this level — keep walking
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export interface VmstateHost {
+  /** OCI-style platform of this host (ociHostPlatform()). */
+  platform: string;
+  /** Installed @machinen/runtime version. */
+  machinenRuntime: string;
+}
+
+/**
+ * The requiredVersion analog for hardware and runtime: a negotiation-style
+ * message when the bundle cannot restore on this host, undefined when
+ * compatible. Phase 2a is strict — exact platform, exact runtime version,
+ * known snapshot engine. Loosening (semver ranges for the runtime) is a
+ * Phase 2b decision once upstream documents vmstate stability.
+ */
+export function vmstateCompatibilityError(
+  compat: VmstateCompatibility,
+  host: VmstateHost,
+): string | undefined {
+  if (compat.platform !== host.platform) {
+    return (
+      `vmstate platform mismatch before download: artifact requires ` +
+      `"${compat.platform}", this host is "${host.platform}"`
+    );
+  }
+  if (compat.machinenRuntime !== host.machinenRuntime) {
+    return (
+      `vmstate requires @machinen/runtime ${compat.machinenRuntime}, installed ` +
+      `${host.machinenRuntime}; refusing to restore an incompatible bundle`
+    );
+  }
+  if (compat.snapshotEngine !== VMSTATE_SNAPSHOT_ENGINE) {
+    return (
+      `vmstate was dumped with unknown snapshot engine "${compat.snapshotEngine}" ` +
+      `(this consumer supports "${VMSTATE_SNAPSHOT_ENGINE}")`
+    );
+  }
+  return undefined;
 }
