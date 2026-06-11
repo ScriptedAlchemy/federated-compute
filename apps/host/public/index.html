@@ -40,14 +40,6 @@
   }
   @keyframes blink { 50% { opacity: .25; box-shadow: none; } }
 
-  /* Page tabs: the two halves of the demo. */
-  header nav { display: flex; gap: 8px; }
-  header nav a.tab-active {
-    color: var(--ink); border-color: var(--panel-edge-2);
-    background: rgba(255, 255, 255, .03);
-  }
-  header nav a .tno { color: var(--ink-faint); margin-right: 6px; }
-
   main {
     display: grid;
     grid-template-columns: repeat(12, 1fr);
@@ -57,17 +49,6 @@
     margin: 0 auto;
   }
   .panel { padding: 20px 22px; }
-
-  /* Actor chips: who is acting at each hop. Used in topology + wire traces. */
-  .actor {
-    display: inline-flex; align-items: center;
-    font-family: var(--display); font-size: 9px; font-weight: 600;
-    letter-spacing: .1em; text-transform: uppercase;
-    border-radius: 3px; padding: 1px 6px; white-space: nowrap;
-  }
-  .actor.browser { color: var(--ink-dim); background: rgba(116, 131, 154, .12); border: 1px solid rgba(116, 131, 154, .25); }
-  .actor.host { color: var(--node); background: rgba(63, 185, 80, .1); border: 1px solid rgba(63, 185, 80, .3); }
-  .actor.machine { color: var(--python); background: rgba(88, 166, 255, .1); border: 1px solid rgba(88, 166, 255, .3); }
 
   /* ---------- hero ---------- */
   .hero {
@@ -307,53 +288,12 @@
   .concept b { color: var(--ink); font-weight: 500; }
   .concept code { color: var(--node); background: var(--well); padding: 0 4px; border-radius: 3px; font-size: 10.5px; }
 
-  /* The code each card actually runs, verbatim from the host. */
+  /* The label above each card's verbatim host code (code.card-code is shared). */
   .card-code-label {
     display: flex; align-items: center; gap: 7px;
     font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
     color: var(--ink-faint); margin-bottom: 5px;
   }
-  code.card-code {
-    display: block; background: var(--well); border: 1px solid var(--panel-edge);
-    border-left: 2px solid var(--sec, var(--panel-edge-2));
-    border-radius: 5px; padding: 9px 12px;
-    font-size: 10.5px; line-height: 1.65; white-space: pre; overflow-x: auto;
-    color: var(--ink-dim); margin-bottom: 13px;
-  }
-  code.card-code .kw { color: var(--java); }
-  code.card-code .str { color: var(--node); }
-  code.card-code .cm { color: var(--ink-faint); }
-
-  /* ---------- wire trace: what actually crossed each boundary ---------- */
-  details.wiretrace {
-    margin-top: 12px;
-    border: 1px solid var(--panel-edge); border-radius: 6px;
-    background: var(--well);
-  }
-  details.wiretrace summary {
-    cursor: pointer; list-style: none;
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 12px;
-    font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim);
-    user-select: none;
-  }
-  details.wiretrace summary::before { content: '▸'; color: var(--ink-faint); transition: transform .15s; }
-  details.wiretrace[open] summary::before { transform: rotate(90deg); }
-  details.wiretrace summary .wcount { margin-left: auto; color: var(--ink-faint); letter-spacing: 0; text-transform: none; }
-  .wirebody { padding: 4px 12px 10px; border-top: 1px dashed var(--panel-edge); }
-  .whop {
-    display: grid; grid-template-columns: 118px 1fr; gap: 10px;
-    padding: 5px 0; font-size: 10.5px; align-items: baseline;
-  }
-  .whop + .whop { border-top: 1px solid #10161e; }
-  .whop .wchain { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-  .whop .wdetail { color: var(--ink-dim); word-break: break-all; line-height: 1.6; }
-  .whop .wdetail b { color: var(--ink); font-weight: 500; }
-  .whop .wdetail code { color: var(--python); }
-  .whop .wdetail .wreq { color: var(--java); }
-  .whop .wdetail .wres { color: var(--node); }
-  .whop .wdetail .wms { font-family: var(--display); font-weight: 700; color: var(--node); }
-  .wempty { color: var(--ink-faint); font-size: 10.5px; padding: 8px 0 4px; }
 
   /* ---------- pipeline ---------- */
   textarea { width: 100%; resize: vertical; min-height: 56px; }
@@ -828,38 +768,13 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
   </section>
 </main>
 
+<script src="/demo-base.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-// Machines are untrusted third parties: escape every API-derived value
-// before it lands in innerHTML.
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const post = async (url, body) => {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok && data.error === undefined) data.error = `HTTP ${res.status}`;
-  return data;
-};
 const ACCENT = { compute_machine: 'node', java_machine: 'java', python_machine: 'python' };
 const LABEL = { compute_machine: 'node', java_machine: 'jvm', python_machine: 'cpython' };
 const SHAPE = { compute_machine: 'hex', java_machine: 'diamond', python_machine: 'circle' };
 const MONOGRAM = { compute_machine: 'N', java_machine: 'J', python_machine: 'P' };
-const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SPARK_SLOTS = 28;
-const fmtBytes = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
-
-// Eased number tween for metric count-ups; snaps instantly under reduced motion.
-function countUp(el, from, to, fmt = (v) => String(Math.round(v))) {
-  if (REDUCED || from === to || !Number.isFinite(from)) { el.textContent = fmt(to); return; }
-  const t0 = performance.now(), dur = 550;
-  const step = (t) => {
-    const k = Math.min((t - t0) / dur, 1);
-    const e = 1 - Math.pow(1 - k, 3);
-    el.textContent = fmt(from + (to - from) * e);
-    if (k < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
 
 /* ---------- topology: one edge row per us-east machine ---------- */
 const edgeEls = new Map();   // machine name -> .tedge element
@@ -898,76 +813,15 @@ function updateTopo(machines) {
   }
 }
 
-/* ---------- wire traces: render the host-captured hook events ---------- */
-const chainHtml = (...actors) => actors
-  .map((a) => `<span class="actor ${a[0]}">${a[1]}</span>`)
-  .join('<span style="color:var(--ink-faint)">→</span>');
-
-function wireHopHtml(e) {
-  if (e.type === 'attach') {
-    const boot = e.url
-      ? `fetched <code>GET ${esc(e.url)}/mf-manifest.json</code>, negotiated version`
-      : `booted it (process driver), read its manifest, negotiated version`;
-    return `<div class="whop">
-      <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
-      <span class="wdetail"><b>${e.url ? 'attach' : 'boot'}</b> — resolved entry <code>${esc(e.entry)}</code>,
-        ${boot}
-        <b>${esc(e.version ?? '?')}</b>${e.requires ? ` against required <b>${esc(e.requires)}</b>` : ''}
-        (${esc(e.runtime ?? 'unknown runtime')})${e.pulledFrom
-          ? `<br />provenance: this machine was pulled from <code>${esc(e.pulledFrom)}</code> and boots from the local cache`
-          : ''}</span>
-    </div>`;
-  }
-  if (e.type === 'call') {
-    return `<div class="whop">
-      <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
-      <span class="wdetail"><b>rpc</b> <code>POST ${esc(e.url ?? '')}/mf/call</code>
-        <span class="wreq">${esc(`{"module":"${e.module}","fn":"${e.fn}","args":${e.args}}`)}</span>
-        → <span class="wres">${esc(e.result)}</span> <span class="wms">${e.ms.toFixed(1)}ms</span></span>
-    </div>`;
-  }
-  if (e.type === 'snapshot') {
-    return `<div class="whop">
-      <span class="wchain">${chainHtml(['host', 'host'], ['machine', esc(e.machine)])}</span>
-      <span class="wdetail"><b>snapshot</b> — state frozen into <code>${esc(e.snapFile)}</code></span>
-    </div>`;
-  }
-  if (e.type === 'artifact') {
-    const origin = esc(e.origin ?? '');
-    const snapshotHop = e.artifact === 'snapshot'
-      ? ` → <code>GET ${origin}/mf-snapshot</code> (<b>no-store</b> — every GET is a fresh fork point)`
-      : '';
-    return `<div class="whop">
-      <span class="wchain">${chainHtml(['host', 'host'], ['machine', 'origin'])}</span>
-      <span class="wdetail"><b>pull ${esc(e.artifact)}</b> — resolved <code>${esc(e.entry)}</code>:
-        <code>GET ${origin}/mf-manifest.json</code> (version negotiated <b>before</b> any artifact bytes moved)${snapshotHop}
-        → image digest <b>${e.cacheHit ? 'HIT — image served from the local cache' : 'MISS — fetched + sha256-verified'}</b>${
-          e.digest ? ` <code>${esc(String(e.digest).slice(0, 19))}…</code>` : ''}
-        → <span class="wres">${fmtBytes(e.bytes)} moved</span> in <span class="wms">${e.ms}ms</span>, clone boots from the cache</span>
-    </div>`;
-  }
-  return '';
-}
-
-/** Fill a card's collapsible trace with this response's wire events. */
-function renderWire(detailsId, apiLabel, wire) {
-  const details = $(detailsId);
-  if (!details) return;
-  details.hidden = false;
-  const body = details.querySelector('.wirebody');
-  const browserHop = `<div class="whop">
-    <span class="wchain">${chainHtml(['browser', 'browser'], ['host', 'host'])}</span>
-    <span class="wdetail"><b>http</b> <code>${esc(apiLabel)}</code> — the browser never runs
-      federation; loadRemote executes inside the host process</span>
-  </div>`;
-  const hops = (wire ?? []).map(wireHopHtml).join('');
-  body.innerHTML = browserHop + (hops || '<div class="wempty">no machine traffic — containers were already cached in the host</div>');
-  details.querySelector('.wcount').textContent = `${1 + (wire?.length ?? 0)} hops`;
-  for (const e of wire ?? []) {
-    if (e.type === 'artifact') flashCache(e.cacheHit ? 'flash-hit' : 'flash-fetch');
-    else if (e.machine) pulseEdge(e.machine);
-  }
-}
+/* Wire traces (shared renderWire) + this page's topology side effects:
+   artifact events flash the cache node, machine traffic pulses its edge. */
+const renderWireFx = (detailsId, apiLabel, wire) =>
+  renderWire(detailsId, apiLabel, wire, {
+    onEvent: (e) => {
+      if (e.type === 'artifact') flashCache(e.cacheHit ? 'flash-hit' : 'flash-fetch');
+      else if (e.machine && ['attach', 'call', 'snapshot'].includes(e.type)) pulseEdge(e.machine);
+    },
+  });
 
 /* ---------- machine cards (the three runtimes) ---------- */
 const cards = new Map();
@@ -1111,7 +965,7 @@ $('pipeline-run').onclick = async () => {
     ${stage('python', 'cpython', r.python, [['words', words], ['wordlen', `mean ${r.python.meanWordLength.toFixed(2)} · median ${r.python.medianWordLength}`]], 1)}
     ${stage('node', 'node', r.node, [['shout', r.node.shouted], ['reverse', r.node.reversed]], 2)}
   </div>`;
-  renderWire('pipeline-wire', 'POST /api/pipeline', r.wire);
+  renderWireFx('pipeline-wire', 'POST /api/pipeline', r.wire);
   refreshDashboard();
 };
 
@@ -1127,7 +981,7 @@ document.querySelectorAll('[data-counter]').forEach((btn) => {
       el.title = '';
       countUp(el, counterPrev[machine] ?? r.value, r.value);
       counterPrev[machine] = r.value;
-      renderWire('counter-wire', 'POST /api/counter', r.wire);
+      renderWireFx('counter-wire', 'POST /api/counter', r.wire);
     } finally {
       btn.disabled = false;
     }
@@ -1296,7 +1150,7 @@ async function lcAction(btn, url, apiLabel) {
     }
     lcPhase = r.phase;
     setLifecycleUI(r, r);
-    renderWire('snap-wire', apiLabel, r.wire);
+    renderWireFx('snap-wire', apiLabel, r.wire);
     refreshDashboard();
     return r;
   } catch (error) {
@@ -1327,7 +1181,7 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
       }
       lcPhase = r.phase;
       setLifecycleUI(r);
-      renderWire('snap-wire', 'POST /api/lifecycle/counter', r.wire);
+      renderWireFx('snap-wire', 'POST /api/lifecycle/counter', r.wire);
     } finally {
       btn.disabled = !btn.closest('.member').classList.contains('alive');
     }

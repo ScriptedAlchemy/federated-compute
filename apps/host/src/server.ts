@@ -811,10 +811,12 @@ async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerRe
 
 const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 
-// Pretty page routes -> files in PUBLIC_DIR; other assets (*.css) are served
-// by filename. The asset pattern admits no '/' so paths can't escape the dir.
+// Pretty page routes -> files in PUBLIC_DIR; other assets (*.css, *.js) are
+// served by filename. The asset pattern admits no '/' so paths can't escape
+// the dir.
 const PAGES: Record<string, string> = { '/': 'index.html', '/gravity': 'gravity.html' };
-const CSS_ASSET_RE = /^\/[A-Za-z0-9_-]+\.css$/;
+const ASSET_RE = /^\/[A-Za-z0-9_-]+\.(css|js)$/;
+const ASSET_TYPES: Record<string, string> = { '.css': 'text/css', '.js': 'text/javascript' };
 
 /** Serve a page or asset from PUBLIC_DIR; false when the path is not static. */
 async function serveStatic(
@@ -824,11 +826,11 @@ async function serveStatic(
 ): Promise<boolean> {
   if (req.method !== 'GET') return false;
   const page = PAGES[url.pathname];
-  const file = page ?? (CSS_ASSET_RE.test(url.pathname) ? url.pathname.slice(1) : undefined);
+  const file = page ?? (ASSET_RE.test(url.pathname) ? url.pathname.slice(1) : undefined);
   if (!file) return false;
   try {
     const body = await readFile(path.join(PUBLIC_DIR, file));
-    res.writeHead(200, { 'content-type': page ? 'text/html' : 'text/css' });
+    res.writeHead(200, { 'content-type': page ? 'text/html' : ASSET_TYPES[path.extname(file)] });
     res.end(body);
   } catch {
     json(res, 404, { error: 'not found' });
