@@ -1,15 +1,19 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { runBindgenFromConfig } from '../src/bindgen-run.js';
 import type { MachinenConfig } from '../src/config.js';
 import { createGuestRuntime, serveGuest, type GuestServer } from '../src/guest.js';
+import type { MachineExposeManifest } from '../src/types.js';
 
 const servers: GuestServer[] = [];
+const rawServers: http.Server[] = [];
 const tmpDirs: string[] = [];
 afterAll(async () => {
   await Promise.all(servers.map((s) => s.close()));
+  for (const s of rawServers) s.close();
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,5 +106,50 @@ describe('runBindgenFromConfig', () => {
     expect(drifted.machines.find((m) => m.name === 'check_machine')?.status).toBe('drift');
     // check mode never writes
     expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  test('prefers a machine-published /mf-types.ts artifact over manifest rendering', async () => {
+    // A machine whose published types differ from what the manifest would
+    // render — config mode must ship the artifact (like single-machine mode),
+    // while the barrel still derives export names from the manifest.
+    const manifest: MachineExposeManifest = {
+      name: 'types_machine',
+      protocol: 3,
+      version: '1.0.0',
+      exposes: { './math': { add: { params: [], returns: 'number' } } },
+    };
+    const published = '// MACHINE-PUBLISHED TYPES — richer than the manifest rendering\n';
+    const server = http.createServer((req, res) => {
+      if (req.url === '/mf-types.ts') {
+        res.writeHead(200, { 'content-type': 'application/typescript' });
+        res.end(published);
+        return;
+      }
+      if (req.url === '/mf-manifest.json') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(manifest));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    rawServers.push(server);
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () =>
+        resolve((server.address() as { port: number }).port),
+      ),
+    );
+
+    const config = makeConfig({
+      types_machine: { url: `machinen+http://127.0.0.1:${port}` },
+    });
+    const result = await runBindgenFromConfig(config, {});
+    expect(result.ok).toBe(true);
+    const outDir = path.join(config.dir, 'src/generated');
+    expect(readFileSync(path.join(outDir, 'types_machine.ts'), 'utf8')).toBe(published);
+    // Barrel export names still come from the manifest signatures.
+    expect(readFileSync(path.join(outDir, 'index.ts'), 'utf8')).toContain(
+      "export { math } from './types_machine';",
+    );
   });
 });

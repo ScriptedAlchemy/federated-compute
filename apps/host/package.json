@@ -8,7 +8,7 @@
     "build": "rsbuild build",
     "start": "node dist/index.js",
     "serve": "node dist/server.js",
-    "bindgen": "machinen-bindgen"
+    "bindgen": "node node_modules/@federated-compute/machinen-plugin/dist/cli.js"
   },
   "dependencies": {
     "@federated-compute/machinen-plugin": "workspace:*",

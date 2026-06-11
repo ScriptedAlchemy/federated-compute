@@ -2,9 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   bindingExportNames,
+  fetchBindingsSource,
   fetchMachineManifest,
   generateBarrel,
-  generateBindings,
 } from './bindgen.js';
 import { envKeyFor } from './client.js';
 import type { MachinenConfig } from './config.js';
@@ -81,13 +81,15 @@ export async function runBindgenFromConfig(
           if (!spec.url) {
             throw new Error(`bindgen: entry for "${name}" is not an attachable machine URL`);
           }
-          const manifest = await fetchMachineManifest(spec.url);
-          return {
-            name,
-            file,
-            source: generateBindings(manifest),
-            exportNames: bindingExportNames(manifest),
-          };
+          // Same type-distribution path as single-machine mode: prefer the
+          // machine's published /mf-types.ts artifact, fall back to rendering
+          // from the manifest. The manifest is still fetched for barrel
+          // export names, which must reflect the actual exposed signatures.
+          const [source, manifest] = await Promise.all([
+            fetchBindingsSource(spec.url),
+            fetchMachineManifest(spec.url),
+          ]);
+          return { name, file, source, exportNames: bindingExportNames(manifest) };
         } catch (error) {
           return { name, file, error: (error as Error).message };
         }
