@@ -10,23 +10,27 @@
 // this process into the machine. The /api responses include a `wire` array —
 // real data captured from the plugin's hooks — so the UI can show exactly
 // what crossed which boundary.
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { once } from 'node:events';
 import http from 'node:http';
-import { readFile, rm, stat } from 'node:fs/promises';
-import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
-import {
-  httpAttachDriver,
-  machinenPlugin,
-  processDriver,
-  type MachinenPlugin,
-} from '@federated-compute/machinen-plugin';
+import { httpAttachDriver, machinenPlugin } from '@federated-compute/machinen-plugin';
+import { handleDashboard, logHooks, machineStatus } from './dashboard.js';
 import type { ComputeMachineModules } from './generated/compute_machine';
 import type { JavaMachineModules } from './generated/java_machine';
 import type { PythonMachineModules } from './generated/python_machine';
 import type { DbMachineModules } from './generated/db_machine';
 import type { AnalyticsMachineModules } from './generated/analytics_machine';
+import { HttpError, errorMessage, errorName, json, readBody, serveStatic } from './http-util.js';
+import {
+  handleLifecycleBoot,
+  handleLifecycleCounter,
+  handleLifecycleFreeze,
+  handleLifecyclePull,
+  handleLifecycleRestore,
+  lifecycleBody,
+  snapPlugin,
+} from './lifecycle.js';
+import { recordWire, wire, wireStore } from './wire.js';
 
 const PORT = Number(process.env.HOST_PORT ?? 3800);
 // All simulated WAN links into the data region (db + analytics paths).
@@ -63,320 +67,11 @@ const host = createInstance({
 });
 // ----------------------------------------------------------------------------
 
-// ---- wire capture -----------------------------------------------------------
-// Per-request recording of what federation actually did: attaches (manifest
-// fetch + version negotiation) and calls (the literal /mf/call RPC). Hook
-// listeners append into the AsyncLocalStorage store of whichever /api request
-// is running, so concurrent requests can't see each other's traffic.
-
-type WireEvent =
-  | {
-      type: 'attach';
-      machine: string;
-      entry: string;
-      url?: string;
-      version?: string;
-      requires?: string;
-      runtime?: string;
-      /** Set when this boot came from a pulled artifact (provenance). */
-      pulledFrom?: string;
-      /** The sha256 digest of the image artifact the machine publishes. */
-      imageDigest?: string;
-    }
-  | {
-      type: 'call';
-      machine: string;
-      url?: string;
-      module: string;
-      fn: string;
-      args: string;
-      result: string;
-      ms: number;
-    }
-  | { type: 'snapshot'; machine: string; snapFile: string }
-  | {
-      /** A pull entry resolved: the artifact moved (or the cache answered). */
-      type: 'artifact';
-      machine: string;
-      origin?: string;
-      entry: string;
-      artifact: string;
-      bytes: number;
-      digest?: string;
-      cacheHit: boolean;
-      ms: number;
-    }
-  | { type: 'crash'; machine: string; error: string }
-  | { type: 'circuit'; machine: string; state: 'open' | 'closed' }
-  | {
-      /**
-       * Version negotiation refused an attach. No plugin hook fires for a
-       * rejected boot (onMachineReady never runs), so the route records this
-       * event itself — `error` is the plugin's MachineVersionError verbatim.
-       */
-      type: 'reject';
-      machine: string;
-      entry: string;
-      required: string;
-      error: string;
-    };
-
-const wireStore = new AsyncLocalStorage<WireEvent[]>();
-
-/** JSON-serialize a value for display, clipped so payloads stay readable. */
-function clip(value: unknown, max = 140): string {
-  let s: string;
-  try {
-    s = JSON.stringify(value) ?? 'undefined';
-  } catch {
-    s = String(value);
-  }
-  return s.length > max ? `${s.slice(0, max)}…` : s;
+for (const { name } of MACHINES) {
+  machineStatus.set(name, { attached: false });
 }
-
-/** Record plugin hook events into the current request's wire. */
-function recordWire(p: MachinenPlugin): void {
-  p.machineHooks.onMachineReady.on(({ spec, manifest }) => {
-    wireStore.getStore()?.push({
-      type: 'attach',
-      machine: spec.remoteName,
-      entry: spec.entry,
-      url: spec.url,
-      version: manifest.version,
-      requires: spec.params.get('version') ?? undefined,
-      runtime: manifest.metaData?.runtime,
-      pulledFrom: spec.pulledFrom,
-      imageDigest: manifest.artifacts?.image?.digest,
-    });
-  });
-  p.machineHooks.onArtifactFetched.on(({ spec, resolution }) => {
-    wireStore.getStore()?.push({
-      type: 'artifact',
-      machine: spec.remoteName,
-      origin: spec.url,
-      entry: spec.entry,
-      artifact: resolution.artifact,
-      bytes: resolution.bytesFetched,
-      digest: resolution.descriptor.digest,
-      cacheHit: resolution.fromCache,
-      ms: resolution.durationMs,
-    });
-  });
-  p.machineHooks.afterCall.on(({ spec, module, fn, args, result, durationMs }) => {
-    wireStore.getStore()?.push({
-      type: 'call',
-      machine: spec.remoteName,
-      url: spec.url,
-      module,
-      fn,
-      args: clip(args),
-      result: clip(result),
-      ms: durationMs,
-    });
-  });
-  p.machineHooks.onSnapshotted.on(({ spec, snapshot }) => {
-    const snapFile = (snapshot as { snapFile?: string })?.snapFile ?? '(driver descriptor)';
-    wireStore.getStore()?.push({ type: 'snapshot', machine: spec.remoteName, snapFile });
-  });
-  p.machineHooks.onMachineCrash.on(({ spec, error }) => {
-    wireStore.getStore()?.push({ type: 'crash', machine: spec.remoteName, error: errorMessage(error) });
-  });
-  p.machineHooks.onCircuitOpen.on(({ spec }) => {
-    wireStore.getStore()?.push({ type: 'circuit', machine: spec.remoteName, state: 'open' });
-  });
-  p.machineHooks.onCircuitClose.on(({ spec }) => {
-    wireStore.getStore()?.push({ type: 'circuit', machine: spec.remoteName, state: 'closed' });
-  });
-}
-
-/** The wire events captured so far for the current request. */
-function wire(): WireEvent[] {
-  return wireStore.getStore() ?? [];
-}
-// ----------------------------------------------------------------------------
-
-interface MachineStatus {
-  attached: boolean;
-  runtime?: string;
-  version?: string;
-  attachedAt?: number;
-  /** Artifact kinds the machine's manifest publishes (pull capability). */
-  artifacts?: string[];
-}
-
-interface ActivityEvent {
-  ts: number;
-  kind: 'ready' | 'call' | 'error' | 'crash' | 'circuit' | 'snapshot' | 'restore' | 'pull';
-  detail: string;
-}
-
-const machineStatus = new Map<string, MachineStatus>(
-  MACHINES.map(({ name }) => [name, { attached: false }]),
-);
-
-/** Fixed-capacity ring buffer: O(1) push, oldest entries overwritten. */
-class RingBuffer<T> {
-  private readonly buffer: T[];
-  private head = 0;
-  private size = 0;
-
-  constructor(private readonly capacity: number) {
-    this.buffer = new Array<T>(capacity);
-  }
-
-  push(item: T) {
-    this.buffer[this.head] = item;
-    this.head = (this.head + 1) % this.capacity;
-    if (this.size < this.capacity) this.size++;
-  }
-
-  /** Last n items, newest-last. */
-  latest(n: number): T[] {
-    const count = Math.min(n, this.size);
-    const out: T[] = new Array(count);
-    for (let i = 0; i < count; i++) {
-      out[i] = this.buffer[(this.head - count + i + this.capacity) % this.capacity];
-    }
-    return out;
-  }
-}
-
-const events = new RingBuffer<ActivityEvent>(200);
-
-function logEvent(kind: ActivityEvent['kind'], detail: string) {
-  events.push({ ts: Date.now(), kind, detail });
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : 'Error';
-}
-
-// The host-side artifact cache, as the resolver actually used it. Counters
-// accumulate from onArtifactFetched hook events only — no synthetic data.
-const cacheStats = {
-  paths: new Set<string>(),
-  hits: 0,
-  misses: 0,
-  bytes: 0,
-  reset() {
-    this.paths.clear();
-    this.hits = 0;
-    this.misses = 0;
-    this.bytes = 0;
-  },
-};
-
-/** Feed a plugin's lifecycle hooks into the dashboard's activity log. */
-function logHooks(p: MachinenPlugin): void {
-  p.machineHooks.onMachineReady.on(({ spec, manifest }) => {
-    if (machineStatus.has(spec.remoteName)) {
-      machineStatus.set(spec.remoteName, {
-        attached: true,
-        runtime: manifest.metaData?.runtime,
-        version: manifest.version,
-        attachedAt: Date.now(),
-        artifacts: manifest.artifacts ? Object.keys(manifest.artifacts) : undefined,
-      });
-    }
-    logEvent('ready', `${spec.remoteName} attached (${manifest.metaData?.runtime})`);
-  });
-  p.machineHooks.onArtifactFetched.on(({ spec, resolution }) => {
-    cacheStats.paths.add(resolution.localPath);
-    if (resolution.fromCache) cacheStats.hits++;
-    else cacheStats.misses++;
-    cacheStats.bytes += resolution.bytesFetched;
-    logEvent(
-      'pull',
-      `${spec.remoteName} pulled ${resolution.artifact} from ${spec.url} — ` +
-        (resolution.fromCache
-          ? `image cache HIT, ${resolution.bytesFetched} bytes moved`
-          : `${resolution.bytesFetched} bytes fetched`) +
-        ` in ${resolution.durationMs}ms`,
-    );
-  });
-  p.machineHooks.afterCall.on(({ spec, module, fn, durationMs }) => {
-    logEvent('call', `${spec.remoteName} ${module}#${fn} ${durationMs.toFixed(1)}ms`);
-  });
-  p.machineHooks.onMachineError.on(({ spec, module, fn, error }) => {
-    logEvent('error', `${spec.remoteName} ${module}#${fn} failed: ${errorMessage(error)}`);
-  });
-  p.machineHooks.onMachineCrash.on(({ spec }) => {
-    if (machineStatus.has(spec.remoteName)) {
-      machineStatus.set(spec.remoteName, { attached: false });
-    }
-    logEvent('crash', `${spec.remoteName} became unreachable`);
-  });
-  p.machineHooks.onCircuitOpen.on(({ spec }) => {
-    logEvent('circuit', `${spec.remoteName} circuit open — failing fast`);
-  });
-  p.machineHooks.onCircuitClose.on(({ spec }) => {
-    logEvent('circuit', `${spec.remoteName} circuit closed — calls flow again`);
-  });
-  p.machineHooks.onSnapshotted.on(({ spec, snapshot }) => {
-    const snapFile = (snapshot as { snapFile?: string })?.snapFile;
-    logEvent('snapshot', `${spec.remoteName} frozen${snapFile ? ` -> ${path.basename(snapFile)}` : ''}`);
-  });
-}
-
 logHooks(plugin);
 recordWire(plugin);
-
-/** Request-level failure with a definite HTTP status (vs a generic 500). */
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of req) {
-    bytes += (chunk as Buffer).length;
-    if (bytes > 64 * 1024) throw new HttpError(413, 'request body too large');
-    chunks.push(chunk as Buffer);
-  }
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    // Deliberately constant message: JSON.parse errors echo request content.
-    throw new HttpError(400, 'invalid JSON body');
-  }
-}
-
-function json(res: http.ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
-
-function handleDashboard(_req: http.IncomingMessage, res: http.ServerResponse) {
-  const metrics = plugin.metrics();
-  json(res, 200, {
-    machines: MACHINES.map(({ name, region }, i) => ({
-      name,
-      region,
-      entry: remotes[i].entry,
-      ...machineStatus.get(name),
-      metrics: metrics[name] ?? null,
-    })),
-    lifecycle: lifecycleBody(),
-    cache: {
-      artifacts: cacheStats.paths.size,
-      hits: cacheStats.hits,
-      misses: cacheStats.misses,
-      bytes: cacheStats.bytes,
-    },
-    events: events.latest(40),
-  });
-}
 
 /** One request fanning out across three machines in three languages. */
 async function handlePipeline(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -598,15 +293,22 @@ async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerR
 // Machines are untrusted: cap how much of their response the host will
 // buffer and relay to the browser.
 const MAX_TYPES_BYTES = 1024 * 1024;
+const TYPES_CACHE_TTL_MS = 60_000;
+const typesCache = new Map<string, { types: string; url: string; at: number }>();
 
 async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const name = url.searchParams.get('machine') ?? '';
   const machine = remotes.find((r) => r.name === name);
   if (!machine) return json(res, 400, { error: `unknown machine "${name}"` });
   const base = machine.entry.replace(/^machinen\+/, '').split('?')[0];
+  const typesUrl = `${base}/mf-types.ts`;
+  const cached = typesCache.get(name);
+  if (cached && cached.url === typesUrl && Date.now() - cached.at < TYPES_CACHE_TTL_MS) {
+    return json(res, 200, { machine: name, url: cached.url, types: cached.types });
+  }
   let upstream: Response;
   try {
-    upstream = await fetch(`${base}/mf-types.ts`, { signal: AbortSignal.timeout(5_000) });
+    upstream = await fetch(typesUrl, { signal: AbortSignal.timeout(5_000) });
   } catch (error) {
     return json(res, 502, { error: `machine unreachable: ${errorMessage(error)}` });
   }
@@ -631,289 +333,12 @@ async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse,
       chunks.push(Buffer.from(value));
     }
   }
+  const types = Buffer.concat(chunks).toString();
+  typesCache.set(name, { types, url: typesUrl, at: Date.now() });
   json(res, 200, {
     machine: name,
-    url: `${base}/mf-types.ts`,
-    types: Buffer.concat(chunks).toString(),
-  });
-}
-// ----------------------------------------------------------------------------
-
-// ---- machine lifecycle story ------------------------------------------------
-// The five machines above are attached deployments (httpAttachDriver), so the
-// host can't freeze them. The lifecycle card boots its OWN machine from an
-// image via the process driver — the same federation runtime shape, but the
-// driver owns the process, so plugin.snapshotMachine() and restore-from-.snap
-// work. The restored guest then serves /mf-manifest.json + /mf-image +
-// /mf-snapshot (it is a registry of itself), so `machinen+pull+http://` entries
-// can fork it: steps 4/5 pull warm clones over plain HTTP. The CLI versions of
-// the legs: pnpm demo:snapshot (freeze/restore), pnpm demo:pull (fork-by-fetch);
-// the real-VM variant (machinenDriver(), whole-microVM dumps) is pnpm demo:machinen.
-
-const SNAP_DIR = path.resolve(import.meta.dirname, '../.machinen/web-snapshots');
-// Demo-scoped artifact cache, wiped on every lifecycle reset so each full run
-// honestly shows the image crossing the wire exactly once.
-const PULL_CACHE_DIR = path.resolve(import.meta.dirname, '../.machinen/web-cache');
-const SNAP_NAME = 'snap_machine';
-// Fixed port so the pull entries below are static: the process driver honors
-// ?port= on image entries, which makes the origin its own artifact registry
-// at a known address.
-const SNAP_PORT = Number(process.env.SNAPSHOT_PORT ?? 3811);
-// 100% HTTP: the host never reads machine code from disk. The origin's image
-// is PULLED from compute_machine's published /mf-image (the same bundle that
-// deployment runs) into the digest cache, then booted from the host's own
-// cache — code only ever moves between machines over HTTP. The default
-// derives from compute_machine's entry so an address override
-// (MACHINEN_REMOTE_COMPUTE_MACHINE) carries over automatically.
-const ORIGIN_IMAGE_SOURCE =
-  process.env.SNAPSHOT_IMAGE_SOURCE ??
-  remotes
-    .find((r) => r.name === 'compute_machine')!
-    .entry.replace(/^machinen\+/, '')
-    .split('?')[0];
-const ORIGIN_ENTRY =
-  `machinen+pull+${ORIGIN_IMAGE_SOURCE}?artifact=image&version=^1.0.0&port=${SNAP_PORT}`;
-
-const CLONE_IDS = ['a', 'b'] as const;
-type CloneId = (typeof CLONE_IDS)[number];
-const cloneName = (id: CloneId) => `snap_clone_${id}`;
-// The whole deployment story of a clone is this one entry string. The clone=
-// param only disambiguates the two forks: the runtime caches machines (and
-// memoizes pull resolutions) per entry string, and two independent clones
-// must not share one process.
-const cloneEntry = (id: CloneId) =>
-  `machinen+pull+http://127.0.0.1:${SNAP_PORT}?artifact=snapshot&version=^1.0.0&clone=${id}`;
-
-const snapPlugin = machinenPlugin({
-  driver: processDriver({ snapshotDir: SNAP_DIR }),
-  artifactCacheDir: PULL_CACHE_DIR,
-});
-const snapHost = createInstance({
-  name: 'lifecycle_host',
-  remotes: [{ name: SNAP_NAME, entry: ORIGIN_ENTRY }],
-  plugins: [snapPlugin],
-});
-logHooks(snapPlugin);
-recordWire(snapPlugin);
-
-interface CloneState {
-  /** Counter value the clone resumed at (the fork point). */
-  resumed: number;
-  /** Current counter value (diverges from the origin via /api/lifecycle/counter). */
-  value: number;
-  entry: string;
-  pulledBytes: number;
-  imageCacheHit: boolean;
-  pullMs: number;
-  /** Set when the entry pinned ?digest= and the resolver verified it (clone b). */
-  pinnedDigest?: string;
-}
-
-interface LifecycleState {
-  phase: 'cold' | 'running' | 'snapshotted' | 'restored' | 'forked';
-  value?: number;
-  snapFile?: string;
-  snapBytes?: number;
-  clones: Partial<Record<CloneId, CloneState>>;
-  busy: boolean;
-  /**
-   * The image digest learned from the step-4 pull (the booted clone's
-   * manifest advertises the artifact it runs). Step 5 pins its entry to it.
-   */
-  imageDigest?: string;
-}
-
-const lifecycle: LifecycleState = { phase: 'cold', clones: {}, busy: false };
-
-function lifecycleBody() {
-  const { busy: _busy, snapFile, ...rest } = lifecycle;
-  return {
-    ...rest,
-    snapFile: snapFile ? path.basename(snapFile) : undefined,
-    originPort: SNAP_PORT,
-  };
-}
-
-/** Serialize the lifecycle arc: one step at a time, valid phases only. */
-async function lifecycleStep<T>(
-  res: http.ServerResponse,
-  allowed: LifecycleState['phase'][],
-  step: () => Promise<T>,
-): Promise<void> {
-  if (lifecycle.busy) return json(res, 409, { error: 'a lifecycle step is already running' });
-  if (!allowed.includes(lifecycle.phase)) {
-    return json(res, 409, {
-      error: `step not valid in phase "${lifecycle.phase}" (expected ${allowed.join(' | ')})`,
-    });
-  }
-  lifecycle.busy = true;
-  try {
-    const extra = await step();
-    json(res, 200, { ...lifecycleBody(), ...extra, wire: wire() });
-  } finally {
-    lifecycle.busy = false;
-  }
-}
-
-/** Step 1 — boot & work. Also the arc's reset: clones, origin, cache all go. */
-async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await lifecycleStep(res, ['cold', 'running', 'snapshotted', 'restored', 'forked'], async () => {
-    // Full reset: kill origin + clones, wipe the artifact cache so the boot
-    // pull is honestly a miss, then (re)point the remote at the pull entry —
-    // a normal dynamic-remotes operation; force drops the cached container
-    // for the name. The image arrives over HTTP from compute_machine's
-    // /mf-image and boots from the host's own digest cache.
-    await snapPlugin.disposeMachines();
-    await rm(PULL_CACHE_DIR, { recursive: true, force: true });
-    cacheStats.reset();
-    // The reset is destructive and the pull below can fail (compute_machine
-    // is the chaos victim — it may be mid-respawn). Drop to a coherent cold
-    // state FIRST so a failed boot never reports a phase whose invariants
-    // (clones, processes, cache) were just wiped.
-    lifecycle.phase = 'cold';
-    lifecycle.value = undefined;
-    lifecycle.snapFile = undefined;
-    lifecycle.snapBytes = undefined;
-    lifecycle.clones = {};
-    lifecycle.imageDigest = undefined;
-    snapHost.registerRemotes([{ name: SNAP_NAME, entry: ORIGIN_ENTRY }], { force: true });
-    const counter = (await snapHost.loadRemote<CounterModule>(`${SNAP_NAME}/counter`))!;
-    await counter.increment();
-    await counter.increment();
-    lifecycle.value = await counter.increment();
-    lifecycle.phase = 'running';
-    return { loadRemote: `${SNAP_NAME}/counter` };
-  });
-}
-
-/** Step 2 — freeze the machine's app state into a .snap bundle, then kill the process. */
-async function handleLifecycleFreeze(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await lifecycleStep(res, ['running'], async () => {
-    const snapshot = (await snapPlugin.snapshotMachine(SNAP_NAME)) as { snapFile: string };
-    await snapPlugin.disposeMachines(); // the process is gone — state lives only in the bundle
-    logEvent('snapshot', `${SNAP_NAME} process killed — state lives in the .snap bundle`);
-    lifecycle.phase = 'snapshotted';
-    lifecycle.snapFile = snapshot.snapFile;
-    lifecycle.snapBytes = (await stat(snapshot.snapFile)).size;
-    return {};
-  });
-}
-
-/** Step 3 — restore: point the SAME remote name at the .snap and loadRemote again. */
-async function handleLifecycleRestore(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await lifecycleStep(res, ['snapshotted'], async () => {
-    // Same fixed port: the restored process is the pull origin for steps 4/5.
-    snapHost.registerRemotes(
-      [{ name: SNAP_NAME, entry: `machinen://${lifecycle.snapFile}?port=${SNAP_PORT}` }],
-      { force: true },
-    );
-    const counter = (await snapHost.loadRemote<CounterModule>(`${SNAP_NAME}/counter`))!;
-    const resumed = await counter.current();
-    const next = await counter.increment();
-    logEvent('restore', `${SNAP_NAME} restored from .snap — counter resumed at ${resumed}`);
-    lifecycle.phase = 'restored';
-    lifecycle.value = next;
-    return { resumed, next, loadRemote: `${SNAP_NAME}/counter` };
-  });
-}
-
-/** Steps 4/5 — fork by pull: register a pull entry against the origin, loadRemote. */
-async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerResponse) {
-  await lifecycleStep(res, ['restored', 'forked'], async () => {
-    const id = CLONE_IDS.find((c) => !lifecycle.clones[c]);
-    if (!id) throw new HttpError(409, 'both clones already exist — step 1 resets the arc');
-    const name = cloneName(id);
-    // Step 5 demonstrates ?digest= pinning: clone b's entry pins the image
-    // digest learned from the step-4 pull, so the resolver refuses to boot
-    // anything but exactly that code. Honest-data rule: if step 4 somehow
-    // didn't learn a digest, fail loudly — the UI must never claim a pin
-    // that doesn't exist.
-    if (id === 'b' && !lifecycle.imageDigest) {
-      throw new Error('step 4 recorded no image digest — cannot pin clone b');
-    }
-    const pin = id === 'b' ? lifecycle.imageDigest : undefined;
-    const entry = cloneEntry(id) + (pin ? `&digest=${pin}` : '');
-    // force: after a reset the MF runtime may still cache the previous
-    // clone's container under this name.
-    snapHost.registerRemotes([{ name, entry }], { force: true });
-    const counter = (await snapHost.loadRemote<CounterModule>(`${name}/counter`))!;
-    const resumed = await counter.current();
-    // The artifact hook events for THIS request carry the real pull stats.
-    // No fallbacks: fabricating "0 bytes · MISS" would violate the demo's
-    // honest-data rule, and a pull without an artifact event is a real bug.
-    const pull = wire().find(
-      (e): e is Extract<WireEvent, { type: 'artifact' }> =>
-        e.type === 'artifact' && e.machine === name,
-    );
-    if (!pull) throw new Error(`pull of "${name}" produced no artifact hook event`);
-    // The booted clone's own manifest advertises the image it runs — that
-    // digest (real hook data) is what step 5 will pin.
-    const ready = wire().find(
-      (e): e is Extract<WireEvent, { type: 'attach' }> =>
-        e.type === 'attach' && e.machine === name,
-    );
-    if (ready?.imageDigest) lifecycle.imageDigest = ready.imageDigest;
-    lifecycle.clones[id] = {
-      resumed,
-      value: resumed,
-      entry,
-      pulledBytes: pull.bytes,
-      imageCacheHit: pull.cacheHit,
-      pullMs: pull.ms,
-      pinnedDigest: pin,
-    };
-    lifecycle.phase = 'forked';
-    return { clone: id, resumed, loadRemote: `${name}/counter` };
-  });
-}
-
-type CounterTarget = 'origin' | CloneId;
-
-function isCounterTarget(value: unknown): value is CounterTarget {
-  return value === 'origin' || value === 'a' || value === 'b';
-}
-
-/** Increment one of the three counters — origin and clones diverge from here. */
-async function handleLifecycleCounter(req: http.IncomingMessage, res: http.ServerResponse) {
-  const { target } = await readBody(req);
-  if (!isCounterTarget(target)) {
-    return json(res, 400, { error: `expected target: origin | a | b, got "${String(target)}"` });
-  }
-  if (lifecycle.busy) return json(res, 409, { error: 'a lifecycle step is already running' });
-  let remote: string;
-  switch (target) {
-    case 'origin': {
-      if (!['running', 'restored', 'forked'].includes(lifecycle.phase)) {
-        return json(res, 409, { error: `origin is not running (phase "${lifecycle.phase}")` });
-      }
-      remote = SNAP_NAME;
-      break;
-    }
-    case 'a':
-    case 'b': {
-      if (!lifecycle.clones[target]) {
-        return json(res, 409, { error: `clone ${target} does not exist yet` });
-      }
-      remote = cloneName(target);
-      break;
-    }
-    default: {
-      const unreachable: never = target;
-      return json(res, 400, { error: `unknown target ${String(unreachable)}` });
-    }
-  }
-  const counter = (await snapHost.loadRemote<CounterModule>(`${remote}/counter`))!;
-  const value = await counter.increment();
-  if (target === 'origin') lifecycle.value = value;
-  else lifecycle.clones[target]!.value = value;
-  // `targetValue`, not `value`: lifecycleBody() already carries the origin's
-  // counter under `value` and must not be shadowed.
-  json(res, 200, {
-    ...lifecycleBody(),
-    target,
-    targetValue: value,
-    loadRemote: `${remote}/counter`,
-    wire: wire(),
+    url: typesUrl,
+    types,
   });
 }
 // ----------------------------------------------------------------------------
@@ -1068,35 +493,6 @@ async function handleRegionLatency(req: http.IncomingMessage, res: http.ServerRe
   json(res, 200, await upstream.json());
 }
 
-const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
-
-// Pretty page routes -> files in PUBLIC_DIR; other assets (*.css, *.js) are
-// served by filename. The asset pattern admits no '/' so paths can't escape
-// the dir.
-const PAGES: Record<string, string> = { '/': 'index.html', '/gravity': 'gravity.html' };
-const ASSET_RE = /^\/[A-Za-z0-9_-]+\.(css|js)$/;
-const ASSET_TYPES: Record<string, string> = { '.css': 'text/css', '.js': 'text/javascript' };
-
-/** Serve a page or asset from PUBLIC_DIR; false when the path is not static. */
-async function serveStatic(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  url: URL,
-): Promise<boolean> {
-  if (req.method !== 'GET') return false;
-  const page = PAGES[url.pathname];
-  const file = page ?? (ASSET_RE.test(url.pathname) ? url.pathname.slice(1) : undefined);
-  if (!file) return false;
-  try {
-    const body = await readFile(path.join(PUBLIC_DIR, file));
-    res.writeHead(200, { 'content-type': page ? 'text/html' : ASSET_TYPES[path.extname(file)] });
-    res.end(body);
-  } catch {
-    json(res, 404, { error: 'not found' });
-  }
-  return true;
-}
-
 type RouteHandler = (
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1104,7 +500,10 @@ type RouteHandler = (
 ) => Promise<void> | void;
 
 const routes = new Map<string, RouteHandler>([
-  ['GET /api/dashboard', handleDashboard],
+  [
+    'GET /api/dashboard',
+    (req, res) => handleDashboard(req, res, { plugin, machines: MACHINES, remotes, lifecycleBody }),
+  ],
   ['POST /api/pipeline', handlePipeline],
   ['GET /api/countdown', handleCountdown],
   ['POST /api/counter', handleCounter],

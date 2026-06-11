@@ -17,6 +17,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
 import { machinenPlugin, processDriver } from '@federated-compute/machinen-plugin';
+import { errorMessage, json } from './http-util.js';
 
 const PORT = Number(process.env.AGENT_PORT ?? 3810);
 const MACHINE = 'analytics_machine';
@@ -114,15 +115,10 @@ function deploy(): Promise<DeployReport> {
   return deploying;
 }
 
-function send(res: http.ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
-
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/status') {
-      return send(res, 200, {
+      return json(res, 200, {
         agent: 'region-agent',
         region: 'eu-west',
         entry: ANALYTICS_ENTRY,
@@ -132,11 +128,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/deploy') {
       const already = deployed !== undefined;
       const report = await deploy();
-      return send(res, 200, { ...report, alreadyDeployed: already });
+      return json(res, 200, { ...report, alreadyDeployed: already });
     }
-    send(res, 404, { error: 'not found' });
+    json(res, 404, { error: 'not found' });
   } catch (error) {
-    send(res, 502, { error: error instanceof Error ? error.message : String(error) });
+    json(res, 502, { error: errorMessage(error) });
   }
 });
 
