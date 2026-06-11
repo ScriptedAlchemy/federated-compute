@@ -147,7 +147,9 @@ try {
       // SurfaceFlinger a VBE framebuffer headless; init puts a root shell on
       // ttyS0 — the control channel for enabling adbd below.
       `-append 'root=/dev/ram0 androidboot.hardware=android_x86 nomodeset vga=788 console=ttyS0 quiet SRC= DATA=' ` +
-      '-cdrom /root/android.iso -vga std -display none ' +
+      // Same display setup as the web lab: the VNC server IS the display
+      // backend, usb-tablet gives absolute pointer events for VNC clicks.
+      '-cdrom /root/android.iso -vga std -vnc :0,websocket=15901 -usb -device usb-tablet ' +
       '-monitor unix:/root/qmon.sock,server,nowait ' +
       '-chardev socket,id=ser0,path=/root/serial.sock,server=on,wait=off,logfile=/root/serial.log ' +
       '-serial chardev:ser0 ' +
@@ -220,8 +222,15 @@ try {
   timings.restore = Date.now() - t0;
   log(`restored as vmm pid ${restored.pid} (${timings.restore}ms)`);
 
-  // No adb reconnect: the adb server, its TCP connection, and adbd were all
-  // INSIDE the frozen VM — the entire connection graph thawed intact.
+  // The guest's adb server thaws with the VM, but its TCP session can come
+  // back stale ("device offline") — a disconnect/reconnect always recovers.
+  await execRetry(
+    restored,
+    `adb disconnect 127.0.0.1:${ADB_FWD} >/dev/null 2>&1; ` +
+      `adb connect 127.0.0.1:${ADB_FWD} >/dev/null 2>&1; sleep 1; ` +
+      `adb devices | grep '127.0.0.1:${ADB_FWD}' | grep -qw device && echo online`,
+    'adb back online',
+  );
   const after = (await execRetry(restored, STATE_CMD, 'post-restore state')).split('\n').map((s) => s.trim());
   log(`after restore: pid=${after[0]} boot_id=${after[1]} uptime=${after[2].split(' ')[0]}s`);
   await execRetry(

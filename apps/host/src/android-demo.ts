@@ -13,8 +13,9 @@
 // mutation is an async job: POST kicks it off, GET /api/android/status polls
 // phase + a live progress log.
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import type http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -77,6 +78,11 @@ const INNER_MB = 768;
 const ISO_URL =
   'https://downloads.sourceforge.net/project/android-x86/Release%204.4/android-x86-4.4-r5.iso';
 const ADB_FWD = 15555; // guest-local forward into the inner device's adbd
+// QEMU's built-in websocket VNC listener (inside the machinen guest). A
+// gvproxy port forward maps a host loopback port onto it at boot/restore;
+// the host server splices browser websockets through (GET /vnc upgrade), so
+// page 04 runs noVNC straight against the device framebuffer.
+const VNC_WS_GUEST = 15901;
 const APP = 'com.android.settings';
 const APP_ACTIVITY = `${APP}/.Settings`;
 const ADB = `adb -s 127.0.0.1:${ADB_FWD}`;
@@ -140,6 +146,26 @@ interface AndroidState {
 const state: AndroidState = { phase: 'cold', busy: false, log: [], timings: {} };
 let vm: AndroidVm | undefined;
 let bundleDir: string | undefined;
+/** Host loopback port forwarded to the inner qemu's websocket VNC listener. */
+let vncHostPort: number | undefined;
+/** True from the moment the inner qemu launches until the VM dies. */
+let vncLive = false;
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address() as net.AddressInfo;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** The websocket VNC target for the host server's /vnc upgrade proxy. */
+export function androidVncPort(): number | undefined {
+  return vncLive && vm ? vncHostPort : undefined;
+}
 
 function logLine(line: string): void {
   state.log.push({ t: new Date().toISOString().slice(11, 19), line });
@@ -182,8 +208,24 @@ async function guestExecRetry(cmd: string, attempts = 15, timeoutMs = 60_000): P
 const consoleCmd = (cmd: string, waitSec = 4) =>
   `(printf '${cmd.replace(/'/g, `'\\''`)}\\n'; sleep ${waitSec}) | socat -T ${waitSec + 2} - UNIX-CONNECT:/root/serial.sock`;
 
+/**
+ * The adb server's TCP session can come back stale after a freeze/restore
+ * (`adb devices` reports the device offline); a disconnect/reconnect cycle
+ * always recovers it. Retried because the freshly-thawed guest can be slow.
+ */
+async function ensureAdbOnline(): Promise<void> {
+  await guestExecRetry(
+    `adb disconnect 127.0.0.1:${ADB_FWD} >/dev/null 2>&1; ` +
+      `adb connect 127.0.0.1:${ADB_FWD} >/dev/null 2>&1; sleep 1; ` +
+      `adb devices | grep '127.0.0.1:${ADB_FWD}' | grep -qw device && echo online`,
+    10,
+    30_000,
+  );
+}
+
 /** App pid + kernel boot_id + uptime, read over adb. The whole verdict. */
 async function captureEvidence(withShot: boolean): Promise<Evidence> {
+  await ensureAdbOnline();
   const raw = await guestExecRetry(
     `${ADB} shell "pidof ${APP}; cat /proc/sys/kernel/random/boot_id; cat /proc/uptime" | tr -d '\\r'`,
   );
@@ -203,6 +245,7 @@ async function captureEvidence(withShot: boolean): Promise<Evidence> {
 async function killVm(): Promise<void> {
   await vm?.kill().catch(() => {});
   vm = undefined;
+  vncLive = false;
 }
 
 // ---- the jobs ----------------------------------------------------------------
@@ -231,6 +274,7 @@ async function jobPowerOn(): Promise<void> {
 
   setStep('booting the outer machinen microVM (KVM)…');
   const dtb = runtime.resolveBaseDtb?.();
+  vncHostPort = await freePort();
   vm = await runtime.boot({
     image: runtime.resolveBaseRootfs(),
     kernel: runtime.resolveBaseKernel(),
@@ -239,6 +283,7 @@ async function jobPowerOn(): Promise<void> {
     name: `android-lab-${process.pid}`,
     memory: OUTER_MIB,
     rootDiskSizeBytes: 8 * 1024 ** 3,
+    portForward: [{ hostPort: vncHostPort, guestPort: VNC_WS_GUEST }],
     timeoutMs: 180_000,
   });
   state.timings.outerBootMs = Date.now() - t0;
@@ -271,7 +316,12 @@ async function jobPowerOn(): Promise<void> {
       // bootloader path sets a VBE framebuffer so SurfaceFlinger renders
       // headless, and init puts a root shell on ttyS0 (our control channel).
       `-append 'root=/dev/ram0 androidboot.hardware=android_x86 nomodeset vga=788 console=ttyS0 quiet SRC= DATA=' ` +
-      '-cdrom /root/android.iso -vga std -display none ' +
+      '-cdrom /root/android.iso -vga std ' +
+      // The display backend IS the VNC server: native RFB on :0 plus a
+      // websocket listener page 04's noVNC reaches through the forward.
+      // usb-tablet gives VNC absolute pointer events — clicks land where
+      // the cursor is, which a PS/2 relative mouse cannot guarantee.
+      `-vnc :0,websocket=${VNC_WS_GUEST} -usb -device usb-tablet ` +
       '-monitor unix:/root/qmon.sock,server,nowait ' +
       '-chardev socket,id=ser0,path=/root/serial.sock,server=on,wait=off,logfile=/root/serial.log ' +
       '-serial chardev:ser0 ' +
@@ -279,6 +329,8 @@ async function jobPowerOn(): Promise<void> {
       '-daemonize -pidfile /root/qemu.pid',
     60_000,
   );
+  vncLive = true;
+  logLine('device framebuffer is live — watch the boot on page 04 (device screen)');
 
   const deadline = Date.now() + ANDROID_BOOT_TIMEOUT_MS;
   let booted = false;
@@ -356,13 +408,19 @@ async function jobResume(): Promise<void> {
   setStep('restoring the VM from the vmstate bundle…');
   const t = Date.now();
   const dtb = runtime.resolveBaseDtb?.();
+  // Fresh host port, same guest port: the inner qemu's VNC listener was
+  // frozen with the VM and thaws still listening — only the host-side
+  // forward is new. Browser VNC sessions reconnect; the device kept drawing.
+  vncHostPort = await freePort();
   vm = await runtime.restore({
     snapDir: bundleDir,
     kernel: runtime.resolveBaseKernel(),
     ...(dtb ? { dtb } : {}),
     name: `android-lab-restored-${process.pid}-${Date.now().toString(36)}`,
+    portForward: [{ hostPort: vncHostPort, guestPort: VNC_WS_GUEST }],
     timeoutMs: 300_000,
   });
+  vncLive = true;
   state.timings.restoreMs = Date.now() - t;
   logLine(`VM restored in ${state.timings.restoreMs}ms — checking on the device…`);
 
@@ -400,6 +458,8 @@ function statusBody() {
     ...state,
     kvm: existsSync('/dev/kvm'),
     app: APP,
+    /** Page 04 connects noVNC to GET /vnc whenever this is true. */
+    vncLive: androidVncPort() !== undefined,
     config: { outerMib: OUTER_MIB, innerMb: INNER_MB, image: 'android-x86 4.4-r5' },
   };
 }

@@ -223,6 +223,13 @@ async function runSmoke(base) {
   }
   console.log(`[smoke] GET /android -> 200, lab status cold (kvm=${androidState.kvm})`);
 
+  const screen = await fetch(`${base}/screen`);
+  const screenBody = await screen.text();
+  if (screen.status !== 200 || !screenBody.includes('demo-base.js')) {
+    throw new Error(`GET /screen (${screen.status}) does not reference demo-base.js`);
+  }
+  console.log('[smoke] GET /screen -> 200, references demo-base.js');
+
   const css = await fetch(`${base}/demo-base.css`);
   if (css.status !== 200) throw new Error(`GET /demo-base.css -> ${css.status}`);
   const sharedJs = await fetch(`${base}/demo-base.js`);

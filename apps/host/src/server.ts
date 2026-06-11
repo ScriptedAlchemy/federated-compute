@@ -14,6 +14,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { once } from 'node:events';
 import http from 'node:http';
 import { readFile, rm, stat } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
 import {
@@ -23,6 +24,7 @@ import {
   type MachinenPlugin,
 } from '@federated-compute/machinen-plugin';
 import {
+  androidVncPort,
   disposeAndroidLab,
   handleAndroidBoot,
   handleAndroidFreeze,
@@ -1030,6 +1032,7 @@ const PAGES: Record<string, string> = {
   '/': 'index.html',
   '/gravity': 'gravity.html',
   '/android': 'android.html',
+  '/screen': 'screen.html',
 };
 const ASSET_RE = /^\/[A-Za-z0-9_-]+\.(css|js)$/;
 const ASSET_TYPES: Record<string, string> = { '.css': 'text/css', '.js': 'text/javascript' };
@@ -1101,6 +1104,32 @@ const server = http.createServer(async (req, res) => {
     if (error instanceof HttpError) return json(res, error.status, { error: error.message });
     json(res, 500, { error: errorMessage(error) });
   }
+});
+
+// GET /vnc upgrade: splice the browser's websocket onto the android lab's
+// forwarded qemu VNC listener. qemu speaks the websocket protocol itself, so
+// this is a dumb TCP pipe — the original upgrade request is replayed verbatim
+// and qemu completes the handshake.
+server.on('upgrade', (req, socket, head) => {
+  const pathname = new URL(req.url ?? '/', `http://localhost:${PORT}`).pathname;
+  const target = pathname === '/vnc' ? androidVncPort() : undefined;
+  if (!target) {
+    socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+    return;
+  }
+  const upstream = net.connect(target, '127.0.0.1');
+  upstream.on('connect', () => {
+    // Path rewritten to '/': qemu's websocket server 404s anything else.
+    const lines = [`${req.method} / HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    }
+    upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('error', () => upstream.destroy());
 });
 
 server.listen(PORT, () => {

@@ -231,6 +231,16 @@ same app pid, same kernel `boot_id`, uptime continued — with screenshots of
 the same app instance taken on both sides of the freeze. Requires Linux with
 usable `/dev/kvm` (or Apple Silicon).
 
+The fourth page (http://localhost:3800/screen) is a live, clickable VNC view
+of the same device: the inner qemu's display backend is its built-in
+websocket VNC server, a gvproxy forward maps it onto a host loopback port,
+and the host server splices the browser's `GET /vnc` upgrade onto that port
+as a dumb TCP pipe (qemu completes the handshake itself; noVNC renders).
+Mouse and keyboard go the whole way down — usb-tablet absolute pointer
+events land as Android touch input. Freezing the lab visibly kills the
+session (the far end of the websocket stops existing); the page reconnects
+against the thawed device, which kept drawing the same frame.
+
 ## machinen.config.json
 
 A consumer app declares its machines once, in a `machinen.config.json` that
