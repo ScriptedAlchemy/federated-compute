@@ -46,6 +46,27 @@ export interface PullResolution {
 export interface ResolvePullOptions {
   /** Where artifacts are cached. Default: .machinen/cache */
   cacheDir?: string;
+  /**
+   * Deadline for header/small fetches: the manifest, the snapshot body, and
+   * an artifact response's headers. Default 30s.
+   */
+  fetchTimeoutMs?: number;
+  /**
+   * Max stall between streamed artifact body chunks before the download is
+   * failed and cancelled. Resets on every chunk, so it bounds stalls without
+   * capping the total transfer time of large artifacts. Default 30s.
+   */
+  streamIdleTimeoutMs?: number;
+}
+
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
+
+/** ResolvePullOptions with defaults applied, threaded through resolution. */
+interface PullContext {
+  cacheDir: string;
+  fetchTimeoutMs: number;
+  streamIdleTimeoutMs: number;
 }
 
 /** The wire shape of an `app-state@1` snapshot (`GET /mf-snapshot`). */
@@ -64,8 +85,12 @@ interface MaterializedSnapBundle {
   createdAt: string;
 }
 
+function failMessage(spec: MachineSpec, message: string): string {
+  return `[machinen-plugin] pull "${spec.remoteName}" (${spec.entry}): ${message}`;
+}
+
 function fail(spec: MachineSpec, message: string): never {
-  throw new Error(`[machinen-plugin] pull "${spec.remoteName}" (${spec.entry}): ${message}`);
+  throw new Error(failMessage(spec, message));
 }
 
 function sha256Hex(bytes: Buffer | string): string {
@@ -88,15 +113,63 @@ export function joinArtifactUrl(base: string, href: string): string {
   return `${base.replace(/\/+$/, '')}/${href.replace(/^\/+/, '')}`;
 }
 
-async function fetchOk(spec: MachineSpec, url: string, what: string): Promise<Response> {
+/**
+ * Fetch with a deadline. `scope: 'request'` bounds the entire exchange —
+ * right for the small JSON fetches (manifest, snapshot) whose bodies are
+ * read immediately after. `scope: 'headers'` disarms the deadline once the
+ * response starts: a GB-scale artifact body must not be capped by a flat
+ * timeout, so streaming callers bound stalls with the idle timeout instead.
+ */
+async function fetchOk(
+  spec: MachineSpec,
+  url: string,
+  what: string,
+  timeoutMs: number,
+  scope: 'request' | 'headers' = 'request',
+): Promise<Response> {
+  let headerTimer: NodeJS.Timeout | undefined;
+  let signal: AbortSignal;
+  if (scope === 'headers') {
+    const controller = new AbortController();
+    headerTimer = setTimeout(() => controller.abort(), timeoutMs);
+    headerTimer.unref?.();
+    signal = controller.signal;
+  } else {
+    signal = AbortSignal.timeout(timeoutMs);
+  }
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, { signal });
   } catch (error) {
+    if (signal.aborted) fail(spec, `${what} request to ${url} timed out after ${timeoutMs}ms`);
     fail(spec, `${what} request to ${url} failed: ${(error as Error).message}`);
+  } finally {
+    clearTimeout(headerTimer);
   }
   if (!res.ok) fail(spec, `${what} request to ${url} answered ${res.status}`);
   return res;
+}
+
+/**
+ * Read a small response body whose request carries a 'request'-scoped
+ * deadline, converting a mid-body abort into the machine-named timeout
+ * error instead of a bare DOMException.
+ */
+async function readBodyOk(
+  spec: MachineSpec,
+  res: Response,
+  url: string,
+  what: string,
+  timeoutMs: number,
+): Promise<string> {
+  try {
+    return await res.text();
+  } catch (error) {
+    if ((error as Error).name === 'TimeoutError' || (error as Error).name === 'AbortError') {
+      fail(spec, `${what} request to ${url} timed out after ${timeoutMs}ms while reading the body`);
+    }
+    fail(spec, `${what} body from ${url} could not be read: ${(error as Error).message}`);
+  }
 }
 
 function checkOriginVersion(spec: MachineSpec, manifest: MachineExposeManifest): void {
@@ -209,6 +282,7 @@ async function streamVerifiedToTemp(
   res: Response,
   expectedDigest: string,
   temp: string,
+  idleTimeoutMs: number,
 ): Promise<number> {
   if (!res.body) fail(spec, 'image artifact response had no body');
   // Open before taking the reader: an open failure must not strand an
@@ -225,15 +299,40 @@ async function streamVerifiedToTemp(
   let bytesFetched = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      // Each chunk re-arms the idle deadline: a stalled origin is bounded
+      // without putting a flat cap on the total transfer time.
+      let idleTimer: NodeJS.Timeout | undefined;
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(() => {
+              reject(
+                new Error(
+                  failMessage(
+                    spec,
+                    `image artifact body stalled: no data for ${idleTimeoutMs}ms (stream idle timeout)`,
+                  ),
+                ),
+              );
+            }, idleTimeoutMs);
+            idleTimer.unref?.();
+          }),
+        ]);
+      } finally {
+        clearTimeout(idleTimer);
+      }
+      const { done, value } = chunk;
       if (done) break;
       hash.update(value);
       bytesFetched += value.byteLength;
       await file.write(value);
     }
   } catch (error) {
-    // Write failure mid-stream (ENOSPC at GB scale): cancel the body so the
-    // socket and remaining download die with the request instead of leaking.
+    // Mid-stream failure — a write error (ENOSPC at GB scale) or an idle
+    // stall: cancel the body so the socket and remaining download die with
+    // the request instead of leaking.
     await reader.cancel().catch(() => {});
     throw error;
   } finally {
@@ -266,21 +365,28 @@ async function ensureImageCached(
   spec: MachineSpec,
   descriptor: ArtifactDescriptor,
   expectedDigest: string,
-  cacheDir: string,
+  ctx: PullContext,
 ): Promise<CachedImage> {
   const hex = parseDigest(spec, expectedDigest, 'image artifact');
   const ext = imageExt(spec, descriptor);
-  const cachePath = path.join(cacheDir, `${hex}${ext}`);
+  const cachePath = path.join(ctx.cacheDir, `${hex}${ext}`);
 
   if (await verifyCachedFile(cachePath, hex)) {
     return { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
 
   const url = joinArtifactUrl(spec.url!, descriptor.href);
-  const res = await fetchOk(spec, url, 'image artifact');
+  // 'headers' scope: the body is a stream guarded by the idle timeout.
+  const res = await fetchOk(spec, url, 'image artifact', ctx.fetchTimeoutMs, 'headers');
   const temp = tempCachePath(cachePath);
   try {
-    const bytesFetched = await streamVerifiedToTemp(spec, res, expectedDigest, temp);
+    const bytesFetched = await streamVerifiedToTemp(
+      spec,
+      res,
+      expectedDigest,
+      temp,
+      ctx.streamIdleTimeoutMs,
+    );
     await commitAtomic(temp, cachePath, hex);
     return { localPath: cachePath, bytesFetched, fromCache: false };
   } catch (error) {
@@ -341,7 +447,7 @@ function rewriteSpec(spec: MachineSpec, localPath: string): MachineSpec {
 async function resolveImage(
   spec: MachineSpec,
   manifest: MachineExposeManifest,
-  cacheDir: string,
+  ctx: PullContext,
   startedAt: number,
 ): Promise<PullResolution> {
   const descriptor = requireDescriptor(spec, manifest, 'image');
@@ -356,7 +462,7 @@ async function resolveImage(
     );
   }
   const expected = pinned ?? descriptor.digest;
-  const cached = await ensureImageCached(spec, descriptor, expected ?? '', cacheDir);
+  const cached = await ensureImageCached(spec, descriptor, expected ?? '', ctx);
 
   return {
     spec: rewriteSpec(spec, cached.localPath),
@@ -372,7 +478,7 @@ async function resolveImage(
 async function resolveSnapshot(
   spec: MachineSpec,
   manifest: MachineExposeManifest,
-  cacheDir: string,
+  ctx: PullContext,
   startedAt: number,
 ): Promise<PullResolution> {
   const descriptor = requireDescriptor(spec, manifest, 'snapshot');
@@ -380,8 +486,8 @@ async function resolveSnapshot(
   checkPlatform(spec, descriptor);
 
   const url = joinArtifactUrl(spec.url!, descriptor.href);
-  const res = await fetchOk(spec, url, 'snapshot artifact');
-  const snapshotText = await res.text();
+  const res = await fetchOk(spec, url, 'snapshot artifact', ctx.fetchTimeoutMs);
+  const snapshotText = await readBodyOk(spec, res, url, 'snapshot artifact', ctx.fetchTimeoutMs);
   let parsed: unknown;
   try {
     parsed = JSON.parse(snapshotText);
@@ -416,7 +522,7 @@ async function resolveSnapshot(
   let cachedImage: CachedImage;
   if (imageDescriptor && originDigest === snapshot.imageDigest) {
     checkPlatform(spec, imageDescriptor);
-    cachedImage = await ensureImageCached(spec, imageDescriptor, snapshot.imageDigest!, cacheDir);
+    cachedImage = await ensureImageCached(spec, imageDescriptor, snapshot.imageDigest!, ctx);
   } else {
     // The cache may still hold it (e.g. pinned earlier); ext must come from
     // the image descriptor when present, else we cannot name the file.
@@ -430,7 +536,7 @@ async function resolveSnapshot(
           ' and the digest is not in the local cache',
       );
     if (!imageDescriptor) notCached();
-    const cachePath = path.join(cacheDir, `${imageDigest}${imageExt(spec, imageDescriptor)}`);
+    const cachePath = path.join(ctx.cacheDir, `${imageDigest}${imageExt(spec, imageDescriptor)}`);
     if (!(await verifyCachedFile(cachePath, imageDigest))) notCached();
     cachedImage = { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
@@ -445,7 +551,7 @@ async function resolveSnapshot(
   const bundleJson = JSON.stringify(bundle, null, 2);
   // Content-addressed bundle name: identical pulled state reuses one file,
   // and a memoized resolution stays valid across crash-restarts.
-  const snapPath = path.join(cacheDir, `${sha256Hex(bundleJson)}.snap`);
+  const snapPath = path.join(ctx.cacheDir, `${sha256Hex(bundleJson)}.snap`);
   await writeAtomic(snapPath, bundleJson);
 
   return {
@@ -476,12 +582,22 @@ export async function resolvePullEntry(
     );
   }
   const startedAt = Date.now();
-  const cacheDir = options.cacheDir ?? DEFAULT_ARTIFACT_CACHE_DIR;
-  await mkdir(cacheDir, { recursive: true });
+  const ctx: PullContext = {
+    cacheDir: options.cacheDir ?? DEFAULT_ARTIFACT_CACHE_DIR,
+    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    streamIdleTimeoutMs: options.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  };
+  await mkdir(ctx.cacheDir, { recursive: true });
 
   const manifestUrl = `${spec.url.replace(/\/+$/, '')}/mf-manifest.json`;
-  const res = await fetchOk(spec, manifestUrl, 'origin manifest');
-  const manifest = (await res.json().catch(() => undefined)) as MachineExposeManifest | undefined;
+  const res = await fetchOk(spec, manifestUrl, 'origin manifest', ctx.fetchTimeoutMs);
+  const manifestText = await readBodyOk(spec, res, manifestUrl, 'origin manifest', ctx.fetchTimeoutMs);
+  let manifest: MachineExposeManifest | undefined;
+  try {
+    manifest = JSON.parse(manifestText) as MachineExposeManifest;
+  } catch {
+    manifest = undefined; // non-JSON manifests fall through to the protocol check
+  }
   if (manifest?.protocol !== 3) {
     fail(
       spec,
@@ -495,9 +611,9 @@ export async function resolvePullEntry(
   const artifact = selectArtifact(spec);
   switch (artifact) {
     case 'image':
-      return resolveImage(spec, manifest, cacheDir, startedAt);
+      return resolveImage(spec, manifest, ctx, startedAt);
     case 'snapshot':
-      return resolveSnapshot(spec, manifest, cacheDir, startedAt);
+      return resolveSnapshot(spec, manifest, ctx, startedAt);
     default: {
       const unreachable: never = artifact;
       throw new Error(`[machinen-plugin] unknown artifact kind: ${String(unreachable)}`);

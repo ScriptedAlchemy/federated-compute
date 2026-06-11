@@ -42,6 +42,10 @@ export interface MachinesOptions {
   configDir?: string;
   /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
   artifactCacheDir?: string;
+  /** Deadline for a pull entry's header/small fetches (manifest, snapshot). Default 30s. */
+  artifactFetchTimeoutMs?: number;
+  /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
+  artifactStreamIdleTimeoutMs?: number;
 }
 
 export interface MachineModuleOptions {
@@ -112,6 +116,8 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     bootTimeoutMs: options.bootTimeoutMs,
     calls: options.calls,
     artifactCacheDir: options.artifactCacheDir,
+    artifactFetchTimeoutMs: options.artifactFetchTimeoutMs,
+    artifactStreamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
   });
 
   clientCounter++;

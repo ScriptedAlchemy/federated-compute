@@ -34,6 +34,10 @@ export interface MachinenPluginOptions {
   calls?: CallPolicy;
   /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
   artifactCacheDir?: string;
+  /** Deadline for a pull entry's header/small fetches (manifest, snapshot). Default 30s. */
+  artifactFetchTimeoutMs?: number;
+  /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
+  artifactStreamIdleTimeoutMs?: number;
 }
 
 export type MachinenPlugin = ModuleFederationRuntimePlugin & {
@@ -155,7 +159,11 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     if (!resolving) {
       resolving = (async () => {
         await machineHooks.beforeArtifactFetch.emit({ spec: parsed });
-        const resolution = await resolvePullEntry(parsed, { cacheDir: options.artifactCacheDir });
+        const resolution = await resolvePullEntry(parsed, {
+          cacheDir: options.artifactCacheDir,
+          fetchTimeoutMs: options.artifactFetchTimeoutMs,
+          streamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
+        });
         await machineHooks.onArtifactFetched.emit({ spec: parsed, resolution });
         return resolution.spec;
       })();
