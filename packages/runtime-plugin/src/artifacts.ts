@@ -218,6 +218,32 @@ function imageExt(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
   return ext;
 }
 
+interface VerifyMemoEntry {
+  hex: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/**
+ * Files this process has already hash-verified, keyed by absolute path. A
+ * memo hit (same size + mtime) skips the O(size) re-hash that would
+ * otherwise run on EVERY cache hit — fatal to "near-instant HIT" at GB
+ * scale. Accepted edge: a tamper that preserves both size and mtime passes
+ * the memo within this process; cross-process paranoia is preserved because
+ * every process full-hashes a file on first touch.
+ */
+const verifyMemo = new Map<string, VerifyMemoEntry>();
+
+/** Test-only observability for the memo (counts hits vs full hashes). */
+export const verifyMemoCounters = { hits: 0, fullVerifies: 0 };
+
+/** Test-only: clear the verification memo and its counters. */
+export function resetVerifyMemo(): void {
+  verifyMemo.clear();
+  verifyMemoCounters.hits = 0;
+  verifyMemoCounters.fullVerifies = 0;
+}
+
 /**
  * True when the cached artifact exists AND still hashes to the digest.
  * Streams the verification: `readFile` would buffer the whole artifact and
@@ -225,6 +251,27 @@ function imageExt(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
  * at exactly the bundle sizes vmstate federation targets.
  */
 async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean> {
+  const memoKey = path.resolve(cachePath);
+  let entryStat;
+  try {
+    entryStat = await stat(cachePath);
+  } catch {
+    verifyMemo.delete(memoKey);
+    return false; // missing: a plain miss, nothing to evict
+  }
+  const memo = verifyMemo.get(memoKey);
+  if (
+    memo &&
+    memo.hex === hex &&
+    memo.size === entryStat.size &&
+    memo.mtimeMs === entryStat.mtimeMs
+  ) {
+    verifyMemoCounters.hits++;
+    return true;
+  }
+  verifyMemo.delete(memoKey);
+
+  verifyMemoCounters.fullVerifies++;
   const hash = createHash('sha256');
   try {
     const stream: AsyncIterable<Buffer> = createReadStream(cachePath);
@@ -232,12 +279,17 @@ async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean
       hash.update(chunk);
     }
   } catch {
-    // Missing or unreadable (even a directory squatting on the path): treat
-    // as a miss and clear the way so the re-download can land.
+    // Unreadable (even a directory squatting on the path): treat as a miss
+    // and clear the way so the re-download can land.
     await rm(cachePath, { recursive: true, force: true }).catch(() => {});
     return false;
   }
-  if (hash.digest('hex') === hex) return true;
+  if (hash.digest('hex') === hex) {
+    // Record the pre-read stat: if the file changed mid-hash, the next
+    // verify sees a stale memo and re-hashes instead of trusting it.
+    verifyMemo.set(memoKey, { hex, size: entryStat.size, mtimeMs: entryStat.mtimeMs });
+    return true;
+  }
   // Corrupt entry (partial write, disk fault): evict and re-download. An
   // eviction failure (file held open elsewhere) still degrades to a miss.
   await quarantineEvict(cachePath);
