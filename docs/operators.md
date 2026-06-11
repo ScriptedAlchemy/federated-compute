@@ -136,6 +136,17 @@ Operational notes:
 - `beforeArtifactFetch` / `onArtifactFetched` hooks report descriptor,
   bytes fetched, cache hit/miss, and duration per pull.
 
+Artifact pulls are resolver-level fetches and are **deliberately not
+mediated by the per-machine call circuit breaker**: a breaker guards call
+traffic against a machine that keeps failing, while a pull is deployment
+traffic against the artifact's origin — opening the breaker on a flaky
+download would also fail-fast healthy calls, and vice versa. Pulls are
+bounded instead by their own timeouts: a flat 30s deadline on header/small
+fetches (manifest, snapshot) and a 30s per-chunk idle timeout on streaming
+artifact bodies that resets on every chunk, so stalls are caught without
+capping the total transfer time of large images (`artifactFetchTimeoutMs` /
+`artifactStreamIdleTimeoutMs` to tune).
+
 **Attach to state you share, pull state you want to own.** Every pull is an
 independent copy — perfect for forks, per-PR environments, and scale-out
 from one warm snapshot; wrong for big stateful singletons (three pulled
