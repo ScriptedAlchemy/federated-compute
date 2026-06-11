@@ -257,9 +257,12 @@ same config:
 
 - **No arguments**: regenerates one binding file per machine in
   `bindgen.outDir`, plus an `index.ts` barrel (a namespace export per machine
-  and flat re-exports for names that are unambiguous across machines).
+  and flat re-exports for names that are unambiguous across machines). Stale
+  auto-generated `.ts` bindings for removed machines are pruned; hand-written
+  `.ts` files are left alone unless they carry the auto-generated marker.
 - `--check`: diffs against disk and exits 1 on drift without writing — the
-  CI gate (`node scripts/bindgen.mjs --check` in this repo).
+  CI gate (`node scripts/bindgen.mjs --check` in this repo). It also reports
+  stale generated bindings without deleting them.
 - `--url <machine-url> --out <file.ts>`: ad hoc single-machine mode, no
   config needed.
 

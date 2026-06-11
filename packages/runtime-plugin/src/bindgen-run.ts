@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   bindingExportNames,
@@ -25,6 +25,8 @@ export interface BindgenRunResult {
   machines: BindgenMachineResult[];
   /** The index.ts barrel result; absent when every machine errored. */
   barrel?: BindgenMachineResult;
+  /** Stale auto-generated .ts files pruned in write mode, or dirty in check mode. */
+  pruned: string[];
 }
 
 export interface BindgenRunOptions {
@@ -45,6 +47,8 @@ interface FailedMachine {
   error: string;
 }
 
+const AUTO_GENERATED_MARKER = 'AUTO-GENERATED';
+
 async function reconcile(
   file: string,
   source: string,
@@ -56,6 +60,34 @@ async function reconcile(
   }
   const existing = await readFile(file, 'utf8').catch(() => undefined);
   return existing === source ? 'clean' : 'drift';
+}
+
+async function findStaleGeneratedFiles(outDir: string, keep: Set<string>): Promise<string[]> {
+  const entries = await readdir(outDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const stale: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+    const file = path.join(outDir, entry.name);
+    if (keep.has(file)) continue;
+    const source = await readFile(file, 'utf8');
+    if (source.includes(AUTO_GENERATED_MARKER)) stale.push(file);
+  }
+  return stale.sort((a, b) => a.localeCompare(b));
+}
+
+async function reconcileStaleGeneratedFiles(
+  outDir: string,
+  keep: Set<string>,
+  check: boolean,
+): Promise<string[]> {
+  const stale = await findStaleGeneratedFiles(outDir, keep);
+  if (!check) {
+    await Promise.all(stale.map((file) => rm(file, { force: true })));
+  }
+  return stale;
 }
 
 /**
@@ -99,11 +131,13 @@ export async function runBindgenFromConfig(
 
   const machines: BindgenMachineResult[] = [];
   const barrelInput: { name: string; exportNames: string[] }[] = [];
+  const keep = new Set<string>();
   for (const item of generated) {
     if ('error' in item) {
       machines.push({ name: item.name, file: item.file, status: 'error', error: item.error });
       continue;
     }
+    keep.add(item.file);
     machines.push({
       name: item.name,
       file: item.file,
@@ -117,10 +151,14 @@ export async function runBindgenFromConfig(
   let barrel: BindgenMachineResult | undefined;
   if (barrelInput.length) {
     const file = path.join(outDir, 'index.ts');
+    keep.add(file);
     barrel = { name: 'index', file, status: await reconcile(file, generateBarrel(barrelInput), check) };
   }
 
+  const pruned = await reconcileStaleGeneratedFiles(outDir, keep, check);
   const all = barrel ? [...machines, barrel] : machines;
-  const ok = all.every((m) => m.status === 'written' || m.status === 'clean');
-  return { ok, outDir, machines, barrel };
+  const ok =
+    all.every((m) => m.status === 'written' || m.status === 'clean') &&
+    (!check || pruned.length === 0);
+  return { ok, outDir, machines, barrel, pruned };
 }

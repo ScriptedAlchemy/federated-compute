@@ -152,4 +152,44 @@ describe('runBindgenFromConfig', () => {
       "export { math } from './types_machine';",
     );
   });
+
+  test('write mode prunes stale generated binding files but preserves user files', async () => {
+    const guest = await startGuest('prune_machine');
+    const config = makeConfig({
+      prune_machine: { url: `machinen+http://127.0.0.1:${guest.port}` },
+    });
+    await runBindgenFromConfig(config, {});
+    const outDir = path.join(config.dir, 'src/generated');
+    const stale = path.join(outDir, 'removed_machine.ts');
+    const userFile = path.join(outDir, 'notes.ts');
+    writeFileSync(stale, '// AUTO-GENERATED from an old machine by machinen bindgen.\nexport {};\n');
+    writeFileSync(userFile, 'export const handwritten = true;\n');
+
+    const result = await runBindgenFromConfig(config, {});
+
+    expect(result.ok).toBe(true);
+    expect(result.pruned).toEqual([stale]);
+    expect(existsSync(stale)).toBe(false);
+    expect(readFileSync(userFile, 'utf8')).toBe('export const handwritten = true;\n');
+  });
+
+  test('check mode reports stale generated bindings without deleting any file', async () => {
+    const guest = await startGuest('check_prune_machine');
+    const config = makeConfig({
+      check_prune_machine: { url: `machinen+http://127.0.0.1:${guest.port}` },
+    });
+    await runBindgenFromConfig(config, {});
+    const outDir = path.join(config.dir, 'src/generated');
+    const stale = path.join(outDir, 'removed_machine.ts');
+    const userFile = path.join(outDir, 'notes.ts');
+    writeFileSync(stale, '// AUTO-GENERATED from an old machine by machinen bindgen.\nexport {};\n');
+    writeFileSync(userFile, 'export const handwritten = true;\n');
+
+    const result = await runBindgenFromConfig(config, { check: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.pruned).toEqual([stale]);
+    expect(existsSync(stale)).toBe(true);
+    expect(readFileSync(userFile, 'utf8')).toBe('export const handwritten = true;\n');
+  });
 });

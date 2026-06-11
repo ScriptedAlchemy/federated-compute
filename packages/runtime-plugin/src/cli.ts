@@ -72,6 +72,10 @@ async function runConfig(check: boolean): Promise<void> {
     if (m.status === 'error') console.error(`machinen-bindgen: ${m.name}: ERROR ${m.error}`);
     else console.log(`machinen-bindgen: ${m.status.padEnd(7)} ${rel}`);
   }
+  for (const file of result.pruned) {
+    const rel = path.relative(process.cwd(), file);
+    console.log(`machinen-bindgen: ${(check ? 'stale' : 'pruned').padEnd(7)} ${rel}`);
+  }
   if (!result.ok) {
     if (check) console.error('machinen-bindgen: bindings drifted or failed — run `machinen-bindgen` to regenerate');
     process.exit(1);
