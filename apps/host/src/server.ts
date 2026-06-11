@@ -856,11 +856,30 @@ async function handleGravityDeploy(_req: http.IncomingMessage, res: http.ServerR
 }
 // ----------------------------------------------------------------------------
 
+/**
+ * The WAN latency a report actually ran at, read from the latency proxy's
+ * control endpoint (instant — the control path skips the simulated delay).
+ * Null when the link is unreachable; the UI omits the annotation honestly.
+ */
+async function currentWanLatencyMs(): Promise<number | null> {
+  try {
+    const upstream = await fetch(`${REGION_LINKS[0]}/__latency`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!upstream.ok) return null;
+    const body = (await upstream.json()) as { ms?: unknown };
+    return typeof body.ms === 'number' ? body.ms : null;
+  } catch {
+    return null;
+  }
+}
+
 // Data gravity: the same report, two topologies. The host's db_machine entry
 // routes through the simulated WAN, so this sequential N+1 pays region
 // latency per query.
 async function handleReportRemote(req: http.IncomingMessage, res: http.ServerResponse) {
   const { limit = 5 } = await readBody(req);
+  const wanLatencyMs = await currentWanLatencyMs();
   const start = performance.now();
 
   const db = (await host.loadRemote<DbMachineModules['./db']>('db_machine/db'))!;
@@ -884,6 +903,7 @@ async function handleReportRemote(req: http.IncomingMessage, res: http.ServerRes
     wanCalls: queries,
     dbQueries: queries,
     totalMs: performance.now() - start,
+    wanLatencyMs,
     loadRemote: 'db_machine/db',
     wire: wire(),
   });
@@ -893,6 +913,7 @@ async function handleReportRemote(req: http.IncomingMessage, res: http.ServerRes
 // runs the same N+1 over same-region hops.
 async function handleReportColocated(req: http.IncomingMessage, res: http.ServerResponse) {
   const { limit = 5 } = await readBody(req);
+  const wanLatencyMs = await currentWanLatencyMs();
   const start = performance.now();
   const analytics = (
     await host.loadRemote<AnalyticsMachineModules['./analytics']>('analytics_machine/analytics')
@@ -905,6 +926,7 @@ async function handleReportColocated(req: http.IncomingMessage, res: http.Server
     dbQueries: report.queries,
     machineMs: report.dbMs,
     totalMs: performance.now() - start,
+    wanLatencyMs,
     loadRemote: 'analytics_machine/analytics',
     wire: wire(),
   });

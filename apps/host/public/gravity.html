@@ -275,6 +275,16 @@
   .barhead .bms { font-family: var(--display); font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
   .barrow.wan .blabel, .barrow.wan .bms { color: var(--wan); }
   .barrow.local .blabel, .barrow.local .bms { color: var(--local); }
+  /* Each bar is annotated with the WAN latency its run actually paid. */
+  .barhead .bnums { display: flex; align-items: baseline; gap: 7px; }
+  .barhead .blat { font-size: 9.5px; color: var(--ink-faint); }
+  .lat-note {
+    display: none; margin-top: 12px; padding: 8px 11px;
+    border: 1px dashed rgba(229, 83, 75, .4); border-radius: 5px;
+    font-size: 10.5px; color: var(--ink-dim);
+  }
+  .lat-note.visible { display: block; }
+  .lat-note b { color: var(--wan); font-weight: 500; }
   .bartrack {
     background: var(--well); border: 1px solid #131b25;
     border-radius: 4px; height: 22px; overflow: hidden;
@@ -459,16 +469,17 @@
     <div class="speedup-hero" id="speedup"><span class="idle">run both scenarios to compare</span></div>
     <div class="bars">
       <div class="barrow wan">
-        <div class="barhead"><span class="blabel">cross-region</span><span class="bms" id="bar-remote-ms">—</span></div>
+        <div class="barhead"><span class="blabel">cross-region</span><span class="bnums"><span class="bms" id="bar-remote-ms">—</span><span class="blat" id="bar-remote-lat"></span></span></div>
         <div class="bartrack"><div class="barfill wan" id="bar-remote"></div></div>
       </div>
       <div class="barrow local">
-        <div class="barhead"><span class="blabel">co-located</span><span class="bms" id="bar-colo-ms">—</span></div>
+        <div class="barhead"><span class="blabel">co-located</span><span class="bnums"><span class="bms" id="bar-colo-ms">—</span><span class="blat" id="bar-colo-lat"></span></span></div>
         <div class="bartrack"><div class="barfill local" id="bar-colo"></div></div>
       </div>
     </div>
+    <p class="lat-note" id="lat-note"></p>
     <p class="pull-note" id="pull-note"></p>
-    <p class="compare-hint">same queries, same answer — the only variable is where the loop runs.</p>
+    <p class="compare-hint">same queries, same answer — the only variable is where the loop runs (each bar is stamped with the WAN latency its run paid).</p>
   </section>
 
   <section class="panel reveal" id="panel-report" style="--d:5">
@@ -522,6 +533,9 @@
 <script src="/demo-base.js"></script>
 <script>
 let lastRemote = null, lastColo = null, lastDeploy = null;
+// The WAN latency each scenario's last run actually paid (null = link
+// unreachable when the run started; the annotation is omitted, not invented).
+let lastRemoteLat = null, lastColoLat = null;
 
 /** Tween an element from whatever it currently shows to `to` (shared countUp). */
 const countTo = (el, to, fmt) => countUp(el, parseFloat(el.textContent) || 0, to, fmt);
@@ -575,16 +589,28 @@ function renderCompare() {
   if (lastRemote != null) {
     $('bar-remote').style.width = (lastRemote / max * 100) + '%';
     countTo($('bar-remote-ms'), lastRemote, (v) => v.toFixed(0) + 'ms');
+    $('bar-remote-lat').textContent = lastRemoteLat != null ? `· at ${lastRemoteLat}ms WAN` : '';
   }
   if (lastColo != null) {
     $('bar-colo').style.width = (lastColo / max * 100) + '%';
     countTo($('bar-colo-ms'), lastColo, (v) => v.toFixed(0) + 'ms');
+    $('bar-colo-lat').textContent = lastColoLat != null ? `· at ${lastColoLat}ms WAN` : '';
   }
   if (lastRemote != null && lastColo != null && lastColo > 0) {
     $('speedup').innerHTML =
       '<span class="xnum">0.0</span><span class="xmark">×</span>' +
       '<span class="xsub">faster by moving the code to the data</span>';
     countTo($('speedup').querySelector('.xnum'), lastRemote / lastColo, (v) => v.toFixed(1));
+  }
+  // The caption promises "the only variable is where the loop runs" — that
+  // claim only holds when both runs paid the same WAN latency.
+  const note = $('lat-note');
+  const unfair = lastRemote != null && lastColo != null &&
+    lastRemoteLat != null && lastColoLat != null && lastRemoteLat !== lastColoLat;
+  note.classList.toggle('visible', unfair);
+  if (unfair) {
+    note.innerHTML = `⚠ the bars ran at <b>different WAN latencies</b> — cross-region at ` +
+      `<b>${esc(lastRemoteLat)}ms</b>, co-located at <b>${esc(lastColoLat)}ms</b>. Re-run both to compare fairly.`;
   }
 }
 
@@ -690,6 +716,7 @@ $('run-remote').onclick = async () => {
       return;
     }
     lastRemote = r.totalMs;
+    lastRemoteLat = typeof r.wanLatencyMs === 'number' ? r.wanLatencyMs : null;
     $('remote-ms').textContent = '0';
     countTo($('remote-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
     $('remote-detail').textContent = `${r.dbQueries} queries · ${r.wanCalls} WAN crossings`;
@@ -713,6 +740,7 @@ $('run-colo').onclick = async () => {
       return;
     }
     lastColo = r.totalMs;
+    lastColoLat = typeof r.wanLatencyMs === 'number' ? r.wanLatencyMs : null;
     $('colo-ms').textContent = '0';
     countTo($('colo-ms'), r.totalMs, (v) => v.toFixed(0) + 'ms');
     $('colo-detail').textContent = `${r.dbQueries} queries inside the data region (${r.machineMs.toFixed(0)}ms) · ${r.wanCalls} WAN crossing`;

@@ -272,6 +272,18 @@ async function runSmoke(base) {
   expect(redeploy.alreadyDeployed === true, 'second deploy should be idempotent');
   console.log('[smoke] second deploy -> alreadyDeployed');
 
+  // ---- latency honesty: each report is stamped with the WAN latency it paid
+  await postJson(base, '/api/region/latency', { ms: 50 });
+  const remoteAt50 = await postJson(base, '/api/report/remote', { limit: 3 });
+  expect(remoteAt50.wanLatencyMs === 50,
+    `cross-region report should be stamped wanLatencyMs=50 (got ${remoteAt50.wanLatencyMs})`);
+  await postJson(base, '/api/region/latency', { ms: 100 });
+  const coloAt100 = await postJson(base, '/api/report/colocated', { limit: 3 });
+  expect(coloAt100.wanLatencyMs === 100,
+    `co-located report should be stamped wanLatencyMs=100 (got ${coloAt100.wanLatencyMs})`);
+  await postJson(base, '/api/region/latency', { ms: 75 }); // restore the default
+  console.log('[smoke] report latency stamps -> remote at 50ms, colocated at 100ms');
+
   // ---- version negotiation: demanding ^2.0.0 must be refused, repeatably ---
   for (const attempt of [1, 2]) {
     const demand = await postJson(base, '/api/version/demand');
