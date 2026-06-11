@@ -195,18 +195,27 @@ async function runSmoke(base) {
 
   const index = await fetch(`${base}/`);
   const indexBody = await index.text();
-  if (!index.ok || !indexBody.includes('demo-base.css')) {
-    throw new Error(`GET / (${index.status}) does not reference demo-base.css`);
+  if (!index.ok || !indexBody.includes('demo-base.css') || !indexBody.includes('demo-base.js')) {
+    throw new Error(`GET / (${index.status}) does not reference demo-base.css + demo-base.js`);
   }
-  console.log('[smoke] GET / references demo-base.css');
+  console.log('[smoke] GET / references demo-base.css + demo-base.js');
 
   const gravity = await fetch(`${base}/gravity`);
-  if (gravity.status !== 200) throw new Error(`GET /gravity -> ${gravity.status}`);
-  console.log('[smoke] GET /gravity -> 200');
+  const gravityBody = await gravity.text();
+  if (gravity.status !== 200 || !gravityBody.includes('demo-base.js')) {
+    throw new Error(`GET /gravity (${gravity.status}) does not reference demo-base.js`);
+  }
+  console.log('[smoke] GET /gravity -> 200, references demo-base.js');
 
   const css = await fetch(`${base}/demo-base.css`);
   if (css.status !== 200) throw new Error(`GET /demo-base.css -> ${css.status}`);
-  console.log('[smoke] GET /demo-base.css -> 200');
+  const sharedJs = await fetch(`${base}/demo-base.js`);
+  if (sharedJs.status !== 200 || !sharedJs.headers.get('content-type')?.includes('javascript')) {
+    throw new Error(
+      `GET /demo-base.js -> ${sharedJs.status} (${sharedJs.headers.get('content-type')})`,
+    );
+  }
+  console.log('[smoke] GET /demo-base.css + /demo-base.js -> 200');
 
   const pipelineBody = await postJson(base, '/api/pipeline', { text: 'smoke test' });
   expect(typeof pipelineBody.totalMs === 'number', 'POST /api/pipeline returned no totalMs');
