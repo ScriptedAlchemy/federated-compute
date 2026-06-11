@@ -35,9 +35,13 @@ import {
   lifecycleBody,
   snapPlugin,
 } from './lifecycle.js';
+import { detectVmCapability } from './vm-capability.js';
 import { recordWire, wire, wireStore } from './wire.js';
 
 const PORT = Number(process.env.HOST_PORT ?? 3800);
+// Whole-VM lane hardware truth, detected once at startup; routes and the UI
+// render it verbatim (detect, never fake).
+const vmCapability = detectVmCapability();
 // All simulated WAN links into the data region (db + analytics paths).
 const REGION_LINKS = (process.env.REGION_LINKS ?? 'http://127.0.0.1:3899,http://127.0.0.1:3898')
   .split(',')
@@ -527,6 +531,7 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/lifecycle/restore', handleLifecycleRestore],
   ['POST /api/lifecycle/pull', handleLifecyclePull],
   ['POST /api/lifecycle/counter', handleLifecycleCounter],
+  ['GET /api/vm/capability', (_req, res) => json(res, 200, vmCapability)],
   ['GET /api/gravity/state', handleGravityState],
   ['POST /api/gravity/deploy', handleGravityDeploy],
   ['POST /api/report/remote', handleReportRemote],
