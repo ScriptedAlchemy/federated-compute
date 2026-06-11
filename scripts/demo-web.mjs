@@ -4,6 +4,7 @@
 //
 // `--smoke` runs a headless check pass against the running stack and exits.
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -168,6 +169,13 @@ function supervise(machine) {
 const chaosVictim = machines.find((machine) => machine.name === 'compute_machine');
 if (!chaosVictim) throw new Error('compute_machine missing from started machines — chaos demo needs it');
 supervise(chaosVictim);
+
+// Failure-mode smoke ports: declared before the smoke pass runs (consts in
+// the section below would still be in their temporal dead zone).
+const FAILURE_HOST_PORT = 3950;
+const FAILURE_STUB_PORT = 3951;
+const FAILURE_SNAP_PORT = 3957;
+const FAILURE_TYPES_CAP = 1024 * 1024; // the host's MAX_TYPES_BYTES
 
 if (smoke) {
   const base = `http://127.0.0.1:${HOST_PORT}`;
@@ -371,4 +379,111 @@ async function runSmoke(base) {
   expect(healedDash.machines.find((m) => m.name === 'compute_machine')?.attached === true,
     'compute_machine should be re-attached after chaos recovery');
   console.log(`[smoke] chaos recovery -> circuit closed, machine re-attached, counter at ${probe.value}`);
+
+  await runFailureModeSmoke();
+}
+
+// ---- deterministic failure modes ---------------------------------------------
+// Runs against its OWN host instance + a hostile origin stub on ports far from
+// the demo range (3800-3812), so the main stack and its teardown are untouched.
+// Leg 1 proves the streamed /api/types buffer cap; leg 2 proves a failed boot
+// leaves the lifecycle coherently 'cold' (the dead-origin pull fails fast).
+function startHostileStub() {
+  const stub = http.createServer((req, res) => {
+    // The consumer aborts mid-stream by design — never crash on the reset.
+    res.on('error', () => {});
+    req.socket.on('error', () => {});
+    const url = req.url ?? '';
+    if (url.startsWith('/mf-manifest.json')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ protocol: 3, version: '1.0.0', exposes: {} }));
+    }
+    if (url.startsWith('/mf-types.ts')) {
+      // Chunked transfer (no content-length): stream to twice the host's
+      // buffer cap, so only the cap itself can stop the relay.
+      res.writeHead(200, { 'content-type': 'application/typescript' });
+      const chunk = Buffer.alloc(64 * 1024, '// hostile filler that never ends\n');
+      let sent = 0;
+      const push = () => {
+        while (sent < 2 * FAILURE_TYPES_CAP) {
+          sent += chunk.length;
+          if (!res.write(chunk)) return void res.once('drain', push);
+        }
+        res.end();
+      };
+      return push();
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return new Promise((resolve, reject) => {
+    stub.once('error', reject);
+    stub.listen(FAILURE_STUB_PORT, '127.0.0.1', () => resolve(stub));
+  });
+}
+
+async function runFailureModeSmoke() {
+  const base = `http://127.0.0.1:${FAILURE_HOST_PORT}`;
+  const stub = await startHostileStub();
+  // Isolated host: java_machine points at the hostile stub; the lifecycle
+  // image origin points at the stub's address too, which leg 2 turns into a
+  // dead port by killing the stub first.
+  const altHost = spawn('node', [path.join(ROOT, 'apps/host/dist/server.js')], {
+    env: {
+      ...process.env,
+      HOST_PORT: String(FAILURE_HOST_PORT),
+      SNAPSHOT_PORT: String(FAILURE_SNAP_PORT),
+      MACHINEN_REMOTE_JAVA_MACHINE: `machinen+http://127.0.0.1:${FAILURE_STUB_PORT}?version=^1.0.0`,
+      SNAPSHOT_IMAGE_SOURCE: `http://127.0.0.1:${FAILURE_STUB_PORT}`,
+    },
+    stdio: 'inherit',
+  });
+  try {
+    await waitForHttpOk(`${base}/api/dashboard`, {
+      child: altHost,
+      what: 'failure-mode host',
+      timeoutMs: 10_000,
+    });
+
+    // Leg 1 — streamed cap: the stub's chunked /mf-types.ts must be cut off
+    // at the host's buffer cap, not relayed or buffered whole.
+    const types = await fetch(`${base}/api/types?machine=java_machine`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+    const typesBody = await types.json().catch(() => ({}));
+    expect(types.status === 502,
+      `oversized /mf-types.ts should be a 502 (got ${types.status}: ${JSON.stringify(typesBody).slice(0, 120)})`);
+    expect(String(typesBody.error).includes('exceeds'),
+      `502 should carry the exceeds-cap error (got ${JSON.stringify(typesBody.error)})`);
+    console.log('[smoke] failure mode: chunked >1MB /mf-types.ts -> 502 exceeds-cap');
+
+    // Leg 2 — coherent boot failure: kill the stub, so the lifecycle origin
+    // pull hits a dead port. The boot must fail AND leave the phase 'cold'.
+    await new Promise((resolve) => {
+      stub.close(resolve);
+      stub.closeAllConnections(); // keep-alive sockets must not stall the close
+    });
+    const boot = await fetch(`${base}/api/lifecycle/boot`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(8_000),
+    });
+    expect(!boot.ok, `boot against a dead origin should fail (got ${boot.status})`);
+    const dash = await fetch(`${base}/api/dashboard`, { signal: AbortSignal.timeout(8_000) })
+      .then((r) => r.json());
+    expect(dash.lifecycle?.phase === 'cold',
+      `failed boot should leave lifecycle phase 'cold' (got ${JSON.stringify(dash.lifecycle?.phase)})`);
+    console.log("[smoke] failure mode: dead-origin boot -> non-200, lifecycle stays 'cold'");
+  } finally {
+    altHost.kill();
+    stub.closeAllConnections();
+    stub.close(() => {}); // noop callback swallows ERR_SERVER_NOT_RUNNING from leg 2's close
+    // The alt host must be gone before we return: an orphan would inherit our
+    // stdio and hold its port. SIGKILL fallback keeps teardown bounded.
+    await Promise.race([
+      new Promise((resolve) => altHost.once('exit', resolve)),
+      sleep(2_000).then(() => altHost.kill('SIGKILL')),
+    ]);
+  }
 }
