@@ -207,6 +207,22 @@ async function runSmoke(base) {
   }
   console.log('[smoke] GET /gravity -> 200, references demo-base.js');
 
+  const android = await fetch(`${base}/android`);
+  const androidBody = await android.text();
+  if (android.status !== 200 || !androidBody.includes('demo-base.js')) {
+    throw new Error(`GET /android (${android.status}) does not reference demo-base.js`);
+  }
+  // The android lab must report status without touching KVM or the machinen
+  // runtime — the page has to load on hosts that can't run the arc.
+  const androidStatus = await fetch(`${base}/api/android/status`);
+  const androidState = await androidStatus.json();
+  if (androidStatus.status !== 200 || androidState.phase !== 'cold') {
+    throw new Error(
+      `GET /api/android/status -> ${androidStatus.status}, phase "${androidState.phase}" (expected cold)`,
+    );
+  }
+  console.log(`[smoke] GET /android -> 200, lab status cold (kvm=${androidState.kvm})`);
+
   const css = await fetch(`${base}/demo-base.css`);
   if (css.status !== 200) throw new Error(`GET /demo-base.css -> ${css.status}`);
   const sharedJs = await fetch(`${base}/demo-base.js`);

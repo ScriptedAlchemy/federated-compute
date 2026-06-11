@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — android lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
+<style>
+  :root {
+    --droid: #3ddc84;
+    --droid-rgb: 61, 220, 132;
+    --freeze: #c792ea;
+    --freeze-rgb: 199, 146, 234;
+    --hot: #e5534b;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 70% 42% at 20% -8%, rgba(61, 220, 132, .07), transparent),
+      radial-gradient(ellipse 60% 40% at 85% -10%, rgba(199, 146, 234, .06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, .012) 2px 4px);
+  }
+  body::before {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, var(--droid) 0 50%, var(--freeze) 50% 100%);
+    opacity: .8;
+  }
+  header h1 .accent { color: var(--droid); text-shadow: 0 0 18px rgba(61, 220, 132, .5); }
+
+  main {
+    max-width: 1180px; margin: 0 auto;
+    padding: 28px 40px 72px;
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px;
+  }
+  .panel { padding: 22px 24px; }
+  #panel-setup  { grid-column: span 12; --sec: var(--droid); }
+  #panel-arc    { grid-column: span 7; --sec: var(--freeze); }
+  #panel-device { grid-column: span 5; --sec: var(--droid); }
+  #panel-log    { grid-column: span 7; --sec: var(--droid); }
+  #panel-lesson { grid-column: span 5; }
+
+  .lede { color: var(--ink-dim); font-size: 12.5px; max-width: 86ch; }
+  .lede b { color: var(--ink); font-weight: 500; }
+  .lede .dr { color: var(--droid); }
+  .lede .fr { color: var(--freeze); }
+
+  /* ---------- nesting diagram: each box is a layer of the doll ---------- */
+  .doll { display: flex; align-items: stretch; margin-top: 16px; font-size: 11px; }
+  .layer {
+    border: 1px solid var(--panel-edge); border-radius: 7px;
+    background: var(--well); padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px; justify-content: center;
+    flex: 1;
+  }
+  .layer .lname {
+    font-family: var(--display); font-size: 10px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .layer .ldetail { color: var(--ink-faint); font-size: 10px; line-height: 1.5; }
+  .layer.l-host  { border-color: rgba(63, 185, 80, .35); }
+  .layer.l-vm    { border-color: rgba(88, 166, 255, .4); }
+  .layer.l-qemu  { border-color: rgba(240, 136, 62, .4); }
+  .layer.l-droid { border-color: rgba(var(--droid-rgb), .5); }
+  .layer.l-host .lname  { color: #3fb950; }
+  .layer.l-vm .lname    { color: #58a6ff; }
+  .layer.l-qemu .lname  { color: #f0883e; }
+  .layer.l-droid .lname { color: var(--droid); }
+  .doll .nest {
+    align-self: center; padding: 0 10px; color: var(--ink-faint);
+    font-size: 14px; flex: none;
+  }
+  /* The freeze line wraps the VM and everything inside it. */
+  .freeze-scope {
+    display: flex; align-items: stretch; flex: 4;
+    border: 1px dashed rgba(var(--freeze-rgb), .45); border-radius: 9px;
+    padding: 8px; position: relative; gap: 0;
+  }
+  .freeze-scope::before {
+    content: 'the freeze captures all of this'; position: absolute; top: -8px; left: 14px;
+    background: var(--bg); padding: 0 7px;
+    font-family: var(--display); font-size: 8.5px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--freeze);
+  }
+
+  .honesty {
+    margin-top: 14px; padding: 9px 12px;
+    border: 1px dashed var(--panel-edge); border-radius: 5px;
+    font-size: 10.5px; color: var(--ink-faint); line-height: 1.7;
+  }
+  .honesty b { color: var(--ink-dim); font-weight: 500; }
+
+  /* ---------- the arc: four steps ---------- */
+  .steps { display: grid; gap: 10px; }
+  .stepcard {
+    border: 1px solid var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 11px 14px;
+    display: grid; grid-template-columns: 26px 1fr auto; gap: 4px 12px; align-items: center;
+    transition: border-color .2s, opacity .2s;
+  }
+  .stepcard .sno {
+    grid-row: span 2;
+    font-family: var(--display); font-weight: 700; font-size: 18px;
+    color: var(--ink-faint);
+  }
+  .stepcard h3 { font-family: var(--display); font-size: 13px; letter-spacing: .03em; }
+  .stepcard .sdesc { grid-column: 2; color: var(--ink-dim); font-size: 10.5px; line-height: 1.55; max-width: 56ch; }
+  .stepcard button { grid-row: span 2; min-width: 122px; }
+  .stepcard button:disabled { opacity: .35; cursor: not-allowed; }
+  .stepcard.done { border-color: rgba(var(--droid-rgb), .4); }
+  .stepcard.done .sno { color: var(--droid); }
+  .stepcard.active { border-color: rgba(var(--droid-rgb), .6); box-shadow: 0 0 22px -10px rgba(var(--droid-rgb), .8); }
+  .stepcard.frozen-style.done, .stepcard.frozen-style.active { border-color: rgba(var(--freeze-rgb), .55); }
+  .stepcard.frozen-style.done .sno { color: var(--freeze); }
+  .stepcard button.freeze-btn { border-color: rgba(var(--freeze-rgb), .45); color: var(--freeze); }
+  .stepcard button.freeze-btn:hover:not(:disabled) { border-color: var(--freeze); box-shadow: 0 0 18px -6px rgba(var(--freeze-rgb), .7); }
+  .stepcard button.droid-btn { border-color: rgba(var(--droid-rgb), .45); color: var(--droid); }
+  .stepcard button.droid-btn:hover:not(:disabled) { border-color: var(--droid); box-shadow: 0 0 18px -6px rgba(var(--droid-rgb), .7); }
+
+  .arc-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .arc-foot .chip.busy::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--droid); animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .25; } }
+  #reset-btn { margin-left: auto; font-size: 10px; padding: 5px 12px; color: var(--ink-dim); }
+  #err-banner {
+    display: none; margin-top: 12px; padding: 9px 12px;
+    border: 1px solid rgba(229, 83, 75, .4); border-left: 3px solid var(--hot);
+    border-radius: 5px; font-size: 11px; color: var(--ink-dim);
+  }
+  #err-banner.visible { display: block; }
+  #err-banner b { color: var(--hot); }
+
+  /* ---------- the device ---------- */
+  .device-frame {
+    position: relative; margin: 4px auto 0; max-width: 380px;
+    border: 2px solid #2b3a4b; border-radius: 14px;
+    background: #000; padding: 14px 14px 22px;
+    box-shadow: 0 0 0 1px #0a0f16, 0 14px 44px -18px rgba(0, 0, 0, .9);
+  }
+  .device-frame::after {
+    content: ''; position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 5px; border-radius: 3px; background: #1c2632;
+  }
+  .screen {
+    position: relative; aspect-ratio: 4 / 3; border-radius: 4px; overflow: hidden;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 30%, #0d141d, #05070b);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .screen img { width: 100%; height: 100%; object-fit: contain; display: none; }
+  .screen .offmsg { color: var(--ink-faint); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; text-align: center; padding: 0 20px; line-height: 2; }
+  /* CRT scanlines over the live screen */
+  .screen::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(0, 0, 0, .12) 2px 3px);
+  }
+  .screen.frozen img { filter: saturate(.35) brightness(.8) hue-rotate(35deg); }
+  .screen .ice {
+    display: none; position: absolute; inset: 0; z-index: 2;
+    background: linear-gradient(160deg, rgba(var(--freeze-rgb), .16), rgba(var(--freeze-rgb), .04));
+    align-items: center; justify-content: center; flex-direction: column; gap: 6px;
+    color: var(--freeze); font-family: var(--display); font-weight: 700;
+    font-size: 13px; letter-spacing: .2em; text-transform: uppercase;
+    text-shadow: 0 0 14px rgba(var(--freeze-rgb), .8);
+    backdrop-filter: blur(1px);
+  }
+  .screen.frozen .ice { display: flex; }
+  .screen .ice .snow { font-size: 30px; }
+  .shot-meta { text-align: center; color: var(--ink-faint); font-size: 9.5px; margin-top: 10px; letter-spacing: .08em; }
+
+  /* evidence table */
+  .evidence { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 16px; }
+  .evidence th {
+    text-align: left; color: var(--ink-dim); font-weight: 400; font-size: 9.5px;
+    letter-spacing: .14em; text-transform: uppercase; padding: 3px 8px 7px 0;
+  }
+  .evidence td { padding: 5px 8px 5px 0; border-top: 1px solid #131b25; font-variant-numeric: tabular-nums; word-break: break-all; }
+  .evidence td.k { color: var(--ink-dim); white-space: nowrap; }
+  .evidence td .ok { color: var(--droid); }
+  .evidence td .bad { color: var(--hot); }
+  #verdict {
+    display: none; margin-top: 14px; padding: 11px 14px; border-radius: 6px;
+    font-size: 11.5px; line-height: 1.7;
+  }
+  #verdict.pass {
+    display: block; border: 1px solid rgba(var(--droid-rgb), .4); border-left: 3px solid var(--droid);
+    background: rgba(var(--droid-rgb), .05); color: var(--ink-dim);
+  }
+  #verdict.fail {
+    display: block; border: 1px solid rgba(229, 83, 75, .4); border-left: 3px solid var(--hot);
+    background: rgba(229, 83, 75, .05); color: var(--ink-dim);
+  }
+  #verdict b { color: var(--droid); font-weight: 600; }
+  #verdict.fail b { color: var(--hot); }
+
+  /* ---------- live log ---------- */
+  #log {
+    background: #04060a; border: 1px solid var(--panel-edge); border-radius: 6px;
+    padding: 10px 13px; height: 240px; overflow-y: auto;
+    font-size: 10.5px; line-height: 1.8; color: var(--ink-dim);
+  }
+  #log .lt { color: var(--ink-faint); margin-right: 8px; }
+  #log .err { color: var(--hot); }
+  #log .empty { color: var(--ink-faint); }
+
+  /* timings strip */
+  .timings { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  .timing { font-size: 10px; color: var(--ink-faint); }
+  .timing b { display: block; font-family: var(--display); font-size: 15px; font-weight: 700; color: var(--ink); }
+
+  #panel-lesson .lede { margin-bottom: 12px; font-size: 11.5px; }
+  #panel-lesson .lede:last-child { margin-bottom: 0; }
+  #panel-lesson a { color: var(--droid); }
+
+  @media (max-width: 1000px) {
+    #panel-arc, #panel-device, #panel-log, #panel-lesson { grid-column: span 12; }
+  }
+  @media (max-width: 900px) {
+    main { padding: 20px 18px 56px; grid-template-columns: 1fr; gap: 14px; }
+    #panel-setup, #panel-arc, #panel-device, #panel-log, #panel-lesson { grid-column: span 1; }
+    .doll { flex-direction: column; gap: 8px; }
+    .doll .nest { transform: rotate(90deg); padding: 2px 0; align-self: flex-start; margin-left: 24px; }
+    .freeze-scope { flex-direction: column; gap: 8px; }
+    header { padding: 22px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="reveal" style="--d:0">
+  <h1>android <span class="accent">lab</span></h1>
+  <span class="sub">freeze a running operating system — the app never finds out</span>
+  <nav>
+    <a href="/"><span class="tno">01</span>federation console</a>
+    <a href="/gravity"><span class="tno">02</span>data gravity</a>
+    <a href="/android" class="tab-active" aria-current="page"><span class="tno">03</span>android lab</a>
+  </nav>
+</header>
+
+<main>
+  <section class="panel reveal" id="panel-setup" style="--d:1">
+    <h2>The setup — act 08: freeze an entire device</h2>
+    <p class="lede">
+      Page 01's lifecycle card froze a <b>process</b> (an app-level <code>.snap</code> bundle).
+      This page runs the same arc against a <b>whole operating system</b>: a real
+      <b>machinen microVM</b> (KVM) boots Debian, installs QEMU, and powers on an
+      <span class="dr">Android-x86 4.4 device</span> inside itself — emulated instruction by
+      instruction, no nested KVM. An app is launched over adb. Then the <b>outer VM is frozen</b>
+      into a <span class="fr">vmstate bundle</span>: guest RAM, vCPU state, disk — which means the
+      Android kernel, the running app, the adb daemon, and every TCP connection between them are
+      <b>bytes in a directory</b>. Restoring the bundle thaws all of it mid-instruction.
+    </p>
+    <div class="doll" aria-label="nesting diagram">
+      <div class="layer l-host">
+        <span class="lname">this host</span>
+        <span class="ldetail">node · drives everything via <code>vm.exec()</code></span>
+      </div>
+      <span class="nest">⊃</span>
+      <div class="freeze-scope">
+        <div class="layer l-vm">
+          <span class="lname">machinen microVM</span>
+          <span class="ldetail">KVM · debian · 1880 MiB · 1 vCPU</span>
+        </div>
+        <span class="nest">⊃</span>
+        <div class="layer l-qemu">
+          <span class="lname">qemu (tcg)</span>
+          <span class="ldetail">software-emulated x86 · 768 MB</span>
+        </div>
+        <span class="nest">⊃</span>
+        <div class="layer l-droid">
+          <span class="lname">android 4.4 device</span>
+          <span class="ldetail">+ the launched app · adbd over tcp</span>
+        </div>
+      </div>
+    </div>
+    <div class="honesty">
+      <b>Honesty notes:</b> the machinen guest exposes no nested KVM and a single vCPU, so Android
+      runs under pure TCG emulation — first power-on is <b>~4–6 minutes</b> end to end (ISO download
+      included). The outer VM is capped at 1880 MiB because machinen 0.4.0 reads the vmstate back
+      with a single <code>readFileSync</code> (2 GiB buffer ceiling) — and a vmstate is essentially
+      a full RAM image. adbd is enabled from the device's serial root console because Android 4.4
+      only auto-starts it on USB gadget events, and an emulated PC has none.
+    </div>
+  </section>
+
+  <section class="panel reveal" id="panel-arc" style="--d:2">
+    <h2>The arc — boot · launch · freeze · resume</h2>
+    <div class="mv" data-mv="freeze" style="margin-bottom:14px">
+      <span class="mvname">freeze</span>
+      <span class="mvdiag"><i>running device</i><span class="mvwire" data-what="none"></span><i class="mvhot">vmstate bundle</i></span>
+      <span class="mvwhat"><b>nothing crosses the network</b> — a device becomes a directory</span>
+    </div>
+    <div class="steps">
+      <div class="stepcard" id="card-boot">
+        <span class="sno">1</span>
+        <h3>Power on the device</h3>
+        <p class="sdesc">Boot the microVM, install qemu+adb in its guest, fetch the Android-x86 ISO,
+          power on the emulated device, wait for <code>sys.boot_completed=1</code>, enable adb over TCP.</p>
+        <button id="btn-boot" class="droid-btn">power on</button>
+      </div>
+      <div class="stepcard" id="card-launch">
+        <span class="sno">2</span>
+        <h3>Launch the app</h3>
+        <p class="sdesc"><code>am start</code> the Settings app, then capture the evidence that matters:
+          app pid, kernel <code>boot_id</code>, uptime — and a screenshot straight off the framebuffer.</p>
+        <button id="btn-launch" class="droid-btn" disabled>launch app</button>
+      </div>
+      <div class="stepcard frozen-style" id="card-freeze">
+        <span class="sno">3</span>
+        <h3>Freeze the whole VM</h3>
+        <p class="sdesc">One vmstate snapshot captures Android mid-frame, then the source VM is
+          <b>killed</b>. The running device exists only as a ~1.9 GiB bundle on disk.</p>
+        <button id="btn-freeze" class="freeze-btn" disabled>freeze</button>
+      </div>
+      <div class="stepcard frozen-style" id="card-resume">
+        <span class="sno">4</span>
+        <h3>Resume</h3>
+        <p class="sdesc">Restore the bundle into a fresh VM. No adb reconnect needed — the adb server,
+          its TCP connection, and adbd all thawed together. Same pid, same boot_id, uptime continued.</p>
+        <button id="btn-resume" class="freeze-btn" disabled>resume</button>
+      </div>
+    </div>
+    <div class="arc-foot">
+      <span class="chip" id="phase-chip">cold</span>
+      <span class="chip" id="step-chip" hidden></span>
+      <button id="reset-btn">reset lab</button>
+    </div>
+    <div id="err-banner"></div>
+  </section>
+
+  <section class="panel reveal" id="panel-device" style="--d:3">
+    <h2>The device</h2>
+    <div class="device-frame">
+      <div class="screen" id="screen">
+        <span class="offmsg" id="offmsg">no device<br />power one on</span>
+        <img id="shot" alt="Android device screenshot" />
+        <div class="ice"><span class="snow">❄</span>frozen</div>
+      </div>
+    </div>
+    <div class="shot-meta" id="shot-meta"></div>
+    <table class="evidence">
+      <thead><tr><th></th><th>before freeze</th><th>after resume</th></tr></thead>
+      <tbody>
+        <tr><td class="k">app pid</td><td id="ev-pid-b">—</td><td id="ev-pid-a">—</td></tr>
+        <tr><td class="k">kernel boot_id</td><td id="ev-boot-b">—</td><td id="ev-boot-a">—</td></tr>
+        <tr><td class="k">uptime</td><td id="ev-up-b">—</td><td id="ev-up-a">—</td></tr>
+      </tbody>
+    </table>
+    <div id="verdict"></div>
+  </section>
+
+  <section class="panel reveal" id="panel-log" style="--d:4">
+    <h2>Lab log (live)</h2>
+    <div id="log"><span class="empty">power on the device to start the arc</span></div>
+    <div class="timings" id="timings"></div>
+  </section>
+
+  <section class="panel reveal" id="panel-lesson" style="--d:5">
+    <h2>The lesson</h2>
+    <p class="lede">
+      <b>The freeze doesn't know what it's freezing.</b> Page 01 snapshotted a counter's heap;
+      this page snapshots a kernel, a window manager, a Dalvik VM, and a TCP mesh — with the
+      same one-line operation. vmstate capture works at the layer below software, so the
+      software above it cannot tell the difference. The app's uptime simply keeps counting.
+    </p>
+    <p class="lede">
+      <b>The evidence is the OS's own bookkeeping.</b> Same <code>pidof</code>, same kernel
+      <code>boot_id</code> (a fresh boot would mint a new one), monotonic uptime that continued
+      rather than reset — and two screenshots of the same app instance straddling its own
+      nonexistence.
+    </p>
+    <p class="lede">
+      <b>Same primitive as the rest of the demo.</b> This is the <code>machinen://</code> snapshot
+      path from <a href="https://machinen.dev">Machinen</a> (<code>pnpm demo:machinen</code>), pointed
+      at a guest that happens to contain a phone. Run it headless: <code>pnpm demo:android</code>.
+    </p>
+  </section>
+</main>
+
+<script src="/demo-base.js"></script>
+<script>
+const PHASES = {
+  'cold':        { chip: 'cold' },
+  'powering-on': { chip: 'powering on…', busy: true },
+  'device-ready':{ chip: 'device ready' },
+  'app-running': { chip: 'app running' },
+  'freezing':    { chip: 'freezing…', busy: true },
+  'frozen':      { chip: 'frozen — device is a directory' },
+  'restoring':   { chip: 'thawing…', busy: true },
+  'resumed':     { chip: 'resumed' },
+  'error':       { chip: 'error' },
+};
+
+let pollTimer = null;
+
+function fmtUp(sec) { return sec ? `${sec.toFixed(2)}s` : '—'; }
+
+function render(s) {
+  const phase = PHASES[s.phase] ?? { chip: s.phase };
+  const chipEl = $('phase-chip');
+  chipEl.textContent = phase.chip;
+  chipEl.classList.toggle('busy', !!s.busy);
+  const stepChip = $('step-chip');
+  stepChip.hidden = !s.busy || !s.step;
+  if (s.step) stepChip.textContent = s.step;
+
+  // step buttons by phase
+  $('btn-boot').disabled   = s.busy || !['cold', 'error'].includes(s.phase);
+  $('btn-launch').disabled = s.busy || !['device-ready', 'app-running', 'resumed'].includes(s.phase);
+  $('btn-freeze').disabled = s.busy || !['app-running', 'resumed'].includes(s.phase);
+  $('btn-resume').disabled = s.busy || s.phase !== 'frozen';
+  $('reset-btn').disabled  = s.busy;
+
+  const reached = {
+    'card-boot':   !['cold', 'powering-on', 'error'].includes(s.phase),
+    'card-launch': !!s.before,
+    'card-freeze': ['frozen', 'restoring', 'resumed'].includes(s.phase),
+    'card-resume': s.phase === 'resumed',
+  };
+  const active = {
+    'card-boot': s.phase === 'powering-on',
+    'card-launch': s.busy && s.phase === 'app-running',
+    'card-freeze': s.phase === 'freezing',
+    'card-resume': s.phase === 'restoring',
+  };
+  for (const id of Object.keys(reached)) {
+    $(id).classList.toggle('done', !!reached[id]);
+    $(id).classList.toggle('active', !!active[id]);
+  }
+
+  // device screen: latest screenshot wins; frozen state ices it over
+  const shot = s.after?.screenshot ?? s.before?.screenshot;
+  const screen = $('screen');
+  if (shot) {
+    $('shot').src = shot;
+    $('shot').style.display = 'block';
+    $('offmsg').style.display = 'none';
+    $('shot-meta').textContent = s.after?.screenshot
+      ? 'after resume — same app instance, uptime never reset'
+      : 'before freeze — captured via adb screencap';
+  } else {
+    $('shot').style.display = 'none';
+    $('offmsg').style.display = 'block';
+    $('offmsg').innerHTML = ['powering-on'].includes(s.phase)
+      ? 'device booting…<br />single-core tcg takes a few minutes'
+      : 'no device<br />power one on';
+    $('shot-meta').textContent = '';
+  }
+  screen.classList.toggle('frozen', ['freezing', 'frozen', 'restoring'].includes(s.phase));
+
+  // evidence + verdict
+  const b = s.before, a = s.after, v = s.verdict;
+  const mark = (ok, text) => ok === undefined ? esc(text) : `<span class="${ok ? 'ok' : 'bad'}">${esc(text)}</span>`;
+  $('ev-pid-b').textContent = b?.appPid ?? '—';
+  $('ev-boot-b').textContent = b?.bootId ?? '—';
+  $('ev-up-b').textContent = fmtUp(b?.uptimeSec);
+  $('ev-pid-a').innerHTML  = a ? mark(v?.pidSame, a.appPid) : '—';
+  $('ev-boot-a').innerHTML = a ? mark(v?.bootIdSame, a.bootId) : '—';
+  $('ev-up-a').innerHTML   = a ? mark(v?.uptimeGrew, fmtUp(a.uptimeSec)) : '—';
+
+  const verdict = $('verdict');
+  if (v) {
+    const pass = v.pidSame && v.bootIdSame && v.uptimeGrew;
+    verdict.className = pass ? 'pass' : 'fail';
+    verdict.innerHTML = pass
+      ? `<b>seamless resume.</b> The app kept its pid, the kernel kept its boot_id, and uptime
+         continued across the freeze — the device never knew it spent time as a directory${
+           s.bundleBytes ? ` (${(s.bundleBytes / 1024 ** 3).toFixed(2)} GiB of it)` : ''}.`
+      : `<b>mismatch.</b> The device did not resume seamlessly — check the lab log.`;
+  } else {
+    verdict.className = '';
+  }
+
+  // error banner
+  $('err-banner').classList.toggle('visible', !!s.error);
+  if (s.error) $('err-banner').innerHTML = `<b>error:</b> ${esc(s.error)}`;
+
+  // log + timings
+  const logEl = $('log');
+  const stick = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
+  logEl.innerHTML = s.log.length
+    ? s.log.map((l) => `<div${l.line.startsWith('ERROR') ? ' class="err"' : ''}><span class="lt">${esc(l.t)}</span>${esc(l.line)}</div>`).join('')
+    : '<span class="empty">power on the device to start the arc</span>';
+  if (stick) logEl.scrollTop = logEl.scrollHeight;
+
+  const T = s.timings ?? {};
+  const tdefs = [
+    ['power on', T.totalPowerOnMs], ['android boot', T.androidBootMs],
+    ['freeze', T.freezeMs], ['resume', T.restoreMs],
+  ];
+  $('timings').innerHTML = tdefs
+    .filter(([, v2]) => typeof v2 === 'number')
+    .map(([k, v2]) => `<span class="timing"><b>${(v2 / 1000).toFixed(1)}s</b>${esc(k)}</span>`)
+    .join('');
+
+  if (!s.kvm && s.phase === 'cold') {
+    $('btn-boot').disabled = true;
+    $('err-banner').classList.add('visible');
+    $('err-banner').innerHTML = '<b>no /dev/kvm:</b> this host cannot boot real microVMs — the lab needs Linux with KVM (or Apple Silicon).';
+  }
+
+  // keep polling while anything is in flight
+  if (s.busy && !pollTimer) pollTimer = setInterval(poll, 2000);
+  if (!s.busy && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function poll() {
+  try {
+    render(await (await fetch('/api/android/status')).json());
+  } catch { /* transient — next poll retries */ }
+}
+
+async function act(url) {
+  const r = await post(url, {});
+  render(r);
+  if (!pollTimer) pollTimer = setInterval(poll, 2000);
+}
+
+$('btn-boot').onclick   = () => act('/api/android/boot');
+$('btn-launch').onclick = () => act('/api/android/launch');
+$('btn-freeze').onclick = () => act('/api/android/freeze');
+$('btn-resume').onclick = () => act('/api/android/resume');
+$('reset-btn').onclick  = () => act('/api/android/reset');
+
+poll();
+</script>
+</body>
+</html>

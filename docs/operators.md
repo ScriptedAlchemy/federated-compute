@@ -218,6 +218,19 @@ data is implemented, not hypothetical: `machinenDriver()` freezes a running
 microVM and a `machinen://<snapDir>` entry restores it anywhere
 (`pnpm demo:machinen`) — the topology change needs no code change.
 
+## Android lab (freeze a whole operating system)
+
+The third page (http://localhost:3800/android, or `pnpm demo:android` for the
+CLI) pushes the lifecycle arc to its extreme: a real machinen microVM boots
+Debian, installs QEMU + adb inside itself, and powers on an emulated
+Android-x86 4.4 device (single-core TCG — the guest has no nested KVM, so
+first power-on takes minutes). An app is launched over adb, then the OUTER VM
+is frozen into a ~1.9 GiB vmstate bundle and restored. The Android kernel,
+the app, adbd, and every TCP connection between them thaw mid-instruction:
+same app pid, same kernel `boot_id`, uptime continued — with screenshots of
+the same app instance taken on both sides of the freeze. Requires Linux with
+usable `/dev/kvm` (or Apple Silicon).
+
 ## machinen.config.json
 
 A consumer app declares its machines once, in a `machinen.config.json` that

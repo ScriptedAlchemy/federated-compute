@@ -22,6 +22,15 @@ import {
   processDriver,
   type MachinenPlugin,
 } from '@federated-compute/machinen-plugin';
+import {
+  disposeAndroidLab,
+  handleAndroidBoot,
+  handleAndroidFreeze,
+  handleAndroidLaunch,
+  handleAndroidReset,
+  handleAndroidResume,
+  handleAndroidStatus,
+} from './android-demo';
 import type { ComputeMachineModules } from './generated/compute_machine';
 import type { JavaMachineModules } from './generated/java_machine';
 import type { PythonMachineModules } from './generated/python_machine';
@@ -1017,7 +1026,11 @@ const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 // Pretty page routes -> files in PUBLIC_DIR; other assets (*.css, *.js) are
 // served by filename. The asset pattern admits no '/' so paths can't escape
 // the dir.
-const PAGES: Record<string, string> = { '/': 'index.html', '/gravity': 'gravity.html' };
+const PAGES: Record<string, string> = {
+  '/': 'index.html',
+  '/gravity': 'gravity.html',
+  '/android': 'android.html',
+};
 const ASSET_RE = /^\/[A-Za-z0-9_-]+\.(css|js)$/;
 const ASSET_TYPES: Record<string, string> = { '.css': 'text/css', '.js': 'text/javascript' };
 
@@ -1067,6 +1080,12 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/report/colocated', handleReportColocated],
   ['GET /api/region/latency', handleRegionLatency],
   ['POST /api/region/latency', handleRegionLatency],
+  ['GET /api/android/status', handleAndroidStatus],
+  ['POST /api/android/boot', handleAndroidBoot],
+  ['POST /api/android/launch', handleAndroidLaunch],
+  ['POST /api/android/freeze', handleAndroidFreeze],
+  ['POST /api/android/resume', handleAndroidResume],
+  ['POST /api/android/reset', handleAndroidReset],
 ]);
 
 const server = http.createServer(async (req, res) => {
@@ -1094,8 +1113,7 @@ server.listen(PORT, () => {
 // output and poison the fixed origin port for the next run.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void snapPlugin
-      .disposeMachines()
+    void Promise.allSettled([snapPlugin.disposeMachines(), disposeAndroidLab()])
       .catch(() => {})
       .finally(() => {
         server.close(() => process.exit(0));
