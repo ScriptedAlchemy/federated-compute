@@ -374,7 +374,7 @@ async function streamVerifiedToTemp(
       // Each chunk re-arms the idle deadline: a stalled origin is bounded
       // without putting a flat cap on the total transfer time.
       let idleTimer: NodeJS.Timeout | undefined;
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
       try {
         chunk = await Promise.race([
           reader.read(),
