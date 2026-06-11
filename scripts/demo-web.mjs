@@ -5,7 +5,6 @@
 // `--smoke` runs a headless check pass against the running stack and exits.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { startWanLinks } from './latency-proxy.mjs';
 import {
@@ -18,6 +17,7 @@ import {
   remoteEnv,
   startGuest,
   startMachines,
+  waitForHttpOk,
   WAN_AGENT_PORT,
   WAN_ORIGIN_PORT,
   WAN_PORTS,
@@ -65,7 +65,10 @@ try {
     stdio: 'inherit',
   });
   children.push(agent);
-  await waitForAgent(`http://127.0.0.1:${REGION_AGENT_PORT}/status`, agent);
+  await waitForHttpOk(`http://127.0.0.1:${REGION_AGENT_PORT}/status`, {
+    child: agent,
+    what: 'region agent',
+  });
 
   // Simulated WAN links into the data region: db queries, analytics calls,
   // the deploy command, and the artifact transfer ALL cross it.
@@ -129,37 +132,6 @@ if (smoke) {
   }
 }
 
-async function waitForAgent(url, child) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`region agent exited (code ${child.exitCode}) before becoming ready`);
-    }
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-      if (res.ok) return;
-    } catch {
-      // not up yet
-    }
-    await sleep(150);
-  }
-  throw new Error(`region agent did not become ready at ${url}`);
-}
-
-async function waitForDashboard(base) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${base}/api/dashboard`);
-      if (res.status === 200) return;
-    } catch {
-      // host not up yet
-    }
-    await sleep(250);
-  }
-  throw new Error('GET /api/dashboard did not return 200 within 30s');
-}
-
 async function postJson(base, route, body = {}) {
   const res = await fetch(`${base}${route}`, {
     method: 'POST',
@@ -178,7 +150,7 @@ function expect(cond, message) {
 }
 
 async function runSmoke(base) {
-  await waitForDashboard(base);
+  await waitForHttpOk(`${base}/api/dashboard`, { what: 'host dashboard' });
   console.log('[smoke] GET /api/dashboard -> 200');
 
   const index = await fetch(`${base}/`);

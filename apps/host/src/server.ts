@@ -391,21 +391,6 @@ async function handlePipeline(req: http.IncomingMessage, res: http.ServerRespons
   });
 }
 
-async function handleCompute(req: http.IncomingMessage, res: http.ServerResponse) {
-  const body = await readBody(req);
-  const math = (await host.loadRemote<ComputeMachineModules['./math']>('compute_machine/math'))!;
-  if (body.op === 'add') {
-    const result = await math.add(Number(body.a), Number(body.b));
-    return json(res, 200, { result, loadRemote: 'compute_machine/math', wire: wire() });
-  }
-  if (body.op === 'fib') {
-    const n = Math.min(Math.max(Number(body.n) || 0, 0), 35);
-    const result = await math.fib(n);
-    return json(res, 200, { result, n, loadRemote: 'compute_machine/math', wire: wire() });
-  }
-  return json(res, 400, { error: 'expected op: add | fib' });
-}
-
 /** Stream crossing two boundaries: machine -> host (NDJSON) -> browser (SSE). */
 async function handleCountdown(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const from = Math.min(Math.max(Number(url.searchParams.get('from')) || 5, 1), 30);
@@ -558,10 +543,6 @@ async function lifecycleStep<T>(
   }
 }
 
-function handleLifecycleState(_req: http.IncomingMessage, res: http.ServerResponse) {
-  json(res, 200, lifecycleBody());
-}
-
 /** Step 1 — boot & work. Also the arc's reset: clones, origin, cache all go. */
 async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerResponse) {
   await lifecycleStep(res, ['cold', 'running', 'snapshotted', 'restored', 'forked'], async () => {
@@ -629,17 +610,20 @@ async function handleLifecyclePull(_req: http.IncomingMessage, res: http.ServerR
     const counter = (await snapHost.loadRemote<CounterModule>(`${name}/counter`))!;
     const resumed = await counter.current();
     // The artifact hook events for THIS request carry the real pull stats.
+    // No fallbacks: fabricating "0 bytes · MISS" would violate the demo's
+    // honest-data rule, and a pull without an artifact event is a real bug.
     const pull = wire().find(
       (e): e is Extract<WireEvent, { type: 'artifact' }> =>
         e.type === 'artifact' && e.machine === name,
     );
+    if (!pull) throw new Error(`pull of "${name}" produced no artifact hook event`);
     lifecycle.clones[id] = {
       resumed,
       value: resumed,
       entry,
-      pulledBytes: pull?.bytes ?? 0,
-      imageCacheHit: pull?.cacheHit ?? false,
-      pullMs: pull?.ms ?? 0,
+      pulledBytes: pull.bytes,
+      imageCacheHit: pull.cacheHit,
+      pullMs: pull.ms,
     };
     lifecycle.phase = 'forked';
     return { clone: id, resumed, loadRemote: `${name}/counter` };
@@ -706,7 +690,7 @@ async function handleLifecycleCounter(req: http.IncomingMessage, res: http.Serve
 // entry exists in config but the machine doesn't exist.
 const REGION_AGENT_URL = process.env.REGION_AGENT_URL;
 
-async function agentFetch(pathname: string, init?: RequestInit): Promise<unknown> {
+async function agentFetch(pathname: string, init?: RequestInit): Promise<Record<string, unknown>> {
   if (!REGION_AGENT_URL) {
     throw new HttpError(503, 'no region agent configured (REGION_AGENT_URL) — run scripts/demo-web.mjs');
   }
@@ -722,7 +706,7 @@ async function agentFetch(pathname: string, init?: RequestInit): Promise<unknown
 
 async function handleGravityState(_req: http.IncomingMessage, res: http.ServerResponse) {
   try {
-    json(res, 200, { ...(await agentFetch('/status') as object), agent: 'reachable' });
+    json(res, 200, { ...(await agentFetch('/status')), agent: 'reachable' });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 502;
     json(res, 200, { agent: 'unreachable', error: errorMessage(error), status });
@@ -731,7 +715,7 @@ async function handleGravityState(_req: http.IncomingMessage, res: http.ServerRe
 
 async function handleGravityDeploy(_req: http.IncomingMessage, res: http.ServerResponse) {
   const start = performance.now();
-  const reply = (await agentFetch('/deploy', { method: 'POST' })) as object;
+  const reply = await agentFetch('/deploy', { method: 'POST' });
   json(res, 200, { ...reply, wanMs: Math.round(performance.now() - start) });
 }
 // ----------------------------------------------------------------------------
@@ -861,10 +845,8 @@ type RouteHandler = (
 const routes = new Map<string, RouteHandler>([
   ['GET /api/dashboard', handleDashboard],
   ['POST /api/pipeline', handlePipeline],
-  ['POST /api/compute', handleCompute],
   ['GET /api/countdown', handleCountdown],
   ['POST /api/counter', handleCounter],
-  ['GET /api/lifecycle/state', handleLifecycleState],
   ['POST /api/lifecycle/boot', handleLifecycleBoot],
   ['POST /api/lifecycle/freeze', handleLifecycleFreeze],
   ['POST /api/lifecycle/restore', handleLifecycleRestore],

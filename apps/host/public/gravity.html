@@ -770,25 +770,26 @@ function setDeployedUI(r, { fresh = false } = {}) {
 
 $('run-deploy').onclick = async () => {
   const btn = $('run-deploy');
+  // Any failure must fully unwind the in-flight UI: chip, stats, flow, button.
+  const fail = (message) => {
+    $('deploy-state').textContent = 'deploy failed';
+    $('deploy-stats').hidden = false;
+    $('deploy-stats').innerHTML = `<span style="color: var(--wan)">error: ${esc(message)}</span>`;
+    btn.disabled = false;
+    setFlow(null);
+  };
   btn.disabled = true;
   $('deploy-state').textContent = 'pulling image…';
   setFlow('flow-artifact', 'image crossing the WAN…');
   try {
     const r = await post('/api/gravity/deploy', {});
-    if (r.error) {
-      $('deploy-state').textContent = 'deploy failed';
-      $('deploy-stats').hidden = false;
-      $('deploy-stats').innerHTML = `<span style="color: var(--wan)">error: ${esc(r.error)}</span>`;
-      btn.disabled = false;
-      return;
-    }
+    if (r.error) return fail(r.error);
     setFlow('flow-artifact', `${fmtBytes(r.bytes ?? 0)} · ${esc(String(r.digest ?? '').slice(0, 16))}… · ${r.cacheHit ? 'hit' : 'miss'}`);
     setDeployedUI(r, { fresh: !r.alreadyDeployed });
     renderDeployWire(r);
     setTimeout(() => setFlow(null), REDUCED ? 0 : 1800);
-  } catch {
-    btn.disabled = false;
-    setFlow(null);
+  } catch (error) {
+    fail(String(error));
   }
 };
 

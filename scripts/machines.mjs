@@ -85,30 +85,35 @@ export const MACHINES = Object.entries(PORTS).map(([name, port]) => ({
   env: ENV[name],
 }));
 
-async function waitForManifest(port, name, child) {
-  const deadline = Date.now() + 30_000;
+/**
+ * Poll `url` until it answers 2xx (returning the response); fail fast when
+ * the owning child process exits first. Per-probe timeout: a stalled socket
+ * must not defeat the deadline (or the exit-code check).
+ */
+export async function waitForHttpOk(url, { child, what = url, timeoutMs = 30_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`machine ${name} exited (code ${child.exitCode}) before becoming ready`);
+    if (child && child.exitCode !== null) {
+      throw new Error(`${what} exited (code ${child.exitCode}) before becoming ready`);
     }
     try {
-      // Per-probe timeout: a stalled socket must not defeat the deadline
-      // (or the exit-code check above).
-      const health = await fetch(`http://127.0.0.1:${port}/mf/health`, {
-        signal: AbortSignal.timeout(2_000),
-      });
-      if (health.ok) {
-        const res = await fetch(`http://127.0.0.1:${port}/mf-manifest.json`, {
-          signal: AbortSignal.timeout(2_000),
-        });
-        if (res.ok) return await res.json();
-      }
+      const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+      if (res.ok) return res;
     } catch {
       // not up yet
     }
     await sleep(150);
   }
-  throw new Error(`machine ${name} did not become ready on :${port}`);
+  throw new Error(`${what} did not become ready within ${Math.round(timeoutMs / 1000)}s`);
+}
+
+async function waitForManifest(port, name, child) {
+  await waitForHttpOk(`http://127.0.0.1:${port}/mf/health`, { child, what: `machine ${name}` });
+  const res = await waitForHttpOk(`http://127.0.0.1:${port}/mf-manifest.json`, {
+    child,
+    what: `machine ${name} manifest`,
+  });
+  return await res.json();
 }
 
 /** Spawn one guest process and wait until it serves the protocol. */

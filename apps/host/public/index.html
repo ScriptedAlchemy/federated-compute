@@ -1007,13 +1007,22 @@ function buildCard(name, idx, entry) {
   return card;
 }
 
+/** Assign only on change: the 1.5s poll must not dirty unchanged DOM. */
+function setText(el, value) {
+  if (el.textContent !== value) el.textContent = value;
+}
+
 function renderSpark(card) {
   const max = Math.max(...card.history, 1);
-  card.spark.innerHTML = card.history.map((v) =>
+  const html = card.history.map((v) =>
     v > 0
       ? `<i style="height:${Math.max(8, (v / max) * 100)}%"></i>`
       : '<i class="empty"></i>',
   ).join('');
+  if (card.sparkHtml !== html) {
+    card.sparkHtml = html;
+    card.spark.innerHTML = html;
+  }
 }
 
 function updateCard(m, idx) {
@@ -1025,19 +1034,19 @@ function updateCard(m, idx) {
   }
   card.prevAttached = m.attached;
   card.el.classList.toggle('warm', !!m.attached);
-  card.state.textContent = m.attached ? 'warm · attached' : 'cold · not loaded';
+  setText(card.state, m.attached ? 'warm · attached' : 'cold · not loaded');
   // Capability-as-presence: the manifest advertises an artifacts block.
   card.artcap.hidden = !m.artifacts?.length;
   if (m.artifacts?.length) card.artcap.title = `publishes: ${m.artifacts.join(' + ')} — pullable`;
-  card.runtime.textContent = m.runtime ?? LABEL[m.name];
-  card.version.textContent = m.version ?? '—';
+  setText(card.runtime, m.runtime ?? LABEL[m.name]);
+  setText(card.version, m.version ?? '—');
   const calls = m.metrics?.calls ?? 0;
   if (calls !== card.prevCalls) {
     countUp(card.calls, card.prevCalls, calls);
     if (card.prevCalls > 0) pulseEdge(m.name); // background activity also lights the edge
   }
   card.prevCalls = calls;
-  card.lat.textContent = m.metrics ? `${m.metrics.p50Ms.toFixed(1)} / ${m.metrics.p95Ms.toFixed(1)} ms` : '—';
+  setText(card.lat, m.metrics ? `${m.metrics.p50Ms.toFixed(1)} / ${m.metrics.p95Ms.toFixed(1)} ms` : '—');
   card.history.push(m.metrics?.p50Ms ?? 0);
   card.history.shift();
   renderSpark(card);
@@ -1062,9 +1071,21 @@ async function refreshDashboard() {
   }
   if (payload.cache) renderCache(payload.cache);
   if (payload.lifecycle) syncLifecycleFromPoll(payload.lifecycle);
-  $('log').innerHTML = payload.events.length
-    ? payload.events.slice().reverse().map((e) => {
-        const t = new Date(e.ts).toLocaleTimeString('en-GB');
+  renderLog(payload.events);
+}
+
+const TIME_FMT = new Intl.DateTimeFormat('en-GB', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+let logSig = '';
+/** The event ring is append-only, so endpoints + length identify its content. */
+function renderLog(events) {
+  const sig = `${events.length}:${events[0]?.ts ?? 0}:${events[events.length - 1]?.ts ?? 0}`;
+  if (sig === logSig) return;
+  logSig = sig;
+  $('log').innerHTML = events.length
+    ? events.slice().reverse().map((e) => {
+        const t = TIME_FMT.format(new Date(e.ts));
         return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
       }).join('')
     : '<div class="wempty">no hook events yet — run any card above and every attach, call, snapshot, and pull lands here</div>';
@@ -1115,10 +1136,15 @@ document.querySelectorAll('[data-counter]').forEach((btn) => {
 
 /* ---------- artifact cache node ---------- */
 let prevCache = null;
+let cacheSubHtml = '';
 function renderCache(cache) {
-  $('topo-cache-sub').innerHTML =
+  const html =
     `${cache.artifacts} artifact${cache.artifacts === 1 ? '' : 's'} · ${fmtBytes(cache.bytes)} fetched<br />` +
     `${cache.hits} hit / ${cache.misses} miss`;
+  if (cacheSubHtml !== html) {
+    cacheSubHtml = html;
+    $('topo-cache-sub').innerHTML = html;
+  }
   $('topo-cache').classList.toggle('on', cache.artifacts > 0);
   if (prevCache && !REDUCED) {
     if (cache.misses > prevCache.misses) flashCache('flash-fetch');
@@ -1220,7 +1246,7 @@ function setLifecycleUI(s, extra) {
   light('lin-clone-a', !!s.clones.a);
   light('lin-clone-b', !!s.clones.b);
   const alive = ORIGIN_ALIVE.includes(s.phase);
-  setMember('origin', alive, alive || s.phase === 'snapshotted' ? s.value : undefined,
+  setMember('origin', alive, (alive || s.phase === 'snapshotted') ? s.value : undefined,
     s.phase === 'cold' ? 'not booted'
       : s.phase === 'snapshotted' ? `frozen — state lives in ${esc(s.snapFile ?? '.snap')}`
       : `live child process · :${esc(s.originPort)}`);
@@ -1242,12 +1268,30 @@ function syncLifecycleFromPoll(s) {
   renderLifecycleTopo(s);
 }
 
+/**
+ * A failed step must not wedge the stepper: re-derive every button from the
+ * server's actual phase (the server clears `busy` even on errors), then keep
+ * the error visible on top of the refreshed narrative.
+ */
+async function recoverLifecycleUI(message) {
+  try {
+    const d = await fetch('/api/dashboard').then((res) => res.json());
+    if (d.lifecycle) {
+      lcPhase = d.lifecycle.phase;
+      setLifecycleUI(d.lifecycle);
+    }
+  } catch {
+    // Host unreachable — leave the buttons alone; the poll loop recovers.
+  }
+  $('snap-narrative').innerHTML = `<span class="err">error: ${esc(message)}</span>`;
+}
+
 async function lcAction(btn, url, apiLabel) {
   btn.disabled = true;
   try {
     const r = await post(url, {});
     if (r.error) {
-      $('snap-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+      await recoverLifecycleUI(r.error);
       return null;
     }
     lcPhase = r.phase;
@@ -1255,6 +1299,9 @@ async function lcAction(btn, url, apiLabel) {
     renderWire('snap-wire', apiLabel, r.wire);
     refreshDashboard();
     return r;
+  } catch (error) {
+    await recoverLifecycleUI(String(error));
+    return null;
   } finally {
     if (btn === $('snap-boot')) btn.disabled = false;
   }
@@ -1275,7 +1322,7 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
     try {
       const r = await post('/api/lifecycle/counter', { target: btn.dataset.lcounter });
       if (r.error) {
-        $('snap-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+        await recoverLifecycleUI(r.error);
         return;
       }
       lcPhase = r.phase;
@@ -1286,10 +1333,6 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
     }
   };
 });
-
-fetch('/api/lifecycle/state').then((r) => r.json()).then((s) => {
-  if (s.phase) { lcPhase = s.phase; setLifecycleUI(s); }
-}).catch(() => {});
 
 let es = null;
 $('cd-run').onclick = () => {
@@ -1317,7 +1360,11 @@ $('cd-run').onclick = () => {
 };
 
 refreshDashboard();
-setInterval(refreshDashboard, 1500);
+// Pause polling in hidden tabs; refresh immediately on return.
+setInterval(() => { if (!document.hidden) refreshDashboard(); }, 1500);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshDashboard();
+});
 </script>
 </body>
 </html>

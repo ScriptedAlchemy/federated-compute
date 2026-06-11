@@ -90,16 +90,19 @@ function deploy(): Promise<DeployReport> {
     // analog. After this, the entry's machine exists.
     await plugin.warm([MACHINE]);
     const deployMs = Math.round(performance.now() - start);
+    // No fallbacks: every first deploy pulls, so a missing artifact hook
+    // event is a real bug — fabricated "0 bytes" stats would lie to the UI.
     const pull = lastPull;
+    if (!pull) throw new Error(`deploy of "${MACHINE}" produced no artifact hook event`);
     deployed = {
       machine: MACHINE,
       entry: ANALYTICS_ENTRY,
-      artifact: pull?.artifact ?? 'image',
-      bytes: pull?.bytes ?? 0,
-      digest: pull?.digest,
-      cacheHit: pull?.cacheHit ?? false,
-      pullMs: pull?.pullMs ?? 0,
-      bootMs: Math.max(0, deployMs - (pull?.pullMs ?? 0)),
+      artifact: pull.artifact,
+      bytes: pull.bytes,
+      digest: pull.digest,
+      cacheHit: pull.cacheHit,
+      pullMs: pull.pullMs,
+      bootMs: Math.max(0, deployMs - pull.pullMs),
       deployMs,
       deployedAt: new Date().toISOString(),
     };
