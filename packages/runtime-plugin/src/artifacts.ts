@@ -1,9 +1,18 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdir, open, rename, rm, stat, writeFile, type FileHandle } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  coalesce,
+  commitAtomic,
+  fetchOkWith,
+  streamHashedToTemp,
+  tempCachePath,
+  verifyCachedFile,
+} from './blob-cache.js';
 import { MachineVersionError } from './errors.js';
 import {
   formatMachineEntry,
@@ -11,6 +20,10 @@ import {
   type MachineExposeManifest,
   type MachineSpec,
 } from './types.js';
+
+// Test-only memo observability, re-exported from the shared cache module so
+// existing consumers keep importing it from here.
+export { resetVerifyMemo, verifyMemoCounters } from './blob-cache.js';
 
 /**
  * Consumer side of pull federation: resolve a `machinen+pull+http(s)://`
@@ -58,9 +71,6 @@ export interface ResolvePullOptions {
    */
   streamIdleTimeoutMs?: number;
 }
-
-const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
 
 /** ResolvePullOptions with defaults applied, threaded through resolution. */
 interface PullContext {
@@ -113,13 +123,7 @@ export function joinArtifactUrl(base: string, href: string): string {
   return `${base.replace(/\/+$/, '')}/${href.replace(/^\/+/, '')}`;
 }
 
-/**
- * Fetch with a deadline. `scope: 'request'` bounds the entire exchange —
- * right for the small JSON fetches (manifest, snapshot) whose bodies are
- * read immediately after. `scope: 'headers'` disarms the deadline once the
- * response starts: a GB-scale artifact body must not be capped by a flat
- * timeout, so streaming callers bound stalls with the idle timeout instead.
- */
+/** Deadline-bounded fetch (shared core) that fails with the spec-named message. */
 async function fetchOk(
   spec: MachineSpec,
   url: string,
@@ -127,27 +131,7 @@ async function fetchOk(
   timeoutMs: number,
   scope: 'request' | 'headers' = 'request',
 ): Promise<Response> {
-  let headerTimer: NodeJS.Timeout | undefined;
-  let signal: AbortSignal;
-  if (scope === 'headers') {
-    const controller = new AbortController();
-    headerTimer = setTimeout(() => controller.abort(), timeoutMs);
-    headerTimer.unref?.();
-    signal = controller.signal;
-  } else {
-    signal = AbortSignal.timeout(timeoutMs);
-  }
-  let res: Response;
-  try {
-    res = await fetch(url, { signal });
-  } catch (error) {
-    if (signal.aborted) fail(spec, `${what} request to ${url} timed out after ${timeoutMs}ms`);
-    fail(spec, `${what} request to ${url} failed: ${(error as Error).message}`);
-  } finally {
-    clearTimeout(headerTimer);
-  }
-  if (!res.ok) fail(spec, `${what} request to ${url} answered ${res.status}`);
-  return res;
+  return fetchOkWith(url, what, timeoutMs, scope, (message) => fail(spec, message));
 }
 
 /**
@@ -218,131 +202,6 @@ function imageExt(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
   return ext;
 }
 
-interface VerifyMemoEntry {
-  hex: string;
-  size: number;
-  mtimeMs: number;
-}
-
-/**
- * Files this process has already hash-verified, keyed by absolute path. A
- * memo hit (same size + mtime) skips the O(size) re-hash that would
- * otherwise run on EVERY cache hit — fatal to "near-instant HIT" at GB
- * scale. Accepted edge: a tamper that preserves both size and mtime passes
- * the memo within this process; cross-process paranoia is preserved because
- * every process full-hashes a file on first touch.
- */
-const verifyMemo = new Map<string, VerifyMemoEntry>();
-
-/** Test-only observability for the memo (counts hits vs full hashes). */
-export const verifyMemoCounters = { hits: 0, fullVerifies: 0 };
-
-/** Test-only: clear the verification memo and its counters. */
-export function resetVerifyMemo(): void {
-  verifyMemo.clear();
-  verifyMemoCounters.hits = 0;
-  verifyMemoCounters.fullVerifies = 0;
-}
-
-/**
- * True when the cached artifact exists AND still hashes to the digest.
- * Streams the verification: `readFile` would buffer the whole artifact and
- * hard-fail at >=2GiB (ERR_FS_FILE_TOO_LARGE), silently breaking the cache
- * at exactly the bundle sizes vmstate federation targets.
- */
-async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean> {
-  const memoKey = path.resolve(cachePath);
-  let entryStat;
-  try {
-    entryStat = await stat(cachePath);
-  } catch {
-    verifyMemo.delete(memoKey);
-    return false; // missing: a plain miss, nothing to evict
-  }
-  const memo = verifyMemo.get(memoKey);
-  if (
-    memo &&
-    memo.hex === hex &&
-    memo.size === entryStat.size &&
-    memo.mtimeMs === entryStat.mtimeMs
-  ) {
-    verifyMemoCounters.hits++;
-    return true;
-  }
-  verifyMemo.delete(memoKey);
-
-  verifyMemoCounters.fullVerifies++;
-  const hash = createHash('sha256');
-  try {
-    const stream: AsyncIterable<Buffer> = createReadStream(cachePath);
-    for await (const chunk of stream) {
-      hash.update(chunk);
-    }
-  } catch {
-    // Unreadable (even a directory squatting on the path): treat as a miss
-    // and clear the way so the re-download can land.
-    await rm(cachePath, { recursive: true, force: true }).catch(() => {});
-    return false;
-  }
-  if (hash.digest('hex') === hex) {
-    // Record the pre-read stat: if the file changed mid-hash, the next
-    // verify sees a stale memo and re-hashes instead of trusting it.
-    verifyMemo.set(memoKey, { hex, size: entryStat.size, mtimeMs: entryStat.mtimeMs });
-    return true;
-  }
-  // Corrupt entry (partial write, disk fault): evict and re-download. An
-  // eviction failure (file held open elsewhere) still degrades to a miss.
-  await quarantineEvict(cachePath);
-  return false;
-}
-
-/**
- * Evict a corrupt cache entry without racing concurrent committers: an
- * rm-by-path could TOCTOU-delete a freshly verified file that a sibling
- * renamed onto the cache path between our hash mismatch and our delete.
- * Renaming the corrupt file to a unique quarantine name first means the
- * delete operates on a path no committer will ever rename onto. A failed
- * rename (entry already replaced/removed, exotic fs) falls back to the
- * direct rm — at worst the old behavior.
- */
-async function quarantineEvict(cachePath: string): Promise<void> {
-  const quarantine = `${cachePath}.evict-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  try {
-    await rename(cachePath, quarantine);
-  } catch {
-    await rm(cachePath, { force: true }).catch(() => {});
-    return;
-  }
-  await rm(quarantine, { force: true }).catch(() => {});
-}
-
-function tempCachePath(cachePath: string): string {
-  return `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-}
-
-/**
- * Rename temp onto its content-addressed destination. When the rename loses
- * a race (rename onto an existing file fails on some platforms), `verifyHex`
- * decides whether the existing destination is acceptable: content addressing
- * only guarantees same-bytes for files that actually match their digest — a
- * corrupt pre-existing entry must not win over freshly verified bytes.
- */
-async function commitAtomic(temp: string, cachePath: string, verifyHex?: string): Promise<void> {
-  try {
-    await rename(temp, cachePath);
-  } catch (error) {
-    await rm(temp, { force: true });
-    try {
-      await stat(cachePath);
-    } catch {
-      throw error;
-    }
-    if (verifyHex && !(await verifyCachedFile(cachePath, verifyHex))) {
-      throw error;
-    }
-  }
-}
-
 async function writeAtomic(cachePath: string, bytes: Buffer | string): Promise<void> {
   const temp = tempCachePath(cachePath);
   await writeFile(temp, bytes);
@@ -356,63 +215,14 @@ async function streamVerifiedToTemp(
   temp: string,
   idleTimeoutMs: number,
 ): Promise<number> {
-  if (!res.body) fail(spec, 'image artifact response had no body');
-  // Open before taking the reader: an open failure must not strand an
-  // unconsumed (and uncancellable-by-us) body stream.
-  let file: FileHandle;
-  try {
-    file = await open(temp, 'w');
-  } catch (error) {
-    await res.body.cancel().catch(() => {});
-    throw error;
-  }
-  const reader = res.body.getReader();
-  const hash = createHash('sha256');
-  let bytesFetched = 0;
-  try {
-    for (;;) {
-      // Each chunk re-arms the idle deadline: a stalled origin is bounded
-      // without putting a flat cap on the total transfer time.
-      let idleTimer: NodeJS.Timeout | undefined;
-      let chunk: Awaited<ReturnType<typeof reader.read>>;
-      try {
-        chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) => {
-            idleTimer = setTimeout(() => {
-              reject(
-                new Error(
-                  failMessage(
-                    spec,
-                    `image artifact body stalled: no data for ${idleTimeoutMs}ms (stream idle timeout)`,
-                  ),
-                ),
-              );
-            }, idleTimeoutMs);
-            idleTimer.unref?.();
-          }),
-        ]);
-      } finally {
-        clearTimeout(idleTimer);
-      }
-      const { done, value } = chunk;
-      if (done) break;
-      hash.update(value);
-      bytesFetched += value.byteLength;
-      await file.write(value);
-    }
-  } catch (error) {
-    // Mid-stream failure — a write error (ENOSPC at GB scale) or an idle
-    // stall: cancel the body so the socket and remaining download die with
-    // the request instead of leaking.
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    await file.close();
-    reader.releaseLock();
-  }
-
-  const actual = `sha256:${hash.digest('hex')}`;
+  const { bytesFetched, hex } = await streamHashedToTemp(res, temp, idleTimeoutMs, {
+    noBody: () => new Error(failMessage(spec, 'image artifact response had no body')),
+    stalled: (ms) =>
+      new Error(
+        failMessage(spec, `image artifact body stalled: no data for ${ms}ms (stream idle timeout)`),
+      ),
+  });
+  const actual = `sha256:${hex}`;
   if (actual !== expectedDigest) {
     fail(
       spec,
@@ -457,12 +267,9 @@ async function ensureImageCached(
     return { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
 
-  // No await between this check and the set below: exactly one caller per
-  // cache path becomes the downloader, everyone else joins its promise.
-  const inflight = inflightDownloads.get(cachePath);
-  if (inflight) return inflight;
-
-  const download = (async (): Promise<CachedImage> => {
+  // Exactly one caller per cache path becomes the downloader, everyone else
+  // joins its promise.
+  return coalesce(inflightDownloads, cachePath, async (): Promise<CachedImage> => {
     const url = joinArtifactUrl(spec.url!, descriptor.href);
     // 'headers' scope: the body is a stream guarded by the idle timeout.
     const res = await fetchOk(spec, url, 'image artifact', ctx.fetchTimeoutMs, 'headers');
@@ -481,13 +288,7 @@ async function ensureImageCached(
       await rm(temp, { force: true });
       throw error;
     }
-  })();
-  inflightDownloads.set(cachePath, download);
-  try {
-    return await download;
-  } finally {
-    inflightDownloads.delete(cachePath);
-  }
+  });
 }
 
 function selectArtifact(spec: MachineSpec): PullArtifactKind {

@@ -1,13 +1,17 @@
 // packages/runtime-plugin/test/vmstate.test.ts
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import {
   VMSTATE_FORMAT,
   buildVmstateBundle,
+  ensureBlobCached,
   installedMachinenRuntimeVersion,
+  materializeVmstateDir,
   ociHostPlatform,
   parseVmstateBundleManifest,
   sha256File,
@@ -200,5 +204,146 @@ describe('installedMachinenRuntimeVersion', () => {
   test('reads the devDependency version without loading the native runtime', () => {
     // @machinen/runtime@0.4.0 is a devDependency of this package.
     expect(installedMachinenRuntimeVersion()).toBe('0.4.0');
+  });
+});
+
+const closers: (() => Promise<void>)[] = [];
+afterAll(async () => {
+  await Promise.all(closers.map((close) => close()));
+});
+
+async function serveBytes(routes: Record<string, Buffer>): Promise<{ url: string; requests: string[] }> {
+  const requests: string[] = [];
+  const server = http.createServer((req, res) => {
+    requests.push(req.url ?? '');
+    const body = routes[req.url ?? ''];
+    if (!body) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.end(body);
+  });
+  const port = await new Promise<number>((resolve) =>
+    server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port)),
+  );
+  closers.push(() => new Promise((r) => server.close(() => r())));
+  return { url: `http://127.0.0.1:${port}`, requests };
+}
+
+function entryFor(filePath: string, bytes: Buffer) {
+  return {
+    path: filePath,
+    href: `blobs/sha256/${hex(bytes)}`,
+    digest: `sha256:${hex(bytes)}`,
+    bytes: bytes.length,
+  };
+}
+
+describe('ensureBlobCached', () => {
+  test('streams a download into the digest-named cache file', async () => {
+    const bytes = Buffer.from('vmstate-blob-'.repeat(500));
+    const origin = await serveBytes({ '/blob': bytes });
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+
+    const cached = await ensureBlobCached(`${origin.url}/blob`, entryFor('state.vmstate', bytes), blobDir);
+    expect(cached.fetched).toBe(bytes.length);
+    expect(cached.localPath).toBe(path.join(blobDir, hex(bytes)));
+    expect(await readFile(cached.localPath)).toEqual(bytes);
+    // no stray .partial files
+    expect(readdirSync(blobDir)).toEqual([hex(bytes)]);
+  });
+
+  test('verified cache hit never touches the network', async () => {
+    const bytes = Buffer.from('hit me');
+    const origin = await serveBytes({ '/blob': bytes });
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+    await ensureBlobCached(`${origin.url}/blob`, entryFor('meta.json', bytes), blobDir);
+
+    const again = await ensureBlobCached(`${origin.url}/blob`, entryFor('meta.json', bytes), blobDir);
+    expect(again.fetched).toBe(0);
+    expect(origin.requests.filter((r) => r === '/blob')).toHaveLength(1);
+  });
+
+  test('a corrupt cache entry is evicted and re-downloaded', async () => {
+    const bytes = Buffer.from('correct bytes');
+    const origin = await serveBytes({ '/blob': bytes });
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+    await writeFile(path.join(blobDir, hex(bytes)), 'corrupted');
+
+    const cached = await ensureBlobCached(`${origin.url}/blob`, entryFor('meta.json', bytes), blobDir);
+    expect(cached.fetched).toBe(bytes.length);
+    expect(await readFile(cached.localPath)).toEqual(bytes);
+  });
+
+  test('a digest mismatch fails closed and caches nothing', async () => {
+    const bytes = Buffer.from('expected bytes');
+    const origin = await serveBytes({ '/blob': Buffer.from('tampered bytes') });
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+
+    await expect(
+      ensureBlobCached(`${origin.url}/blob`, entryFor('state.vmstate', bytes), blobDir),
+    ).rejects.toThrow(/digest mismatch.*state\.vmstate/s);
+    expect(readdirSync(blobDir)).toEqual([]);
+  });
+
+  test('an unreachable origin names the URL', async () => {
+    const bytes = Buffer.from('x');
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+    await expect(
+      ensureBlobCached('http://127.0.0.1:1/blob', entryFor('meta.json', bytes), blobDir),
+    ).rejects.toThrow(/127\.0\.0\.1:1/);
+  });
+});
+
+describe('materializeVmstateDir', () => {
+  async function builtFixture() {
+    const { dir } = await fakeSnapshotDir();
+    const built = await buildVmstateBundle(dir, { name: 'vm_machine', compatibility: COMPAT });
+    // copy sources into a fake blob cache, digest-named
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+    const blobPaths: string[] = [];
+    for (const [i, file] of built.manifest.files.entries()) {
+      const target = path.join(blobDir, file.digest.slice('sha256:'.length));
+      await writeFile(target, await readFile(built.sources[i]));
+      blobPaths.push(target);
+    }
+    return { built, blobPaths, sourceDir: dir };
+  }
+
+  test('links/copies blobs into a complete snapshot dir', async () => {
+    const { built, blobPaths, sourceDir } = await builtFixture();
+    const dest = path.join(await mkdtemp(path.join(os.tmpdir(), 'vmstate-mat-')), 'snap');
+
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    for (const file of built.manifest.files) {
+      expect(await readFile(path.join(dest, file.path))).toEqual(
+        await readFile(path.join(sourceDir, file.path)),
+      );
+    }
+    // no temp dirs left behind
+    expect(readdirSync(path.dirname(dest)).filter((n) => n.includes('.tmp-'))).toEqual([]);
+  });
+
+  test('an already-materialized dir is reused untouched', async () => {
+    const { built, blobPaths } = await builtFixture();
+    const dest = path.join(await mkdtemp(path.join(os.tmpdir(), 'vmstate-mat-')), 'snap');
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    const marker = path.join(dest, 'made-by-first-call');
+    await writeFile(marker, 'untouched');
+
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test('a half-built destination (wrong sizes) is rebuilt', async () => {
+    const { built, blobPaths } = await builtFixture();
+    const dest = path.join(await mkdtemp(path.join(os.tmpdir(), 'vmstate-mat-')), 'snap');
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    await rm(path.join(dest, 'state.vmstate'));
+
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    expect(existsSync(path.join(dest, 'state.vmstate'))).toBe(true);
   });
 });

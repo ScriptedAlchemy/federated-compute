@@ -1,8 +1,18 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  coalesce,
+  commitAtomic,
+  fetchOkWith,
+  streamHashedToTemp,
+  tempCachePath,
+  verifyCachedFile,
+} from './blob-cache.js';
 
 /**
  * machinen-vmstate@1 — the whole-VM artifact format of Phase 2 pull
@@ -275,4 +285,142 @@ export function vmstateCompatibilityError(
     );
   }
   return undefined;
+}
+
+export interface CachedBlob {
+  localPath: string;
+  /** Bytes downloaded over the network (0 on a verified cache hit). */
+  fetched: number;
+}
+
+export interface BlobFetchOptions {
+  /** Deadline for the blob response headers. Default 30s. */
+  fetchTimeoutMs?: number;
+  /** Max stall between streamed body chunks. Default 30s. */
+  streamIdleTimeoutMs?: number;
+}
+
+/** In-flight blob downloads by cache path — concurrent pulls of one digest
+ * (two consumers of the same bundle in one process) join a single download. */
+const inflightBlobs = new Map<string, Promise<CachedBlob>>();
+
+function throwBlobError(message: string): never {
+  throw new Error(message);
+}
+
+/**
+ * Ensure a blob is in the content-addressed cache, streaming the download to
+ * a temp file (multi-GB vmstate never fits in memory) and verifying the
+ * digest before the blob becomes visible under its cache name. Built on the
+ * shared blob-cache primitives: deadline-bounded fetch, idle-timeout-guarded
+ * streaming, memoized cache-hit verification with quarantine eviction of
+ * corrupt entries, and in-flight coalescing.
+ */
+export async function ensureBlobCached(
+  url: string,
+  entry: VmstateFileEntry,
+  blobDir: string,
+  opts: BlobFetchOptions = {},
+): Promise<CachedBlob> {
+  const hex = DIGEST_RE.exec(entry.digest)?.[1];
+  if (!hex) throw new Error(`blob for "${entry.path}" has no valid sha256 digest ("${entry.digest}")`);
+  await mkdir(blobDir, { recursive: true });
+  const localPath = path.join(blobDir, hex);
+
+  if (await verifyCachedFile(localPath, hex)) return { localPath, fetched: 0 };
+
+  return coalesce(inflightBlobs, localPath, async (): Promise<CachedBlob> => {
+    const fetchTimeoutMs = opts.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    const idleTimeoutMs = opts.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+    // 'headers' scope: the body is a stream guarded by the idle timeout.
+    const res = await fetchOkWith(url, 'blob', fetchTimeoutMs, 'headers', throwBlobError);
+    const temp = tempCachePath(localPath);
+    try {
+      const { bytesFetched, hex: actual } = await streamHashedToTemp(res, temp, idleTimeoutMs, {
+        noBody: () => new Error(`blob request to ${url} had no response body`),
+        stalled: (ms) =>
+          new Error(`blob download from ${url} stalled: no data for ${ms}ms (stream idle timeout)`),
+      });
+      if (actual !== hex) {
+        throw new Error(
+          `blob digest mismatch for "${entry.path}": expected sha256:${hex}, ` +
+            `${url} served bytes hashing to sha256:${actual} — refusing to cache it`,
+        );
+      }
+      await commitAtomic(temp, localPath, hex);
+      return { localPath, fetched: bytesFetched };
+    } catch (error) {
+      await rm(temp, { force: true });
+      throw error;
+    }
+  });
+}
+
+/** Hardlink when possible (same fs, zero copy for 2.5GB blobs), copy otherwise. */
+export async function linkOrCopy(source: string, dest: string): Promise<void> {
+  try {
+    await link(source, dest);
+  } catch {
+    await copyFile(source, dest);
+  }
+}
+
+/**
+ * Directory-level rename with the same concurrent-writer tolerance as the
+ * file-level commitAtomic: content is digest-addressed, so a racer that
+ * landed first materialized identical bytes — accept the existing dest.
+ */
+async function renameDirIntoPlace(temp: string, dest: string): Promise<void> {
+  try {
+    await rename(temp, dest);
+  } catch (error) {
+    await rm(temp, { recursive: true, force: true });
+    try {
+      await stat(dest);
+    } catch {
+      throw error;
+    }
+  }
+}
+
+async function isMaterialized(manifest: VmstateBundleManifest, destDir: string): Promise<boolean> {
+  for (const file of manifest.files) {
+    try {
+      const info = await stat(path.join(destDir, ...file.path.split('/')));
+      if (!info.isFile() || info.size !== file.bytes) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Materialize a verified bundle as a driver-bootable snapshot directory.
+ * Builds in a temp dir and renames into place so a half-built dir can never
+ * boot; a complete existing dir (concurrent resolver, earlier pull) is
+ * reused as-is. Blob bytes were digest-verified by ensureBlobCached, so the
+ * completeness check here is existence + size.
+ */
+export async function materializeVmstateDir(
+  manifest: VmstateBundleManifest,
+  blobPaths: string[],
+  destDir: string,
+): Promise<void> {
+  if (await isMaterialized(manifest, destDir)) return;
+  const temp = tempCachePath(destDir);
+  try {
+    for (const [i, file] of manifest.files.entries()) {
+      const target = path.join(temp, ...file.path.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await linkOrCopy(blobPaths[i], target);
+    }
+    // A known-incomplete destination blocks rename (ENOTEMPTY) — clear it.
+    await rm(destDir, { recursive: true, force: true });
+    await renameDirIntoPlace(temp, destDir);
+  } catch (error) {
+    await rm(temp, { recursive: true, force: true });
+    if (await isMaterialized(manifest, destDir)) return; // lost a benign race
+    throw error;
+  }
 }
