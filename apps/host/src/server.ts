@@ -13,7 +13,12 @@
 import { once } from 'node:events';
 import http from 'node:http';
 import { createInstance } from '@module-federation/runtime';
-import { httpAttachDriver, machinenPlugin } from '@federated-compute/machinen-plugin';
+import {
+  DEFAULT_POLICY,
+  MachineVersionError,
+  httpAttachDriver,
+  machinenPlugin,
+} from '@federated-compute/machinen-plugin';
 import { handleDashboard, logHooks, machineStatus } from './dashboard.js';
 import type { ComputeMachineModules } from './generated/compute_machine';
 import type { JavaMachineModules } from './generated/java_machine';
@@ -181,10 +186,16 @@ async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse
 // else's deployment (containment) — the demo orchestrator (demo-web.mjs)
 // supervises the process and respawns it; the host merely re-attaches.
 const CHAOS_MACHINE = 'compute_machine';
-// One more concurrent call than the breaker threshold (5), so the burst
-// visibly opens the circuit. Concurrency matters: all six calls must hit
-// the same dead-but-cached machine before the first failure evicts it.
-const CHAOS_BURST = 6;
+// One more concurrent call than the plugin's default breaker threshold, so
+// the burst visibly opens the circuit (derived from DEFAULT_POLICY so the
+// demo cannot silently desync from the plugin default). Concurrency matters:
+// all calls must hit the same dead-but-cached machine before the first
+// failure evicts it.
+const DEFAULT_BREAKER = DEFAULT_POLICY.circuitBreaker;
+if (!DEFAULT_BREAKER) {
+  throw new Error('[host] chaos demo expects the plugin default circuit breaker to be enabled');
+}
+const CHAOS_BURST = DEFAULT_BREAKER.threshold + 1;
 
 let chaosBusy = false;
 
@@ -277,8 +288,8 @@ async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerR
       required: STRICT_REQUIRED,
       errorName: errorName(error),
       error: message,
-      // The version the machine reported, extracted from the plugin's error.
-      reported: /machine reports "([^"]+)"/.exec(message)?.[1],
+      // The version the machine reported, read from the plugin's typed error.
+      reported: error instanceof MachineVersionError ? error.reported : undefined,
       wire: wire(),
     });
   }
