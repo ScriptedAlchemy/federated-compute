@@ -479,6 +479,55 @@
   .repc { color: var(--replay); }
   .vm-narrative-note { font-size: 10px; color: var(--ink-faint); margin-top: 10px; }
 
+  /* Topology: the whole-VM group. Same artifact-edge taxonomy as the local
+     machines group, but data-scale=gb edges are visibly HEAVIER — the weight
+     difference is the lesson (Phase 1 labels KBs; this labels GBs). */
+  .tvm .tlocal-name { color: rgba(224, 112, 154, .75); }
+  .tvm-replay {
+    color: var(--replay); border: 1px solid rgba(240, 180, 60, .5); border-radius: 999px;
+    padding: 0 7px; font-size: 8.5px; letter-spacing: .1em;
+  }
+  .tnode.vm-node { --tacc: var(--vm); border-color: rgba(224, 112, 154, .35); animation: card-in .55s cubic-bezier(.2, .7, .2, 1) both; }
+  .tnode.vm-node.dead { opacity: .5; }
+  .tnode.vm-node.dead .tled { background: #2c3640; box-shadow: none; }
+  .tnode.vm-node .tkilled { color: var(--hot); font-size: 8.5px; letter-spacing: .1em; text-transform: uppercase; }
+  .tnode.vm-registry { border-style: dashed; --tacc: var(--vm); }
+  .tvm .tpull { border-left-color: rgba(224, 112, 154, .5); }
+  .tvm .tpull b { color: var(--vm); }
+  .tvm .tpull[data-scale=gb] { border-left-width: 6px; padding-left: 12px; font-size: 9.5px; }
+  /* Indeterminate transfer: no progress events exist yet (runtime 2b), so the
+     train just flows until the response lands with the real totals. */
+  .tvm .tpull.flight {
+    background: repeating-linear-gradient(180deg, rgba(224, 112, 154, .16) 0 8px, transparent 8px 16px);
+    animation: gb-flow 1.2s linear infinite;
+  }
+  @keyframes gb-flow { from { background-position: 0 0; } to { background-position: 0 24px; } }
+  .tvm .tpull.done { opacity: .55; }
+  .tvm .rep { color: var(--replay); }
+
+  /* Race card: two bars, both from real timings (live run or labeled trace). */
+  .vm-race {
+    border: 1px dashed var(--panel-edge); border-radius: 6px;
+    background: var(--well); padding: 11px 14px; margin: 10px 0;
+    max-width: 560px;
+  }
+  .vm-race-head {
+    font-family: var(--display); font-size: 11px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink);
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .vm-race-src { font-size: 9px; color: var(--ink-faint); letter-spacing: .08em; }
+  .vm-race-sub { font-size: 10px; color: var(--ink-faint); margin: 4px 0 10px; }
+  .vm-race-row { display: grid; grid-template-columns: 150px 1fr 56px; gap: 10px; align-items: center; font-size: 10px; }
+  .vm-race-row + .vm-race-row { margin-top: 7px; }
+  .vm-race-label { color: var(--ink-dim); letter-spacing: .06em; }
+  .vm-race-track { background: #0a1018; border: 1px solid #131b25; border-radius: 4px; height: 16px; overflow: hidden; }
+  .vm-race-fill { height: 100%; width: 0%; transition: width .8s cubic-bezier(.2, .8, .2, 1); }
+  .vm-race-fill.cold { background: var(--snap); box-shadow: 0 0 14px -4px var(--snap); }
+  .vm-race-fill.warm { background: var(--vm); box-shadow: 0 0 14px -4px var(--vm); }
+  .vm-lane[data-replay='1'] .vm-race-fill.warm { background: var(--replay); }
+  .vm-race-ms { font-family: var(--display); font-weight: 700; font-size: 12px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+
   /* artifacts capability chip on machine cards (capability-as-presence). */
   .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
 
@@ -691,6 +740,12 @@
             <div class="tlocal-name">local machines — process driver</div>
             <div class="tedges" id="topo-local-edges"></div>
           </div>
+          <!-- Whole-VM lane group: same artifact-edge taxonomy, GB scale.
+               In replay mode it renders trace events, labeled `replay`. -->
+          <div class="tlocal tvm" id="topo-vm" hidden>
+            <div class="tlocal-name">real microVMs — machinen driver <span class="tvm-replay" id="topo-vm-replay" hidden>replay</span></div>
+            <div class="tedges" id="topo-vm-edges"></div>
+          </div>
         </div>
       </div>
       <div class="tregion">
@@ -901,6 +956,23 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
       </div>
       <div class="vm-stats" id="vm-publish-stats" hidden></div>
       <div class="vm-stats" id="vm-pull-stats" hidden></div>
+      <!-- Race card: rendered only when BOTH bars have a real number for the
+           current mode (this run's timings, or the recorded trace's). -->
+      <div class="vm-race" id="vm-race" hidden>
+        <div class="vm-race-head">which is faster here? <span class="vm-race-src" id="vm-race-src"></span></div>
+        <div class="vm-race-sub">cold-cache GBs over a slow link lose to a fresh boot; warm caches and expensive
+          heaps flip it. No winner is hard-coded — the bars are this run's truth.</div>
+        <div class="vm-race-row">
+          <span class="vm-race-label">cold boot + first call</span>
+          <div class="vm-race-track"><div class="vm-race-fill cold" id="vm-race-cold"></div></div>
+          <span class="vm-race-ms" id="vm-race-cold-ms">—</span>
+        </div>
+        <div class="vm-race-row">
+          <span class="vm-race-label">pull warm VM + first call</span>
+          <div class="vm-race-track"><div class="vm-race-fill warm" id="vm-race-warm"></div></div>
+          <span class="vm-race-ms" id="vm-race-warm-ms">—</span>
+        </div>
+      </div>
       <div class="snap-narrative" id="vm-narrative"></div>
       <details class="wiretrace" id="vm-wire" hidden>
         <summary>what just happened on the wire<span class="wcount"></span></summary>
@@ -1547,9 +1619,73 @@ function renderVmRestored(s, { replay } = {}) {
   }
 }
 
+/* Topology rail: the whole-VM group under the host column. Same artifact-edge
+   taxonomy as the Phase 1 local group, GB scale. data: a lane state (live or
+   from the trace); flight: the pull request is in the air — indeterminate
+   train only, because no honest progress number exists until runtime 2b. */
+let vmLastState = null;
+function renderVmTopo(s, { replay = false, flight = false } = {}) {
+  const group = $('topo-vm');
+  const edges = $('topo-vm-edges');
+  $('topo-vm-replay').hidden = !replay;
+  if (!s || s.phase === 'cold') {
+    group.hidden = true;
+    edges.innerHTML = '';
+    return;
+  }
+  group.hidden = false;
+  const plat = s.capability?.platform ?? '';
+  const srcOn = s.phase === 'running';
+  const srcDead = (s.phase === 'published' || s.phase === 'restored') && !!s.published?.sourceDead;
+  const rep = replay ? ' · <span class="rep">replay</span>' : '';
+  let html =
+    `<span class="tnode vm-node${srcOn ? ' on' : ''}${srcDead ? ' dead' : ''}">` +
+    `<span class="tled"></span><span class="tlabel">vm_machine · source</span>` +
+    `<span class="tsub">${srcOn ? 'real microVM · solving' : srcDead ? '<span class="tkilled">killed</span> by the dump' : 'real microVM'}</span></span>`;
+  if (s.published) {
+    html +=
+      `<div class="tpull" data-scale="gb">⇣ <b>vmstate published</b> · <b>${fmtBytes(s.published.bytes)}</b> · ` +
+      `${esc(s.published.digest.slice(0, 16))}… · ${esc(plat)}${rep}</div>` +
+      `<span class="tnode vm-registry on"><span class="tled"></span><span class="tlabel">vmstate registry</span>` +
+      `<span class="tsub">plugin-owned · lazily started</span></span>`;
+  }
+  if (flight) {
+    html +=
+      `<div class="tpull flight" data-scale="gb">⇣ <b>vmstate transferring…</b> resolves to real totals${rep}</div>` +
+      `<span class="tnode vm-node"><span class="tled"></span><span class="tlabel">vm_machine · clone</span>` +
+      `<span class="tsub">second host · restoring</span></span>`;
+  } else if (s.phase === 'restored' && s.pull) {
+    html +=
+      `<div class="tpull done" data-scale="gb">⇣ <b>vmstate pulled</b> · <b>${fmtBytes(s.pull.bytes)}</b> in ` +
+      `<b>${fmtSec(s.pull.ms)}</b> · ${s.pull.cacheHit ? 'HIT' : 'MISS'}${rep}</div>` +
+      `<span class="tnode vm-node on"><span class="tled"></span><span class="tlabel">vm_machine · clone</span>` +
+      `<span class="tsub">second host · resumed</span></span>`;
+  }
+  edges.innerHTML = html;
+}
+
+/** Race card: both bars must be real numbers for the current mode, or hide. */
+function renderVmRace(s, { replay = false } = {}) {
+  const t = s?.timings ?? {};
+  if (!(t.bootMs > 0) || !(t.restoreMs > 0)) {
+    $('vm-race').hidden = true;
+    return;
+  }
+  $('vm-race').hidden = false;
+  $('vm-race-src').textContent = replay
+    ? `recorded trace, ${s.capability?.platform ?? '?'}`
+    : 'this run';
+  const max = Math.max(t.bootMs, t.restoreMs);
+  $('vm-race-cold').style.width = `${(t.bootMs / max) * 100}%`;
+  $('vm-race-warm').style.width = `${(t.restoreMs / max) * 100}%`;
+  $('vm-race-cold-ms').textContent = fmtSec(t.bootMs);
+  $('vm-race-warm-ms').textContent = fmtSec(t.restoreMs);
+}
+
 /** Render a full lane state (live responses + polled phase adoptions). */
 function applyVmState(s) {
   vmPhase = s.phase;
+  vmLastState = s;
   const live = s.phase === 'running' || s.phase === 'restored';
   if (s.progress && live) {
     vmStrip('vm-strip-live', s.progress,
@@ -1565,6 +1701,8 @@ function applyVmState(s) {
   vmChip(s.phase);
   const narr = VM_NARR[s.phase];
   if (narr) $('vm-narrative').innerHTML = narr(s);
+  renderVmTopo(s);
+  renderVmRace(s.phase === 'restored' ? s : null);
   updateVmControls();
   vmPollLoop();
 }
@@ -1601,10 +1739,16 @@ async function vmAction(route, runningLabel) {
   updateVmControls();
   vmChip(vmPhase, `${vmPhase} · working…`);
   $('vm-narrative').innerHTML = `<span class="running">${esc(runningLabel)}</span>`;
+  // The GB transfer is in the air between this request and its response:
+  // animate the rail indeterminately (there is no honest percent yet).
+  if (route === '/api/vm/restore' && vmLastState) {
+    renderVmTopo(vmLastState, { flight: true });
+  }
   try {
     const r = await post(route, {});
     if (r.error) {
       $('vm-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+      renderVmTopo(vmLastState); // drop any in-flight animation
       try {
         const s = await fetch('/api/vm/state').then((x) => x.json());
         vmPhase = s.phase;
@@ -1617,6 +1761,7 @@ async function vmAction(route, runningLabel) {
     return r;
   } catch (error) {
     $('vm-narrative').innerHTML = `<span class="err">error: ${esc(String(error))}</span>`;
+    renderVmTopo(vmLastState);
     return null;
   } finally {
     vmBusy = false;
@@ -1644,6 +1789,7 @@ function vmShowSkip(skippedMs, nextKind) {
   el._t = setTimeout(() => { el.hidden = true; }, VM_GAP_CAP_MS - 100);
 }
 
+let vmReplayState = null; // last trace state seen — feeds the topology rail
 function applyReplayEvent(e, restoredYet) {
   const src = restoredYet ? 'recorded heap — restored clone' : 'recorded heap — source VM';
   switch (e.kind) {
@@ -1652,9 +1798,11 @@ function applyReplayEvent(e, restoredYet) {
       $('vm-narrative').innerHTML = '<span class="running">recorded run: booting a real microVM on the capture host…</span>';
       break;
     case 'running':
+      vmReplayState = e.state;
       vmStrip('vm-strip-live', e.state.progress, src);
       vmChip('running', 'replay · running');
       $('vm-narrative').innerHTML = VM_NARR.running(e.state);
+      renderVmTopo(e.state, { replay: true });
       break;
     case 'progress':
       vmStrip('vm-strip-live', e.progress, src);
@@ -1664,23 +1812,29 @@ function applyReplayEvent(e, restoredYet) {
       $('vm-narrative').innerHTML = '<span class="running">recorded run: freezing the whole VM + publishing the vmstate bundle…</span>';
       break;
     case 'published':
+      vmReplayState = e.state;
       $('vm-strip-live').hidden = true;
       vmStrip('vm-strip-frozen', e.state.frozenAt);
       renderVmPublished(e.state, { replay: true });
       vmChip('published', 'replay · published');
       $('vm-narrative').innerHTML = VM_NARR.published(e.state);
+      renderVmTopo(e.state, { replay: true });
       break;
     case 'restore-start':
       vmChip('published', 'replay · pulling');
       $('vm-narrative').innerHTML = '<span class="running">recorded run: pulling the vmstate bundle to a second host + restoring…</span>';
+      renderVmTopo(vmReplayState, { replay: true, flight: true });
       break;
     case 'restored':
+      vmReplayState = e.state;
       vmStrip('vm-strip-live', e.state.progress, 'recorded heap — restored clone');
       vmStrip('vm-strip-frozen', e.state.frozenAt);
       renderVmRestored(e.state, { replay: true });
       vmChip('restored', 'replay · restored');
       $('vm-step4').classList.add('lit');
       $('vm-narrative').innerHTML = VM_NARR.restored(e.state);
+      renderVmTopo(e.state, { replay: true });
+      renderVmRace(e.state, { replay: true });
       break;
   }
 }
@@ -1707,7 +1861,10 @@ async function playVmReplay() {
   $('vm-delta').hidden = true;
   $('vm-publish-stats').hidden = true;
   $('vm-pull-stats').hidden = true;
+  $('vm-race').hidden = true;
   $('vm-step4').classList.remove('lit');
+  vmReplayState = null;
+  renderVmTopo(null);
   const events = vmTrace.events;
   let cursor = 0;
   let restoredYet = false;
