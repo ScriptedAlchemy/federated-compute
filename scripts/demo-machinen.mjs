@@ -9,6 +9,11 @@
 //
 // Requires Linux with usable /dev/kvm (or Apple Silicon) and machinen base
 // assets (`pnpm exec machinen install`, fetched automatically on first boot).
+//
+// Disk note: this script plays the DEPLOYMENT-OWNER role — it boots its own
+// guest bundle and restores its own vmstate dir, like any deployment. Moving
+// vmstate BETWEEN machines over HTTP is Phase 2 (see the vmstate federation
+// spec); the app-state HTTP move exists today via machinen+pull+http://.
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';

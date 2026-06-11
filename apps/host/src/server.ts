@@ -636,18 +636,23 @@ async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse,
 // the legs: pnpm demo:snapshot (freeze/restore), pnpm demo:pull (fork-by-fetch);
 // the real-VM variant (machinenDriver(), whole-microVM dumps) is pnpm demo:machinen.
 
-const SNAP_IMAGE =
-  process.env.SNAPSHOT_IMAGE ?? path.resolve(import.meta.dirname, '../../remote/dist/index.js');
 const SNAP_DIR = path.resolve(import.meta.dirname, '../.machinen/web-snapshots');
 // Demo-scoped artifact cache, wiped on every lifecycle reset so each full run
-// honestly shows miss-then-hit.
+// honestly shows the image crossing the wire exactly once.
 const PULL_CACHE_DIR = path.resolve(import.meta.dirname, '../.machinen/web-cache');
 const SNAP_NAME = 'snap_machine';
-// Fixed port so the pull entry below is static: the process driver honors
+// Fixed port so the pull entries below are static: the process driver honors
 // ?port= on image entries, which makes the origin its own artifact registry
 // at a known address.
 const SNAP_PORT = Number(process.env.SNAPSHOT_PORT ?? 3811);
-const ORIGIN_ENTRY = `machinen://${SNAP_IMAGE}?port=${SNAP_PORT}`;
+// 100% HTTP: the host never reads machine code from disk. The origin's image
+// is PULLED from compute_machine's published /mf-image (the same bundle that
+// deployment runs) into the digest cache, then booted from the host's own
+// cache — code only ever moves between machines over HTTP.
+const ORIGIN_IMAGE_SOURCE =
+  process.env.SNAPSHOT_IMAGE_SOURCE ?? 'http://127.0.0.1:3801';
+const ORIGIN_ENTRY =
+  `machinen+pull+${ORIGIN_IMAGE_SOURCE}?artifact=image&version=^1.0.0&port=${SNAP_PORT}`;
 
 const CLONE_IDS = ['a', 'b'] as const;
 type CloneId = (typeof CLONE_IDS)[number];
@@ -733,10 +738,11 @@ async function lifecycleStep<T>(
 /** Step 1 — boot & work. Also the arc's reset: clones, origin, cache all go. */
 async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerResponse) {
   await lifecycleStep(res, ['cold', 'running', 'snapshotted', 'restored', 'forked'], async () => {
-    // Full reset: kill origin + clones, wipe the artifact cache so the next
-    // pull is honestly a miss, then (re)point the remote at the pristine
-    // image — a normal dynamic-remotes operation; force drops the cached
-    // container for the name.
+    // Full reset: kill origin + clones, wipe the artifact cache so the boot
+    // pull is honestly a miss, then (re)point the remote at the pull entry —
+    // a normal dynamic-remotes operation; force drops the cached container
+    // for the name. The image arrives over HTTP from compute_machine's
+    // /mf-image and boots from the host's own digest cache.
     await snapPlugin.disposeMachines();
     await rm(PULL_CACHE_DIR, { recursive: true, force: true });
     cacheStats.reset();

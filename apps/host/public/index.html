@@ -558,10 +558,10 @@
       <code class="block"><span class="kw">import</span> { createInstance } <span class="kw">from</span> <span class="str">'@module-federation/runtime'</span>;
 <span class="kw">import</span> { machinenPlugin, httpAttachDriver } <span class="kw">from</span> <span class="str">'@federated-compute/machinen-plugin'</span>;
 
-<span class="cm">// three entry kinds, one runtime:</span>
-<span class="cm">//   machinen://&lt;path&gt;            boot from local disk</span>
-<span class="cm">//   machinen+http://host:port    attach to a deployment</span>
-<span class="cm">//   machinen+pull+http://…       fetch the artifact, boot a local clone</span>
+<span class="cm">// three entry kinds, one runtime — code only moves between machines over HTTP:</span>
+<span class="cm">//   machinen+http://host:port    attach to a deployment (calls move, code doesn't)</span>
+<span class="cm">//   machinen+pull+http://…       fetch the artifact over HTTP, boot a local clone</span>
+<span class="cm">//   machinen://&lt;path&gt;            boot from a local path (deployments booting their own code)</span>
 <span class="kw">const</span> host = <span class="fn">createInstance</span>({
   name: <span class="str">'host'</span>,
   remotes: [{ name: <span class="str">'java_machine'</span>, entry: <span class="str">'machinen+http://127.0.0.1:3802'</span> }, <span class="cm">/* … */</span>],
@@ -591,7 +591,7 @@
           <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
         </span>
         <span class="mvline"><b>Nothing crosses the network.</b> State drops to disk, the process dies, a new one resumes mid-count.</span>
-        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 1–3</a></span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 2–3</a></span>
       </div>
       <div class="move">
         <span class="mv" data-mv="pull">
@@ -599,7 +599,7 @@
           <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
         </span>
         <span class="mvline"><b>The artifact moves to you.</b> Image or warm snapshot is fetched over HTTP; an independent clone boots locally.</span>
-        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 4–5</a></span>
+        <span class="mvwhere"><a href="#panel-lifecycle">act 04 · steps 1, 4–5</a></span>
       </div>
       <div class="move">
         <span class="mv" data-mv="deploy">
@@ -706,27 +706,32 @@
       <span class="mv" data-mv="freeze">
         <span class="mvname">freeze / restore</span>
         <span class="mvdiag"><i class="mvhot">state</i><span class="mvwire" data-what="none" data-dir="right"></span><i>.snap</i></span>
-        <span class="mvwhat">steps 1–3 — <b>nothing moves</b>, state survives death</span>
+        <span class="mvwhat">steps 2–3 — <b>nothing moves</b>, state survives death</span>
       </span>
       <span class="mv" data-mv="pull">
         <span class="mvname">pull to me</span>
         <span class="mvdiag"><i class="mvhot">artifact</i><span class="mvwire" data-what="artifact" data-dir="right"></span><i>host</i></span>
-        <span class="mvwhat">steps 4–5 — <b>the artifact moves</b>, a clone boots</span>
+        <span class="mvwhat">steps 1, 4–5 — <b>the artifact moves</b>, a clone boots</span>
       </span>
     </div>
     <p class="concept">
-      <b>One machine, one stepper, the whole lifecycle.</b> Steps 1–3: <code>snap_machine</code> is
-      booted from an image (process driver, fixed port 3811), worked to 3, <b>frozen</b> into a
-      <code>.snap</code> bundle, killed, and <b>restored</b> by pointing the same remote name at the
-      bundle. Steps 4–5: the restored process serves <code>/mf-manifest.json</code>,
+      <b>One machine, one stepper, the whole lifecycle — and the host never reads machine code
+      from disk.</b> Step 1: <code>snap_machine</code>'s image is <b>pulled over HTTP</b> from
+      <code>compute_machine</code>'s published <code>/mf-image</code> (digest <b>MISS</b> — the
+      code crosses the wire exactly once) and booted from the host's own cache (process driver,
+      fixed port 3811), then worked to 3. Steps 2–3: <b>frozen</b> into a <code>.snap</code>
+      bundle (state captured over HTTP via <code>/mf/state</code>), killed, and <b>restored</b>.
+      Steps 4–5: the restored process serves <code>/mf-manifest.json</code>,
       <code>/mf-image</code> and <code>/mf-snapshot</code> — <b>it is a registry of itself</b> — so a
       <code>machinen+pull+http://</code> entry forks it: snapshot re-fetched fresh each time
-      (it's <code>no-store</code>), image by digest — <b>MISS</b> then <b>HIT</b>. Step 5 also
-      <b>pins</b> <code>?digest=</code> to the exact image step 4 pulled. Clones own their
-      state; divergence is the point. <b>Attach to state you share; pull state you want to own.</b>
+      (it's <code>no-store</code>), image already cached by digest — <b>HIT</b>, near-instant.
+      Step 5 also <b>pins</b> <code>?digest=</code> to the exact image step 4 pulled. Clones own
+      their state; divergence is the point. <b>Attach to state you share; pull state you want to own.</b>
     </p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
-    <code class="card-code"><span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                                <span class="cm">// 2 · freeze -> .snap</span>
+    <code class="card-code">host.registerRemotes([{ name: <span class="str">'snap_machine'</span>,                              <span class="cm">// 1 · boot: image arrives over HTTP</span>
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3801?artifact=image&amp;port=3811'</span> }]);
+<span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                                <span class="cm">// 2 · freeze -> .snap</span>
 host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <span class="str">'machinen://….snap?port=3811'</span> }], { force: <span class="kw">true</span> });  <span class="cm">// 3 · restore</span>
 host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,                                <span class="cm">// 4 · fork by pull</span>
   entry: <span class="str">'machinen+pull+http://127.0.0.1:3811?artifact=snapshot'</span> }]);
@@ -1112,14 +1117,14 @@ function flashCache(cls) {
 const ORIGIN_ALIVE = ['running', 'restored', 'forked'];
 
 const LC_NARRATIVES = {
-  cold: () => `No machine yet. Step 1 boots <b>snap_machine</b> from its image and increments its counter three times. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)`,
-  running: (s) => `<b>snap_machine</b> is alive (a real child process on :${s.originPort}) — counter at <b>${s.value}</b>. Now <span class="snapc">freeze</span> it.`,
+  cold: () => `No machine yet. Step 1 <span class="pullc">pulls</span> <b>snap_machine</b>'s image over HTTP from <b>compute_machine</b>'s published <code>/mf-image</code>, boots it, and increments its counter three times. The host never reads machine code from disk. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)`,
+  running: (s) => `<b>snap_machine</b> is alive (a real child process on :${s.originPort}) — its image arrived <span class="pullc">over HTTP</span> (digest MISS, sha256-verified), counter at <b>${s.value}</b>. Now <span class="snapc">freeze</span> it.`,
   snapshotted: (s) => `Process <b>killed</b>. The counter exists only inside <span class="snapc">${esc(s.snapFile ?? '.snap')}</span> (${s.snapBytes ?? '?'} bytes). Nothing crossed the network. Restore it.`,
   restored: (s, extra) => `Restored from the bundle: a <b>new process</b> resumed at <b>${extra?.resumed ?? (s.value != null ? s.value - 1 : '?')}</b> and continued to <b>${s.value}</b>. And because it serves <span class="pullc">/mf-image + /mf-snapshot</span>, it is a registry of itself — step 4 forks it over plain HTTP.`,
   forked: (s, extra) => {
     if (extra?.clone === 'a' && !s.clones.b) {
       const a = s.clones.a;
-      return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh, image digest <b>MISS</b> — <b>${fmtBytes(a?.pulledBytes ?? 0)}</b> moved, sha256-verified — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again: the image is now cached.`;
+      return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh (<b>${fmtBytes(a?.pulledBytes ?? 0)}</b>, sha256-verified), image digest <b>HIT</b> — the code already crossed the wire once, at boot — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again, pinned.`;
     }
     // The server guarantees clone b is pinned (it refuses the pull otherwise),
     // so the narrative can state the pin as fact.

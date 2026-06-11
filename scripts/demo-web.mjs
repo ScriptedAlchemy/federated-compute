@@ -221,9 +221,15 @@ async function runSmoke(base) {
   console.log(`[smoke] POST /api/pipeline -> totalMs=${pipelineBody.totalMs.toFixed(0)}`);
 
   // ---- lifecycle arc: boot -> freeze -> restore -> fork -> fork again ------
+  // 100% HTTP: the origin's image is pulled from compute_machine's /mf-image
+  // at boot (the host never reads machine code from disk) — that pull is the
+  // run's one image MISS; every later pull is a digest HIT.
   const boot = await postJson(base, '/api/lifecycle/boot');
   expect(boot.phase === 'running' && boot.value === 3, `lifecycle boot: ${JSON.stringify(boot)}`);
-  console.log('[smoke] lifecycle boot -> counter 3');
+  const bootPull = (boot.wire ?? []).find((e) => e.type === 'artifact');
+  expect(bootPull && bootPull.cacheHit === false && bootPull.bytes > 0,
+    `boot should pull the origin image over HTTP (MISS): ${JSON.stringify(bootPull)}`);
+  console.log(`[smoke] lifecycle boot -> image pulled over HTTP (${bootPull.bytes} bytes, MISS), counter 3`);
 
   const freeze = await postJson(base, '/api/lifecycle/freeze');
   expect(freeze.phase === 'snapshotted' && freeze.snapBytes > 0, 'lifecycle freeze failed');
@@ -235,11 +241,12 @@ async function runSmoke(base) {
 
   const pullA = await postJson(base, '/api/lifecycle/pull');
   expect(pullA.clone === 'a' && pullA.resumed === 4, `lifecycle pull a: ${JSON.stringify(pullA)}`);
-  expect(pullA.clones.a.imageCacheHit === false && pullA.clones.a.pulledBytes > 0,
-    'first pull should be an image cache MISS with bytes moved');
+  expect(pullA.clones.a.imageCacheHit === true,
+    'fork pull should be an image cache HIT — the image already crossed the wire at boot');
+  expect(pullA.clones.a.pulledBytes > 0, 'fork pull should move the snapshot bytes');
   const artifactWire = (pullA.wire ?? []).filter((e) => e.type === 'artifact');
   expect(artifactWire.length === 1, 'pull a should record one artifact wire event');
-  console.log(`[smoke] lifecycle pull a -> resumed 4, ${pullA.clones.a.pulledBytes} bytes, image MISS`);
+  console.log(`[smoke] lifecycle pull a -> resumed 4, ${pullA.clones.a.pulledBytes} bytes, image HIT`);
 
   expect(String(pullA.imageDigest).startsWith('sha256:'),
     `pull a should learn the image digest from the clone manifest (got ${pullA.imageDigest})`);
