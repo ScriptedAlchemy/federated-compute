@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { envKeyFor } from '../packages/runtime-plugin/dist/client.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -52,7 +53,7 @@ export function wanEntry(name) {
 export function remoteEnv(names = Object.keys(PORTS), { wan = [] } = {}) {
   return Object.fromEntries(
     names.map((name) => [
-      `MACHINEN_REMOTE_${name.toUpperCase()}`,
+      envKeyFor(name),
       wan.includes(name) ? wanEntry(name) : localEntry(name),
     ]),
   );
