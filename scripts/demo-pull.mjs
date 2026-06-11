@@ -4,6 +4,11 @@
 // /mf-snapshot); a consumer's `machinen+pull+http://...` entry fetches the
 // artifact into a digest-addressed cache and boots an INDEPENDENT clone
 // through the ordinary process driver.
+//
+// Disk note: Act 1 boots the origin from local disk because this script
+// plays the DEPLOYMENT-OWNER role for it — every deployment starts its own
+// code from its own filesystem. The consumers in Acts 2-4 only ever pull
+// over HTTP.
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';

@@ -121,6 +121,11 @@ Steps 1–3 are today's card, unchanged. New steps:
   digest **MISS** → `GET /mf-image` (N KB, sha256 verified), process boot.
   An independent clone resumes at the origin's counter value.
 
+  > **Superseded (commit 887a849):** step 1 now pulls the origin's image over
+  > HTTP from compute_machine's `/mf-image`, so the image MISS happens at
+  > boot and every fork (steps 4–5) is a digest HIT moving only the snapshot.
+  > The as-built cache story is "the code crosses the wire exactly once".
+
 - **5 · fork again.** Same entry, name `snap_clone_b`. The snapshot is
   re-fetched (tiny, by design); the image is a digest cache **HIT** — 0
   bytes transferred, near-instant boot. This step carries both the

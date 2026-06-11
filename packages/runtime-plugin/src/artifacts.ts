@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, rename, rm, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
@@ -152,15 +152,20 @@ function imageExt(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
 async function verifyCachedFile(cachePath: string, hex: string): Promise<boolean> {
   const hash = createHash('sha256');
   try {
-    for await (const chunk of createReadStream(cachePath)) {
-      hash.update(chunk as Buffer);
+    const stream: AsyncIterable<Buffer> = createReadStream(cachePath);
+    for await (const chunk of stream) {
+      hash.update(chunk);
     }
   } catch {
-    return false; // missing or unreadable — treat as a miss
+    // Missing or unreadable (even a directory squatting on the path): treat
+    // as a miss and clear the way so the re-download can land.
+    await rm(cachePath, { recursive: true, force: true }).catch(() => {});
+    return false;
   }
   if (hash.digest('hex') === hex) return true;
-  // Corrupt entry (partial write, disk fault): evict and re-download.
-  await rm(cachePath, { force: true });
+  // Corrupt entry (partial write, disk fault): evict and re-download. An
+  // eviction failure (file held open elsewhere) still degrades to a miss.
+  await rm(cachePath, { force: true }).catch(() => {});
   return false;
 }
 
@@ -168,18 +173,24 @@ function tempCachePath(cachePath: string): string {
   return `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
 }
 
-async function commitAtomic(temp: string, cachePath: string): Promise<void> {
+/**
+ * Rename temp onto its content-addressed destination. When the rename loses
+ * a race (rename onto an existing file fails on some platforms), `verifyHex`
+ * decides whether the existing destination is acceptable: content addressing
+ * only guarantees same-bytes for files that actually match their digest — a
+ * corrupt pre-existing entry must not win over freshly verified bytes.
+ */
+async function commitAtomic(temp: string, cachePath: string, verifyHex?: string): Promise<void> {
   try {
     await rename(temp, cachePath);
   } catch (error) {
-    // Concurrent writers race the same destination. Content is
-    // digest/content-addressed, so whoever landed first wrote the same
-    // bytes — accept it (rename onto an existing file fails on some
-    // platforms) as long as the destination actually exists.
     await rm(temp, { force: true });
     try {
       await stat(cachePath);
     } catch {
+      throw error;
+    }
+    if (verifyHex && !(await verifyCachedFile(cachePath, verifyHex))) {
       throw error;
     }
   }
@@ -200,7 +211,7 @@ async function streamVerifiedToTemp(
   if (!res.body) fail(spec, 'image artifact response had no body');
   // Open before taking the reader: an open failure must not strand an
   // unconsumed (and uncancellable-by-us) body stream.
-  let file;
+  let file: FileHandle;
   try {
     file = await open(temp, 'w');
   } catch (error) {
@@ -268,7 +279,7 @@ async function ensureImageCached(
   const temp = tempCachePath(cachePath);
   try {
     const bytesFetched = await streamVerifiedToTemp(spec, res, expectedDigest, temp);
-    await commitAtomic(temp, cachePath);
+    await commitAtomic(temp, cachePath, hex);
     return { localPath: cachePath, bytesFetched, fromCache: false };
   } catch (error) {
     await rm(temp, { force: true });
@@ -407,10 +418,7 @@ async function resolveSnapshot(
   } else {
     // The cache may still hold it (e.g. pinned earlier); ext must come from
     // the image descriptor when present, else we cannot name the file.
-    const ext = imageDescriptor ? imageExt(spec, imageDescriptor) : undefined;
-    const cachePath = ext ? path.join(cacheDir, `${imageDigest}${ext}`) : undefined;
-    const hit = cachePath ? await verifyCachedFile(cachePath, imageDigest) : false;
-    if (!hit || !cachePath) {
+    const notCached: () => never = () =>
       fail(
         spec,
         `snapshot references image digest "${snapshot.imageDigest}" but the origin ` +
@@ -419,7 +427,9 @@ async function resolveSnapshot(
             : 'publishes no image artifact') +
           ' and the digest is not in the local cache',
       );
-    }
+    if (!imageDescriptor) notCached();
+    const cachePath = path.join(cacheDir, `${imageDigest}${imageExt(spec, imageDescriptor)}`);
+    if (!(await verifyCachedFile(cachePath, imageDigest))) notCached();
     cachedImage = { localPath: cachePath, bytesFetched: 0, fromCache: true };
   }
 

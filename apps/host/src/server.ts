@@ -613,15 +613,29 @@ async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse,
   if (!upstream.ok) {
     return json(res, 502, { error: `machine answered ${upstream.status} for /mf-types.ts` });
   }
-  if (Number(upstream.headers.get('content-length')) > MAX_TYPES_BYTES) {
-    await upstream.body?.cancel().catch(() => {});
-    return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
+  // Cap what the host BUFFERS, not just what it relays: a hostile machine
+  // can omit content-length (chunked encoding), so count bytes as they
+  // stream and cancel the moment the cap is crossed.
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  const reader = upstream.body?.getReader();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_TYPES_BYTES) {
+        await reader.cancel().catch(() => {});
+        return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
+      }
+      chunks.push(Buffer.from(value));
+    }
   }
-  const types = await upstream.text();
-  if (Buffer.byteLength(types) > MAX_TYPES_BYTES) {
-    return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
-  }
-  json(res, 200, { machine: name, url: `${base}/mf-types.ts`, types });
+  json(res, 200, {
+    machine: name,
+    url: `${base}/mf-types.ts`,
+    types: Buffer.concat(chunks).toString(),
+  });
 }
 // ----------------------------------------------------------------------------
 
@@ -648,9 +662,15 @@ const SNAP_PORT = Number(process.env.SNAPSHOT_PORT ?? 3811);
 // 100% HTTP: the host never reads machine code from disk. The origin's image
 // is PULLED from compute_machine's published /mf-image (the same bundle that
 // deployment runs) into the digest cache, then booted from the host's own
-// cache — code only ever moves between machines over HTTP.
+// cache — code only ever moves between machines over HTTP. The default
+// derives from compute_machine's entry so an address override
+// (MACHINEN_REMOTE_COMPUTE_MACHINE) carries over automatically.
 const ORIGIN_IMAGE_SOURCE =
-  process.env.SNAPSHOT_IMAGE_SOURCE ?? 'http://127.0.0.1:3801';
+  process.env.SNAPSHOT_IMAGE_SOURCE ??
+  remotes
+    .find((r) => r.name === 'compute_machine')!
+    .entry.replace(/^machinen\+/, '')
+    .split('?')[0];
 const ORIGIN_ENTRY =
   `machinen+pull+${ORIGIN_IMAGE_SOURCE}?artifact=image&version=^1.0.0&port=${SNAP_PORT}`;
 
@@ -746,6 +766,14 @@ async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerR
     await snapPlugin.disposeMachines();
     await rm(PULL_CACHE_DIR, { recursive: true, force: true });
     cacheStats.reset();
+    // The reset is destructive and the pull below can fail (compute_machine
+    // is the chaos victim — it may be mid-respawn). Drop to a coherent cold
+    // state FIRST so a failed boot never reports a phase whose invariants
+    // (clones, processes, cache) were just wiped.
+    lifecycle.phase = 'cold';
+    lifecycle.value = undefined;
+    lifecycle.snapFile = undefined;
+    lifecycle.snapBytes = undefined;
     lifecycle.clones = {};
     lifecycle.imageDigest = undefined;
     snapHost.registerRemotes([{ name: SNAP_NAME, entry: ORIGIN_ENTRY }], { force: true });
@@ -754,8 +782,6 @@ async function handleLifecycleBoot(_req: http.IncomingMessage, res: http.ServerR
     await counter.increment();
     lifecycle.value = await counter.increment();
     lifecycle.phase = 'running';
-    lifecycle.snapFile = undefined;
-    lifecycle.snapBytes = undefined;
     return { loadRemote: `${SNAP_NAME}/counter` };
   });
 }

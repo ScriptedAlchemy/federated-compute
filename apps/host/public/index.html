@@ -756,7 +756,8 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
       <span class="lin pull-lin" id="lin-clone-a">clone a</span><span class="larr">/</span>
       <span class="lin pull-lin" id="lin-clone-b">clone b</span>
     </div>
-    <div class="snap-narrative" id="snap-narrative">No machine yet. Step 1 boots <b>snap_machine</b> from its image and increments its counter three times. (Step 1 also resets the arc: clones are disposed and the artifact cache is wiped.)</div>
+    <!-- Filled from LC_NARRATIVES.cold on init — single source for the cold story. -->
+    <div class="snap-narrative" id="snap-narrative"></div>
     <div class="fleet">
       <div class="member absent" data-acc="snap" id="fleet-origin">
         <span class="mname">snap_machine · origin</span>
@@ -1126,9 +1127,8 @@ const LC_NARRATIVES = {
       const a = s.clones.a;
       return `<span class="pullc">Fork by pull:</span> snapshot fetched fresh (<b>${fmtBytes(a?.pulledBytes ?? 0)}</b>, sha256-verified), image digest <b>HIT</b> — the code already crossed the wire once, at boot — and an independent clone resumed at <b>${a?.resumed}</b>. Step 5 pulls again, pinned.`;
     }
-    // The server guarantees clone b is pinned (it refuses the pull otherwise),
-    // so the narrative can state the pin as fact.
-    if (extra?.clone === 'b' && s.clones.b?.pinnedDigest) {
+    if (extra?.clone === 'b') {
+      // The server guarantees clone b is pinned (it refuses the pull otherwise).
       const pin = s.clones.b.pinnedDigest;
       return `<span class="pullc">Forked again — this time pinned:</span> the entry carried ` +
         `<span class="pullc">digest=${esc(String(pin).slice(0, 17))}…</span>` +
@@ -1139,6 +1139,8 @@ const LC_NARRATIVES = {
     return `One warm machine, forked over plain HTTP. <b>Attach to state you share; pull state you want to own.</b> Step 1 resets the arc.`;
   },
 };
+// Initial render: the cold story has one source of truth.
+$('snap-narrative').innerHTML = LC_NARRATIVES.cold();
 
 function light(id, on) { $(id).classList.toggle('lit', !!on); }
 

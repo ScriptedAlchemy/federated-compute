@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -198,6 +198,41 @@ describe('resolvePullEntry: image artifacts', () => {
     expect(resolution.fromCache).toBe(true);
     expect(resolution.bytesFetched).toBe(0);
     expect(origin.requests).not.toContain('/mf-image');
+  });
+
+  test('an unreadable cache entry degrades to a miss and re-downloads', async () => {
+    // A cache path that exists but cannot be read as a file (here: a
+    // directory) must not fail resolution — verification treats any read
+    // error as a miss and the artifact is fetched again.
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      { '/mf-image': (res) => serveImage(res) },
+    );
+    const cachePath = path.join(cacheDir, `${IMAGE_DIGEST.slice('sha256:'.length)}.mjs`);
+    await mkdir(cachePath);
+
+    const resolution = await resolvePullEntry(pullSpec(origin.url), { cacheDir });
+
+    expect(resolution.fromCache).toBe(false);
+    expect(resolution.bytesFetched).toBe(IMAGE_BYTES.length);
+    expect(origin.requests).toContain('/mf-image');
+  });
+
+  test('concurrent pulls of two entries sharing one digest both boot from one cached file', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: imageDescriptor } },
+      { '/mf-image': (res) => serveImage(res) },
+    );
+
+    const [a, b] = await Promise.all([
+      resolvePullEntry(pullSpec(origin.url, '?clone=a'), { cacheDir }),
+      resolvePullEntry(pullSpec(origin.url, '?clone=b'), { cacheDir }),
+    ]);
+
+    expect(a.localPath).toBe(b.localPath);
+    expect(await readFile(a.localPath)).toEqual(IMAGE_BYTES);
+    // No torn writes: exactly one cached artifact, no leftover temp files.
+    expect((await readdir(cacheDir)).filter((f) => !f.endsWith('.snap'))).toHaveLength(1);
   });
 
   test('a download whose bytes do not match the advertised digest fails and caches nothing', async () => {
