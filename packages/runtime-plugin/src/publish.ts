@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createReadStream } from 'node:fs';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import type { ArtifactDescriptor, MachineExposeManifest } from './types.js';
 import {
@@ -121,4 +124,121 @@ export async function publishSnapshotDir(
   );
 
   return { digest: `sha256:${digestHex}`, bytes, machineDir, bundlePath, descriptor };
+}
+
+export interface ArtifactEndpointOptions {
+  layoutDir: string;
+  /** Loopback by default — serving VM memory off-host is a deliberate act. */
+  hostname?: string;
+  /** 0 (default) picks a free port. */
+  port?: number;
+}
+
+export interface ArtifactEndpoint {
+  url: string;
+  port: number;
+  close(): Promise<void>;
+}
+
+// Same segment discipline as bundle paths: no dots-only names, no separators.
+const PATH_SEGMENT_RE = /^(?!\.+$)[A-Za-z0-9._-]+$/;
+
+function safeJoin(root: string, segments: string[]): string | undefined {
+  if (!segments.length || !segments.every((segment) => PATH_SEGMENT_RE.test(segment))) {
+    return undefined;
+  }
+  return path.join(root, ...segments);
+}
+
+/** Single-range "bytes=a-b" parsing; anything else serves the full file. */
+function parseRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | undefined {
+  const match = header ? /^bytes=(\d*)-(\d*)$/.exec(header) : null;
+  if (!match || (!match[1] && !match[2])) return undefined;
+  const start = match[1] ? Number(match[1]) : size - Number(match[2]);
+  const end = match[1] && match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return undefined;
+  if (start < 0 || end >= size || start > end) return undefined;
+  return { start, end };
+}
+
+/**
+ * The plugin-owned artifact endpoint: a read-only static server over the
+ * publish layout. GET only; loopback by default; Range honored. The same
+ * layout copied to any static host serves identically — this server is
+ * plumbing the plugin owns, not a product the user operates.
+ */
+export async function startArtifactEndpoint(
+  options: ArtifactEndpointOptions,
+): Promise<ArtifactEndpoint> {
+  const hostname = options.hostname ?? '127.0.0.1';
+  const machinesRoot = path.join(options.layoutDir, 'machines');
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { allow: 'GET' });
+        res.end();
+        return;
+      }
+      const segments = (req.url ?? '').split('?')[0].split('/').filter(Boolean);
+      let machineSegments: string[];
+      if (segments[0] === 'machines') {
+        machineSegments = segments.slice(1);
+      } else {
+        // Root mount: with exactly one published machine, the bare base URL
+        // serves it — the single-machine Phase 1 URL shape.
+        const names = await readdir(machinesRoot).catch(() => [] as string[]);
+        if (names.length !== 1) {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        machineSegments = [names[0], ...segments];
+      }
+      const file = safeJoin(machinesRoot, machineSegments);
+      const info = file ? await stat(file).catch(() => undefined) : undefined;
+      if (!file || !info?.isFile()) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      const type = file.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+      const range = parseRange(req.headers.range, info.size);
+      if (range) {
+        res.writeHead(206, {
+          'content-type': type,
+          'content-length': range.end - range.start + 1,
+          'content-range': `bytes ${range.start}-${range.end}/${info.size}`,
+          'accept-ranges': 'bytes',
+        });
+        createReadStream(file, { start: range.start, end: range.end }).pipe(res);
+      } else {
+        res.writeHead(200, {
+          'content-type': type,
+          'content-length': info.size,
+          'accept-ranges': 'bytes',
+        });
+        createReadStream(file).pipe(res);
+      }
+    } catch {
+      res.writeHead(500);
+      res.end();
+    }
+  });
+
+  server.listen(options.port ?? 0, hostname);
+  await once(server, 'listening');
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : (options.port ?? 0);
+  return {
+    url: `http://${hostname}:${port}`,
+    port,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
 }
