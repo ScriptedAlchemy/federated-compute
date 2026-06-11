@@ -29,7 +29,8 @@ import { recordWire, wire, type WireEvent } from './wire.js';
 export const vmCapability: VmCapability = detectVmCapability();
 
 const VM_NAME = 'vm_machine';
-const VM_PUBLISH_PORT = Number(process.env.VM_PUBLISH_PORT ?? 3812);
+// 3814: the lifecycle arc's clone guests occupy 3812/3813 (LIFECYCLE_PORT+1/+2).
+const VM_PUBLISH_PORT = Number(process.env.VM_PUBLISH_PORT ?? 3814);
 // The lifecycle arc pulls its image over HTTP; this lane boots from the local
 // bundle path because the producer IS the deployment here — the artifact that
 // crosses a boundary in this story is the vmstate, not the image.

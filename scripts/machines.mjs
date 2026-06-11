@@ -27,10 +27,13 @@ export const ANALYTICS_ORIGIN_PORT = 3806;
 export const REGION_AGENT_PORT = 3810;
 // Page 01 lifecycle origin: the host boots snap_machine at this fixed port so
 // its machinen+pull+ entries are static (`?port=` on the image entry).
+// NOTE: the lifecycle clones boot at LIFECYCLE_PORT+1 and +2 (3812/3813) —
+// see clonePort() in apps/host/src/lifecycle.ts.
 export const LIFECYCLE_PORT = 3811;
 // The vm lane's plugin-owned artifact endpoint (vmstate publish). Fixed so
-// the consumer's pull entry is a static, displayable string.
-export const VM_PUBLISH_PORT = 3812;
+// the consumer's pull entry is a static, displayable string; 3814 because
+// 3812/3813 belong to the lifecycle clones above.
+export const VM_PUBLISH_PORT = 3814;
 
 // Simulated WAN links into the data region (latency proxies in front of these).
 export const WAN_PORTS = {

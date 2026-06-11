@@ -1,15 +1,15 @@
 {
   "format": "vm-demo-trace@1",
-  "capturedAt": "2026-06-11T09:42:35.673Z",
+  "capturedAt": "2026-06-11T10:04:51.094Z",
   "platform": "linux/amd64",
   "runtime": "0.4.0",
   "events": [
     {
-      "atMs": 22,
+      "atMs": 23,
       "kind": "boot-start"
     },
     {
-      "atMs": 10388,
+      "atMs": 10118,
       "kind": "running",
       "state": {
         "phase": "running",
@@ -21,7 +21,7 @@
           "runtime": "0.4.0"
         },
         "timings": {
-          "bootMs": 10362
+          "bootMs": 10091
         },
         "progress": {
           "running": true,
@@ -48,13 +48,13 @@
             "fn": "start",
             "args": "[]",
             "result": "{\"running\":true,\"iteration\":0,\"cacheSize\":0,\"cacheCapacity\":4096,\"best\":-1,\"fingerprint\":\"6b46ab3c\",\"pid\":3031}",
-            "ms": 4.098206999999093
+            "ms": 2.275720999998157
           }
         ]
       }
     },
     {
-      "atMs": 10893,
+      "atMs": 10622,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -67,7 +67,7 @@
       }
     },
     {
-      "atMs": 11397,
+      "atMs": 11126,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -80,7 +80,7 @@
       }
     },
     {
-      "atMs": 11902,
+      "atMs": 11630,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -93,7 +93,7 @@
       }
     },
     {
-      "atMs": 12405,
+      "atMs": 12133,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -106,7 +106,7 @@
       }
     },
     {
-      "atMs": 12909,
+      "atMs": 12635,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -119,7 +119,7 @@
       }
     },
     {
-      "atMs": 13412,
+      "atMs": 13138,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -132,7 +132,7 @@
       }
     },
     {
-      "atMs": 13916,
+      "atMs": 13640,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -145,7 +145,7 @@
       }
     },
     {
-      "atMs": 14421,
+      "atMs": 14144,
       "kind": "progress",
       "progress": {
         "running": true,
@@ -158,11 +158,11 @@
       }
     },
     {
-      "atMs": 14421,
+      "atMs": 14144,
       "kind": "publish-start"
     },
     {
-      "atMs": 23568,
+      "atMs": 23035,
       "kind": "published",
       "state": {
         "phase": "published",
@@ -174,8 +174,8 @@
           "runtime": "0.4.0"
         },
         "timings": {
-          "bootMs": 10362,
-          "publishMs": 9143
+          "bootMs": 10091,
+          "publishMs": 8888
         },
         "frozenAt": {
           "running": true,
@@ -187,10 +187,10 @@
           "pid": 3031
         },
         "published": {
-          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
-          "bytes": 2662113791,
-          "url": "http://127.0.0.1:3812/machines/vm_machine",
-          "publishMs": 9143,
+          "digest": "sha256:0412d0eabaa58ad3c97215a0ad31706712b644f44ea03ad0e5acdff10019c928",
+          "bytes": 2662142431,
+          "url": "http://127.0.0.1:3814/machines/vm_machine",
+          "publishMs": 8888,
           "sourceDead": true
         },
         "wire": [
@@ -201,12 +201,12 @@
             "fn": "progress",
             "args": "[]",
             "result": "{\"running\":true,\"iteration\":19750,\"cacheSize\":4096,\"cacheCapacity\":4096,\"best\":0.9941,\"fingerprint\":\"8f566dfe\",\"pid\":3031}",
-            "ms": 1.5844570000044769
+            "ms": 0.9663870000003953
           },
           {
             "type": "snapshot",
             "machine": "vm_machine",
-            "snapFile": "/home/zack/projects/federated-compute/apps/host/.machinen/web-vm-snapshots/vm_machine-mq9b6osp"
+            "snapFile": "/home/zack/projects/federated-compute/apps/host/.machinen/web-vm-snapshots/vm_machine-mq9bzbfp"
           },
           {
             "type": "crash",
@@ -217,11 +217,11 @@
       }
     },
     {
-      "atMs": 23568,
+      "atMs": 23035,
       "kind": "restore-start"
     },
     {
-      "atMs": 33513,
+      "atMs": 33004,
       "kind": "restored",
       "state": {
         "phase": "restored",
@@ -233,9 +233,9 @@
           "runtime": "0.4.0"
         },
         "timings": {
-          "bootMs": 10362,
-          "publishMs": 9143,
-          "restoreMs": 9944
+          "bootMs": 10091,
+          "publishMs": 8888,
+          "restoreMs": 9968
         },
         "frozenAt": {
           "running": true,
@@ -247,48 +247,48 @@
           "pid": 3031
         },
         "published": {
-          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
-          "bytes": 2662113791,
-          "url": "http://127.0.0.1:3812/machines/vm_machine",
-          "publishMs": 9143,
+          "digest": "sha256:0412d0eabaa58ad3c97215a0ad31706712b644f44ea03ad0e5acdff10019c928",
+          "bytes": 2662142431,
+          "url": "http://127.0.0.1:3814/machines/vm_machine",
+          "publishMs": 8888,
           "sourceDead": true
         },
         "pull": {
-          "bytes": 2662113791,
-          "ms": 4005,
+          "bytes": 2662142431,
+          "ms": 3828,
           "cacheHit": false,
-          "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f"
+          "digest": "sha256:0412d0eabaa58ad3c97215a0ad31706712b644f44ea03ad0e5acdff10019c928"
         },
-        "entry": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=^1.0.0",
+        "entry": "machinen+pull+http://127.0.0.1:3814/machines/vm_machine?artifact=vmstate&version=^1.0.0",
         "progress": {
           "running": true,
-          "iteration": 24000,
+          "iteration": 24250,
           "cacheSize": 4096,
           "cacheCapacity": 4096,
           "best": 0.9941,
-          "fingerprint": "5a7c79e4",
+          "fingerprint": "4e6a37aa",
           "pid": 3031
         },
         "wire": [
           {
             "type": "artifact",
             "machine": "vm_machine",
-            "origin": "http://127.0.0.1:3812/machines/vm_machine",
-            "entry": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
+            "origin": "http://127.0.0.1:3814/machines/vm_machine",
+            "entry": "machinen+pull+http://127.0.0.1:3814/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
             "artifact": "vmstate",
-            "bytes": 2662113791,
-            "digest": "sha256:f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f",
+            "bytes": 2662142431,
+            "digest": "sha256:0412d0eabaa58ad3c97215a0ad31706712b644f44ea03ad0e5acdff10019c928",
             "cacheHit": false,
-            "ms": 4005
+            "ms": 3828
           },
           {
             "type": "attach",
             "machine": "vm_machine",
-            "entry": "machinen:///home/zack/projects/federated-compute/apps/host/.machinen/web-vm-cache/vmstate/sha256-f45003bfc676536836de24713b8592e57dcc29d94692ff414c833ba94f313e2f?artifact=vmstate&version=%5E1.0.0",
+            "entry": "machinen:///home/zack/projects/federated-compute/apps/host/.machinen/web-vm-cache/vmstate/sha256-0412d0eabaa58ad3c97215a0ad31706712b644f44ea03ad0e5acdff10019c928?artifact=vmstate&version=%5E1.0.0",
             "version": "1.0.0",
             "requires": "^1.0.0",
             "runtime": "node v18.20.4",
-            "pulledFrom": "machinen+pull+http://127.0.0.1:3812/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
+            "pulledFrom": "machinen+pull+http://127.0.0.1:3814/machines/vm_machine?artifact=vmstate&version=%5E1.0.0",
             "imageDigest": "sha256:99f0a21e5f501e8693b57f9064a912d2c894ac6dc32d55017942d68575a4972d"
           },
           {
@@ -297,61 +297,61 @@
             "module": "./solver",
             "fn": "progress",
             "args": "[]",
-            "result": "{\"running\":true,\"iteration\":24000,\"cacheSize\":4096,\"cacheCapacity\":4096,\"best\":0.9941,\"fingerprint\":\"5a7c79e4\",\"pid\":3031}",
-            "ms": 1.4088909999991301
+            "result": "{\"running\":true,\"iteration\":24250,\"cacheSize\":4096,\"cacheCapacity\":4096,\"best\":0.9941,\"fingerprint\":\"4e6a37aa\",\"pid\":3031}",
+            "ms": 1.0369260000006761
           }
         ]
       }
     },
     {
-      "atMs": 34017,
+      "atMs": 33508,
       "kind": "progress",
       "progress": {
         "running": true,
-        "iteration": 26500,
+        "iteration": 26750,
         "cacheSize": 4096,
         "cacheCapacity": 4096,
         "best": 0.9941,
-        "fingerprint": "02e06718",
+        "fingerprint": "e54e1ec6",
         "pid": 3031
       }
     },
     {
-      "atMs": 34523,
+      "atMs": 34010,
       "kind": "progress",
       "progress": {
         "running": true,
-        "iteration": 29000,
+        "iteration": 29250,
         "cacheSize": 4096,
         "cacheCapacity": 4096,
         "best": 0.775,
-        "fingerprint": "55e60fd2",
+        "fingerprint": "46259d2c",
         "pid": 3031
       }
     },
     {
-      "atMs": 35026,
+      "atMs": 34513,
       "kind": "progress",
       "progress": {
         "running": true,
-        "iteration": 31500,
+        "iteration": 31750,
         "cacheSize": 4096,
         "cacheCapacity": 4096,
         "best": 0.775,
-        "fingerprint": "2083d9b6",
+        "fingerprint": "505fbe58",
         "pid": 3031
       }
     },
     {
-      "atMs": 35528,
+      "atMs": 35015,
       "kind": "progress",
       "progress": {
         "running": true,
-        "iteration": 34000,
+        "iteration": 34250,
         "cacheSize": 4096,
         "cacheCapacity": 4096,
         "best": 0.775,
-        "fingerprint": "4eee18da",
+        "fingerprint": "e8eb6af4",
         "pid": 3031
       }
     }
