@@ -224,7 +224,9 @@ The third page (http://localhost:3800/android, or `pnpm demo:android` for the
 CLI) pushes the lifecycle arc to its extreme: a real machinen microVM boots
 Debian, installs QEMU + adb inside itself, and powers on an emulated
 Android-x86 4.4 device (single-core TCG — the guest has no nested KVM, so
-first power-on takes minutes). An app is launched over adb, then the OUTER VM
+the first power-on takes minutes; the lab then caches the booted device as a
+golden vmstate bundle and later power-ons restore it in ~25s — boot once,
+restore forever). An app is launched over adb, then the OUTER VM
 is frozen into a ~1.9 GiB vmstate bundle and restored. The Android kernel,
 the app, adbd, and every TCP connection between them thaw mid-instruction:
 same app pid, same kernel `boot_id`, uptime continued — with screenshots of

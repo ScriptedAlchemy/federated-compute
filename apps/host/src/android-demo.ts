@@ -12,12 +12,16 @@
 // Steps are minutes-long (single-core TCG emulation of Android), so every
 // mutation is an async job: POST kicks it off, GET /api/android/status polls
 // phase + a live progress log.
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 // ---- the machinen runtime (optional peer, lazily loaded) --------------------
 // Kept external by rsbuild (see rsbuild.config.ts): the runtime ships native
@@ -72,6 +76,10 @@ const OUTER_MIB = 1880;
 // Android's RAM inside the inner QEMU. 4.4/KitKat is comfortable at 768 MB,
 // and outer minus inner leaves headroom for Debian + qemu + adb.
 const INNER_MB = 768;
+// Guest rootdisk. Actual usage is ~1.5 GiB (qemu+adb ~0.6, ISO 0.44,
+// extracted boot files, logs); 4 GiB leaves headroom and halves the
+// apparent size snapshot bundles have to carry.
+const ROOT_DISK_BYTES = 4 * 1024 ** 3;
 // Android-x86 4.4-r5: the newest release whose Dalvik runtime boots in ~3min
 // on a SINGLE emulated core (the machinen guest has one vCPU and no nested
 // KVM, so the inner QEMU runs pure TCG software emulation).
@@ -87,6 +95,13 @@ const APP = 'com.android.settings';
 const APP_ACTIVITY = `${APP}/.Settings`;
 const ADB = `adb -s 127.0.0.1:${ADB_FWD}`;
 const SNAP_DIR = path.resolve(import.meta.dirname, '../.machinen/android-snapshots');
+// Instant-on cache: after the first successful power-on, the booted device is
+// snapshotted into this golden bundle and every later power-on RESTORES it
+// (~25s) instead of re-booting Android (~3-12min of TCG emulation). The
+// recipe marker invalidates the cache when the lab's constants change.
+// Survives "reset lab"; delete the directory to force a cold build.
+const GOLDEN_DIR = path.resolve(import.meta.dirname, '../.machinen/android-golden');
+const GOLDEN_MARKER = path.join(GOLDEN_DIR, 'recipe.json');
 // Validated boots range 3min (idle host) to ~12min (loaded host) — TCG speed
 // is a direct function of free host CPU.
 const ANDROID_BOOT_TIMEOUT_MS = 20 * 60_000;
@@ -248,6 +263,63 @@ async function killVm(): Promise<void> {
   vncLive = false;
 }
 
+/** Vmstate-snapshot the live VM into outDir; the source keeps running. */
+async function snapshotVm(outDir: string): Promise<number> {
+  if (!vm) throw new Error('no VM to snapshot');
+  const runtime = await loadRuntime();
+  // Patch the mis-arched reseed helper before the state we freeze is final.
+  await vm.writeFile('/sbin/machinen-vmstate-reseed', RESEED_SHIM, { mode: 0o755 });
+  await mkdir(path.dirname(outDir), { recursive: true });
+  // Snapshot through an attach() handle (boot-owned handles can deadlock
+  // under the CRIU engine — same workaround as the machinen driver).
+  const snapVm = await runtime.attach({ pid: vm.pid });
+  await snapVm.snapshot({ outDir, timeoutMs: 300_000 });
+  // The snapshot writes the rootdisk copy non-sparse — every unwritten
+  // block lands as literal zeros. Re-dig the holes: zeros read back as
+  // zeros either way, so restores are byte-identical, but the bundle's
+  // real disk usage drops to the data the guest actually wrote.
+  await execFileAsync('fallocate', ['--dig-holes', path.join(outDir, 'rootdisk.img')]).catch(() => {});
+  return (await stat(path.join(outDir, 'state.vmstate'))).size;
+}
+
+/** Restore a vmstate bundle as the lab's current VM. */
+async function restoreVm(snapDir: string): Promise<void> {
+  const runtime = await loadRuntime();
+  const dtb = runtime.resolveBaseDtb?.();
+  // Fresh host port, same guest port: the inner qemu's VNC listener was
+  // frozen with the VM and thaws still listening — only the host-side
+  // forward is new. Browser VNC sessions reconnect; the device kept drawing.
+  vncHostPort = await freePort();
+  vm = await runtime.restore({
+    snapDir,
+    kernel: runtime.resolveBaseKernel(),
+    ...(dtb ? { dtb } : {}),
+    name: `android-lab-restored-${process.pid}-${Date.now().toString(36)}`,
+    portForward: [{ hostPort: vncHostPort, guestPort: VNC_WS_GUEST }],
+    timeoutMs: 300_000,
+  });
+  vncLive = true;
+}
+
+// Cache key: any change to the device recipe invalidates the golden bundle.
+const RECIPE = JSON.stringify({
+  outerMib: OUTER_MIB,
+  innerMb: INNER_MB,
+  rootDiskBytes: ROOT_DISK_BYTES,
+  iso: ISO_URL,
+  adbFwd: ADB_FWD,
+  vncWs: VNC_WS_GUEST,
+});
+
+async function goldenUsable(): Promise<boolean> {
+  try {
+    if (!existsSync(path.join(GOLDEN_DIR, 'state.vmstate'))) return false;
+    return (await readFile(GOLDEN_MARKER, 'utf8')) === RECIPE;
+  } catch {
+    return false;
+  }
+}
+
 // ---- the jobs ----------------------------------------------------------------
 
 /** Serialize jobs and funnel failures into the error phase. */
@@ -269,8 +341,54 @@ function runJob(name: string, job: () => Promise<void>): void {
 }
 
 async function jobPowerOn(): Promise<void> {
-  const runtime = await loadRuntime();
   const t0 = Date.now();
+
+  // Instant-on: a previous power-on cached the booted device as a vmstate
+  // bundle — restoring it (~25s) replaces the whole build + the ~3-12min
+  // single-core TCG Android boot. The lab eating its own dogfood.
+  if (await goldenUsable()) {
+    setStep('instant-on: restoring the cached booted device (skips the TCG boot)…');
+    try {
+      await restoreVm(GOLDEN_DIR);
+      await ensureAdbOnline();
+      state.timings.totalPowerOnMs = Date.now() - t0;
+      state.timings.instantOnMs = state.timings.totalPowerOnMs;
+      state.phase = 'device-ready';
+      logLine(
+        `instant-on: device restored from the golden bundle in ${state.timings.totalPowerOnMs}ms ` +
+          '(delete apps/host/.machinen/android-golden to force a cold build)',
+      );
+      return;
+    } catch (err) {
+      // A stale/corrupt bundle must not brick the lab — rebuild from scratch.
+      logLine(`instant-on failed (${(err as Error).message}) — falling back to a cold build`);
+      await killVm();
+      await rm(GOLDEN_DIR, { recursive: true, force: true });
+    }
+  }
+
+  await coldPowerOn(t0);
+  state.timings.totalPowerOnMs = Date.now() - t0;
+
+  setStep('caching the booted device as a golden bundle (instant-on next time)…');
+  try {
+    await rm(GOLDEN_DIR, { recursive: true, force: true });
+    const bytes = await snapshotVm(GOLDEN_DIR);
+    await writeFile(GOLDEN_MARKER, RECIPE);
+    logLine(
+      `golden bundle cached (${(bytes / 1024 ** 3).toFixed(2)} GiB) — the next power-on restores it in seconds`,
+    );
+  } catch (err) {
+    // The lab works without the cache; the next power-on just boots cold.
+    logLine(`golden caching failed (non-fatal): ${(err as Error).message}`);
+    await rm(GOLDEN_DIR, { recursive: true, force: true }).catch(() => {});
+  }
+  state.phase = 'device-ready';
+}
+
+/** The full build: boot microVM, install tools, fetch ISO, boot Android. */
+async function coldPowerOn(t0: number): Promise<void> {
+  const runtime = await loadRuntime();
 
   setStep('booting the outer machinen microVM (KVM)…');
   const dtb = runtime.resolveBaseDtb?.();
@@ -282,7 +400,7 @@ async function jobPowerOn(): Promise<void> {
     cmd: ['/bin/sh', '-c', 'exec sleep infinity'],
     name: `android-lab-${process.pid}`,
     memory: OUTER_MIB,
-    rootDiskSizeBytes: 8 * 1024 ** 3,
+    rootDiskSizeBytes: ROOT_DISK_BYTES,
     portForward: [{ hostPort: vncHostPort, guestPort: VNC_WS_GUEST }],
     timeoutMs: 180_000,
   });
@@ -343,7 +461,11 @@ async function jobPowerOn(): Promise<void> {
     setStep(`Android booting… ${Math.round((Date.now() - t) / 1000)}s on one emulated core`);
     await sleep(15_000);
   }
-  if (!booted) throw new Error('Android did not reach sys.boot_completed=1 within 15 minutes');
+  if (!booted) {
+    throw new Error(
+      `Android did not reach sys.boot_completed=1 within ${ANDROID_BOOT_TIMEOUT_MS / 60_000} minutes`,
+    );
+  }
   state.timings.androidBootMs = Date.now() - t;
   logLine(`Android booted: sys.boot_completed=1 (${state.timings.androidBootMs}ms)`);
 
@@ -354,9 +476,7 @@ async function jobPowerOn(): Promise<void> {
   if (!dev.includes(`127.0.0.1:${ADB_FWD}\tdevice`)) {
     throw new Error(`adb device did not come online:\n${dev}`);
   }
-  logLine('adb connected — the device is live');
-  state.timings.totalPowerOnMs = Date.now() - t0;
-  state.phase = 'device-ready';
+  logLine(`adb connected — the device is live (cold build ${Date.now() - t0}ms)`);
 }
 
 async function jobLaunchApp(): Promise<void> {
@@ -379,22 +499,14 @@ async function jobLaunchApp(): Promise<void> {
 
 async function jobFreeze(): Promise<void> {
   if (!vm) throw new Error('no VM to freeze');
-  const runtime = await loadRuntime();
   setStep('freezing the WHOLE VM: Android, the app, adb — RAM + disk + vCPU…');
-  // Patch the mis-arched reseed helper before the state we freeze is final.
-  await vm.writeFile('/sbin/machinen-vmstate-reseed', RESEED_SHIM, { mode: 0o755 });
   await rm(SNAP_DIR, { recursive: true, force: true });
-  await mkdir(SNAP_DIR, { recursive: true });
   bundleDir = path.join(SNAP_DIR, `device-${Date.now().toString(36)}`);
   const t = Date.now();
-  // Snapshot through an attach() handle (boot-owned handles can deadlock
-  // under the CRIU engine — same workaround as the machinen driver).
-  const snapVm = await runtime.attach({ pid: vm.pid });
-  await snapVm.snapshot({ outDir: bundleDir, timeoutMs: 300_000 });
+  const bytes = await snapshotVm(bundleDir);
   state.timings.freezeMs = Date.now() - t;
-  const vmstate = await stat(path.join(bundleDir, 'state.vmstate'));
-  state.bundleBytes = vmstate.size;
-  logLine(`vmstate bundle written: ${(vmstate.size / 1024 ** 3).toFixed(2)} GiB (${state.timings.freezeMs}ms)`);
+  state.bundleBytes = bytes;
+  logLine(`vmstate bundle written: ${(bytes / 1024 ** 3).toFixed(2)} GiB (${state.timings.freezeMs}ms)`);
 
   setStep('killing the source VM — the running device now exists only in the bundle');
   await killVm();
@@ -404,23 +516,9 @@ async function jobFreeze(): Promise<void> {
 
 async function jobResume(): Promise<void> {
   if (!bundleDir) throw new Error('no snapshot bundle to restore');
-  const runtime = await loadRuntime();
   setStep('restoring the VM from the vmstate bundle…');
   const t = Date.now();
-  const dtb = runtime.resolveBaseDtb?.();
-  // Fresh host port, same guest port: the inner qemu's VNC listener was
-  // frozen with the VM and thaws still listening — only the host-side
-  // forward is new. Browser VNC sessions reconnect; the device kept drawing.
-  vncHostPort = await freePort();
-  vm = await runtime.restore({
-    snapDir: bundleDir,
-    kernel: runtime.resolveBaseKernel(),
-    ...(dtb ? { dtb } : {}),
-    name: `android-lab-restored-${process.pid}-${Date.now().toString(36)}`,
-    portForward: [{ hostPort: vncHostPort, guestPort: VNC_WS_GUEST }],
-    timeoutMs: 300_000,
-  });
-  vncLive = true;
+  await restoreVm(bundleDir);
   state.timings.restoreMs = Date.now() - t;
   logLine(`VM restored in ${state.timings.restoreMs}ms — checking on the device…`);
 
@@ -460,6 +558,8 @@ function statusBody() {
     app: APP,
     /** Page 04 connects noVNC to GET /vnc whenever this is true. */
     vncLive: androidVncPort() !== undefined,
+    /** A golden bundle exists — the next power-on is an instant-on restore. */
+    instantOn: existsSync(GOLDEN_MARKER),
     config: { outerMib: OUTER_MIB, innerMb: INNER_MB, image: 'android-x86 4.4-r5' },
   };
 }
@@ -521,7 +621,7 @@ export function handleAndroidReset(_req: http.IncomingMessage, res: http.ServerR
     state.bundleBytes = undefined;
     state.timings = {};
     state.log = [];
-    logLine('lab reset — cold');
+    logLine('lab reset — cold (golden instant-on bundle kept; delete android-golden/ to drop it)');
   });
   send(res, 202, statusBody());
 }

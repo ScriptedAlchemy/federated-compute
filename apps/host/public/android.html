@@ -277,11 +277,14 @@
     </div>
     <div class="honesty">
       <b>Honesty notes:</b> the machinen guest exposes no nested KVM and a single vCPU, so Android
-      runs under pure TCG emulation — first power-on is <b>~4–6 minutes</b> end to end (ISO download
-      included). The outer VM is capped at 1880 MiB because machinen 0.4.0 reads the vmstate back
-      with a single <code>readFileSync</code> (2 GiB buffer ceiling) — and a vmstate is essentially
-      a full RAM image. adbd is enabled from the device's serial root console because Android 4.4
-      only auto-starts it on USB gadget events, and an emulated PC has none.
+      runs under pure TCG emulation — the <b>first</b> power-on builds the device from scratch
+      (<b>~4–12 minutes</b> end to end, ISO download included). The lab then eats its own dogfood:
+      the booted device is cached as a golden vmstate bundle, and every later power-on
+      <b>restores it in ~25 seconds</b> — boot once, restore forever. The outer VM is capped at
+      1880 MiB because machinen 0.4.0 reads the vmstate back with a single
+      <code>readFileSync</code> (2 GiB buffer ceiling) — and a vmstate is essentially a full RAM
+      image. adbd is enabled from the device's serial root console because Android 4.4 only
+      auto-starts it on USB gadget events, and an emulated PC has none.
     </div>
   </section>
 
@@ -296,8 +299,9 @@
       <div class="stepcard" id="card-boot">
         <span class="sno">1</span>
         <h3>Power on the device</h3>
-        <p class="sdesc">Boot the microVM, install qemu+adb in its guest, fetch the Android-x86 ISO,
-          power on the emulated device, wait for <code>sys.boot_completed=1</code>, enable adb over TCP.</p>
+        <p class="sdesc">First time: boot the microVM, install qemu+adb, fetch the Android-x86 ISO,
+          power on the emulated device, wait for <code>sys.boot_completed=1</code>, enable adb over TCP —
+          then cache the booted device. Every later power-on restores that golden bundle in seconds.</p>
         <button id="btn-boot" class="droid-btn">power on</button>
       </div>
       <div class="stepcard" id="card-launch">

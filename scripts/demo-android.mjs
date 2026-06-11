@@ -115,7 +115,8 @@ try {
     cmd: ['/bin/sh', '-c', 'exec sleep infinity'],
     name: `android-demo-${process.pid}`,
     memory: OUTER_MIB,
-    rootDiskSizeBytes: 8 * 1024 ** 3,
+    // ~1.5 GiB actually written (qemu+adb, ISO, boot files); 4 GiB is ample.
+    rootDiskSizeBytes: 4 * 1024 ** 3,
     timeoutMs: 180_000,
   });
   timings.outerBoot = Date.now() - t0;
