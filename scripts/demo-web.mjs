@@ -128,14 +128,21 @@ host.on('exit', (code) => {
 // them: when the chaos demo kills compute_machine, the supervisor respawns it
 // after a beat and the host's next call re-attaches. `machine.child` is kept
 // pointing at the live process so stopAll()/stop() always kill the current one.
-const RESPAWN_DELAY_MS = 1500;
+const RESPAWN_BASE_DELAY_MS = 1500;
+const RESPAWN_MAX_DELAY_MS = 30_000;
 
 function supervise(machine) {
+  // Exponential backoff: a crash-looping machine must not hammer respawns at
+  // full speed forever. The delay doubles per respawn (capped) and resets to
+  // base only once a respawn reaches healthy.
+  let respawnDelayMs = RESPAWN_BASE_DELAY_MS;
   const watch = (child) => {
     child.on('exit', (code, signal) => {
       if (shuttingDown) return;
+      const delayMs = respawnDelayMs;
+      respawnDelayMs = Math.min(respawnDelayMs * 2, RESPAWN_MAX_DELAY_MS);
       console.log(
-        `[supervisor] ${machine.name} exited (${signal ?? `code ${code}`}) — respawning in ${RESPAWN_DELAY_MS}ms`,
+        `[supervisor] ${machine.name} exited (${signal ?? `code ${code}`}) — respawning in ${delayMs}ms`,
       );
       setTimeout(() => {
         if (shuttingDown) return;
@@ -146,9 +153,12 @@ function supervise(machine) {
           child: next,
           what: `${machine.name} respawn`,
         })
-          .then(() => console.log(`[supervisor] ${machine.name} is back on :${machine.port}`))
+          .then(() => {
+            respawnDelayMs = RESPAWN_BASE_DELAY_MS;
+            console.log(`[supervisor] ${machine.name} is back on :${machine.port}`);
+          })
           .catch((error) => console.error(`[supervisor] ${error.message}`));
-      }, RESPAWN_DELAY_MS);
+      }, delayMs);
     });
   };
   watch(machine.child);
