@@ -444,6 +444,19 @@
     font-size: 12px; padding: 8px 13px; text-shadow: none;
   }
 
+  /* ---------- chaos strip (act 06) ---------- */
+  .chaos { margin-bottom: 12px; }
+  .chaos-row { gap: 12px; margin-top: 0; }
+  #chaos-kill { border-color: rgba(229, 83, 75, .4); color: var(--hot); }
+  #chaos-kill:hover:not(:disabled) { border-color: var(--hot); box-shadow: 0 0 16px -6px rgba(229, 83, 75, .6); }
+  #chaos-kill:disabled { opacity: .35; cursor: not-allowed; }
+  #chaos-chip[data-state=alive] { color: var(--node); border-color: rgba(63, 185, 80, .35); }
+  #chaos-chip[data-state=dead] { color: var(--hot); border-color: rgba(229, 83, 75, .4); }
+  #chaos-chip[data-state=open] { color: var(--java); border-color: rgba(240, 136, 62, .4); }
+  .chaos-narrative { font-size: 11.5px; color: var(--ink-dim); margin-top: 9px; max-width: 110ch; min-height: 30px; }
+  .chaos-narrative b { color: var(--ink); font-weight: 500; }
+  .chaos-narrative .hotc { color: var(--hot); }
+
   /* ---------- log ---------- */
   #log {
     height: 230px; overflow-y: auto;
@@ -763,7 +776,28 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
 
   <section class="panel reveal" id="panel-log" style="--d:9">
     <h2><span class="actno">act 06 ·</span> Activity — runtime plugin hooks, live</h2>
-    <p class="concept"><b>Observable by construction.</b> Every boot, call, snapshot, artifact pull, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener in the host.</p>
+    <p class="concept"><b>Observable by construction.</b> Every boot, call, snapshot, artifact pull, crash, and circuit-breaker event flows through the plugin's hook system — this log is just a hook listener in the host. The failure events are not theoretical: <b>cause one yourself.</b></p>
+    <div class="chaos">
+      <div class="row chaos-row">
+        <button id="chaos-kill">☠ kill compute_machine</button>
+        <span class="chip" id="chaos-chip" data-state="alive">machine alive</span>
+      </div>
+      <div class="chaos-narrative" id="chaos-narrative">
+        The kill is real: one federated call to an exposed admin function makes the machine
+        <b>process.exit()</b>, then a burst of calls hits the dead process — watch
+        <b>onMachineCrash</b> flip the card cold and the <b>circuit breaker</b> open. The host
+        cannot restart someone else's deployment (containment); the demo orchestrator supervises
+        the process and brings it back, and the first successful call <b>re-attaches</b>.
+      </div>
+      <details class="wiretrace" id="chaos-wire" hidden>
+        <summary>the kill, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+      <details class="wiretrace" id="chaos-recover-wire" hidden>
+        <summary>the recovery, on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+    </div>
     <div id="log" aria-live="polite"></div>
   </section>
 </main>
@@ -1187,6 +1221,75 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
     }
   };
 });
+
+/* ---------- chaos: kill compute_machine, watch it heal (act 06) ---------- */
+let chaosTimer = null;
+
+function chaosChip(state, label) {
+  const chip = $('chaos-chip');
+  chip.dataset.state = state;
+  chip.textContent = label;
+}
+
+$('chaos-kill').onclick = async () => {
+  const btn = $('chaos-kill');
+  btn.disabled = true;
+  $('chaos-recover-wire').hidden = true;
+  chaosChip('dead', 'killing…');
+  $('chaos-narrative').innerHTML = '<span class="running">sending the kill call…</span>';
+  const r = await post('/api/chaos/kill', {});
+  if (r.error) {
+    chaosChip('alive', 'kill failed');
+    $('chaos-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+    btn.disabled = false;
+    return;
+  }
+  renderWireFx('chaos-wire', 'POST /api/chaos/kill', r.wire);
+  chaosChip('open', r.circuitOpened ? 'machine dead · circuit open' : 'machine dead');
+  $('chaos-narrative').innerHTML =
+    `<b>compute_machine</b> (pid ${esc(r.killed?.pid)}) killed itself mid-demo. ` +
+    `${esc(r.burst?.failed)}/${esc(r.burst?.attempted)} concurrent calls hit the dead machine — every one a real transport failure` +
+    (r.circuitOpened
+      ? `, and the breaker's threshold tripped: <b class="hotc">the circuit is open</b>, so calls now fail fast without touching the network.`
+      : '.') +
+    ' Probing for recovery…';
+  refreshDashboard();
+  chaosProbeLoop(performance.now());
+};
+
+function chaosProbeLoop(startedAt) {
+  clearTimeout(chaosTimer);
+  chaosTimer = setTimeout(async () => {
+    let r;
+    try {
+      r = await post('/api/chaos/probe', {});
+    } catch {
+      chaosProbeLoop(startedAt); // host hiccup — keep probing
+      return;
+    }
+    const elapsed = ((performance.now() - startedAt) / 1000).toFixed(0);
+    if (!r.recovered) {
+      const circuitOpen = r.errorName === 'MachineCircuitOpenError';
+      chaosChip(circuitOpen ? 'open' : 'dead',
+        circuitOpen ? `circuit open · failing fast · ${elapsed}s` : `unreachable · ${elapsed}s`);
+      $('chaos-narrative').innerHTML = circuitOpen
+        ? `Probe rejected without touching the network: <span class="hotc">${esc(r.error)}</span><br />` +
+          `The supervisor may already have respawned the process (watch the card) — the breaker holds for its 10s reset window, then lets one half-open probe through.`
+        : `Probe failed: <span class="hotc">${esc(r.error)}</span><br />The machine process is still down — the deployment supervisor respawns it shortly.`;
+      chaosProbeLoop(startedAt);
+      return;
+    }
+    chaosChip('alive', 'machine alive · circuit closed');
+    $('chaos-narrative').innerHTML =
+      `<b>Recovered after ${esc(elapsed)}s.</b> The deployment supervisor (the demo orchestrator — not the host) respawned the ` +
+      `process, the host re-attached, and the breaker's half-open probe succeeded: <b>onCircuitClose</b> fired and the card warmed back up. ` +
+      `The counter restarted at <b>${esc(r.value)}</b> — the crash dropped the machine's in-memory state, ` +
+      `which is exactly what act 04's snapshots exist to survive.`;
+    renderWireFx('chaos-recover-wire', 'POST /api/chaos/probe', r.wire);
+    $('chaos-kill').disabled = false;
+    refreshDashboard();
+  }, 1500);
+}
 
 let es = null;
 $('cd-run').onclick = () => {

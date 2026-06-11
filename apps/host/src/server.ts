@@ -103,7 +103,9 @@ type WireEvent =
       digest?: string;
       cacheHit: boolean;
       ms: number;
-    };
+    }
+  | { type: 'crash'; machine: string; error: string }
+  | { type: 'circuit'; machine: string; state: 'open' | 'closed' };
 
 const wireStore = new AsyncLocalStorage<WireEvent[]>();
 
@@ -160,6 +162,15 @@ function recordWire(p: MachinenPlugin): void {
   p.machineHooks.onSnapshotted.on(({ spec, snapshot }) => {
     const snapFile = (snapshot as { snapFile?: string })?.snapFile ?? '(driver descriptor)';
     wireStore.getStore()?.push({ type: 'snapshot', machine: spec.remoteName, snapFile });
+  });
+  p.machineHooks.onMachineCrash.on(({ spec, error }) => {
+    wireStore.getStore()?.push({ type: 'crash', machine: spec.remoteName, error: errorMessage(error) });
+  });
+  p.machineHooks.onCircuitOpen.on(({ spec }) => {
+    wireStore.getStore()?.push({ type: 'circuit', machine: spec.remoteName, state: 'open' });
+  });
+  p.machineHooks.onCircuitClose.on(({ spec }) => {
+    wireStore.getStore()?.push({ type: 'circuit', machine: spec.remoteName, state: 'closed' });
   });
 }
 
@@ -282,6 +293,9 @@ function logHooks(p: MachinenPlugin): void {
   });
   p.machineHooks.onCircuitOpen.on(({ spec }) => {
     logEvent('circuit', `${spec.remoteName} circuit open — failing fast`);
+  });
+  p.machineHooks.onCircuitClose.on(({ spec }) => {
+    logEvent('circuit', `${spec.remoteName} circuit closed — calls flow again`);
   });
   p.machineHooks.onSnapshotted.on(({ spec, snapshot }) => {
     const snapFile = (snapshot as { snapFile?: string })?.snapFile;
@@ -444,6 +458,65 @@ async function handleCounter(req: http.IncomingMessage, res: http.ServerResponse
   const value = await counter.increment();
   json(res, 200, { value, loadRemote: `${machine}/counter`, wire: wire() });
 }
+
+// ---- chaos: kill a machine live, watch the resilience machinery ------------
+// Act 06 promises crash + circuit-breaker hook events; this is the control
+// that produces them for real. The kill is a federated call to an exposed
+// admin function that makes the machine process.exit() right after answering.
+// The host deliberately CANNOT bring the machine back — it is somebody
+// else's deployment (containment) — the demo orchestrator (demo-web.mjs)
+// supervises the process and respawns it; the host merely re-attaches.
+const CHAOS_MACHINE = 'compute_machine';
+// One more concurrent call than the breaker threshold (5), so the burst
+// visibly opens the circuit. Concurrency matters: all six calls must hit
+// the same dead-but-cached machine before the first failure evicts it.
+const CHAOS_BURST = 6;
+
+let chaosBusy = false;
+
+async function handleChaosKill(_req: http.IncomingMessage, res: http.ServerResponse) {
+  if (chaosBusy) return json(res, 409, { error: 'a chaos sequence is already running' });
+  chaosBusy = true;
+  try {
+    const admin = (await host.loadRemote<ComputeMachineModules['./admin']>(
+      `${CHAOS_MACHINE}/admin`,
+    ))!;
+    const dying = await admin.die();
+    // The guest answers first, then exits (~100ms): wait for it to be dead.
+    await new Promise((r) => setTimeout(r, dying.exitingInMs + 200));
+    const counter = (await host.loadRemote<CounterModule>(`${CHAOS_MACHINE}/counter`))!;
+    const results = await Promise.allSettled(
+      Array.from({ length: CHAOS_BURST }, () => counter.current()),
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    const events = wire();
+    json(res, 200, {
+      killed: dying,
+      burst: { attempted: CHAOS_BURST, failed },
+      circuitOpened: events.some((e) => e.type === 'circuit' && e.state === 'open'),
+      wire: events,
+    });
+  } finally {
+    chaosBusy = false;
+  }
+}
+
+/** One read-only call into the killed machine; the UI polls this until it heals. */
+async function handleChaosProbe(_req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const counter = (await host.loadRemote<CounterModule>(`${CHAOS_MACHINE}/counter`))!;
+    const value = await counter.current();
+    json(res, 200, { recovered: true, value, wire: wire() });
+  } catch (error) {
+    json(res, 200, {
+      recovered: false,
+      errorName: error instanceof Error ? error.name : 'Error',
+      error: errorMessage(error),
+      wire: wire(),
+    });
+  }
+}
+// ----------------------------------------------------------------------------
 
 // ---- machine lifecycle story ------------------------------------------------
 // The five machines above are attached deployments (httpAttachDriver), so the
@@ -849,6 +922,8 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/pipeline', handlePipeline],
   ['GET /api/countdown', handleCountdown],
   ['POST /api/counter', handleCounter],
+  ['POST /api/chaos/kill', handleChaosKill],
+  ['POST /api/chaos/probe', handleChaosProbe],
   ['POST /api/lifecycle/boot', handleLifecycleBoot],
   ['POST /api/lifecycle/freeze', handleLifecycleFreeze],
   ['POST /api/lifecycle/restore', handleLifecycleRestore],

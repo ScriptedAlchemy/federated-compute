@@ -2,6 +2,10 @@
 // Do not edit by hand — regenerate with `pnpm bindgen`.
 import { machineModule } from '@federated-compute/machinen-plugin/client';
 
+export interface ComputeMachineAdmin {
+  die(): Promise<{ pid: number; exitingInMs: number }>;
+}
+
 export interface ComputeMachineCounter {
   current(): Promise<number>;
   increment(): Promise<number>;
@@ -23,12 +27,14 @@ export interface ComputeMachineText {
 }
 
 export interface ComputeMachineModules {
+  './admin': ComputeMachineAdmin;
   './counter': ComputeMachineCounter;
   './math': ComputeMachineMath;
   './system': ComputeMachineSystem;
   './text': ComputeMachineText;
 }
 
+export const admin = machineModule<ComputeMachineAdmin>('compute_machine', './admin', { version: '^1.0.0' });
 export const counter = machineModule<ComputeMachineCounter>('compute_machine', './counter', { version: '^1.0.0' });
 export const math = machineModule<ComputeMachineMath>('compute_machine', './math', { version: '^1.0.0', streams: ['countdown'] });
 export const system = machineModule<ComputeMachineSystem>('compute_machine', './system', { version: '^1.0.0' });

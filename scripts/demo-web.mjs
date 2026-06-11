@@ -5,6 +5,7 @@
 // `--smoke` runs a headless check pass against the running stack and exits.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { startWanLinks } from './latency-proxy.mjs';
 import {
@@ -28,7 +29,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const smoke = process.argv.includes('--smoke');
 
 // eu-west starts WITHOUT analytics: scenario 2 deploys it live, by pull.
-const { stop } = await startMachines({ exclude: ['analytics_machine'] });
+const { machines, stop } = await startMachines({ exclude: ['analytics_machine'] });
 
 const children = [];
 const stopAll = () => {
@@ -119,6 +120,45 @@ host.on('exit', (code) => {
   }
   shutdown(code ?? 0);
 });
+
+// ---- deployment supervisor ---------------------------------------------------
+// The host must never restart somebody else's deployment (containment) — but
+// this orchestrator owns the machine processes it spawned, so it supervises
+// them: when the chaos demo kills compute_machine, the supervisor respawns it
+// after a beat and the host's next call re-attaches. `machine.child` is kept
+// pointing at the live process so stopAll()/stop() always kill the current one.
+const RESPAWN_DELAY_MS = 1500;
+
+function supervise(machine) {
+  const watch = (child) => {
+    child.on('exit', (code, signal) => {
+      if (shuttingDown) return;
+      console.log(
+        `[supervisor] ${machine.name} exited (${signal ?? `code ${code}`}) — respawning in ${RESPAWN_DELAY_MS}ms`,
+      );
+      setTimeout(() => {
+        if (shuttingDown) return;
+        const [cmd, ...args] = machine.command;
+        const next = spawn(cmd, args, {
+          env: { ...process.env, PORT: String(machine.port), ...(machine.env ?? {}) },
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        machine.child = next;
+        watch(next);
+        waitForHttpOk(`http://127.0.0.1:${machine.port}/mf/health`, {
+          child: next,
+          what: `${machine.name} respawn`,
+        })
+          .then(() => console.log(`[supervisor] ${machine.name} is back on :${machine.port}`))
+          .catch((error) => console.error(`[supervisor] ${error.message}`));
+      }, RESPAWN_DELAY_MS);
+    });
+  };
+  watch(machine.child);
+}
+
+// compute_machine is the chaos demo's victim; it gets supervised respawn.
+supervise(machines.find((machine) => machine.name === 'compute_machine'));
 
 if (smoke) {
   const base = `http://127.0.0.1:${HOST_PORT}`;
@@ -231,4 +271,34 @@ async function runSmoke(base) {
   const redeploy = await postJson(base, '/api/gravity/deploy');
   expect(redeploy.alreadyDeployed === true, 'second deploy should be idempotent');
   console.log('[smoke] second deploy -> alreadyDeployed');
+
+  // ---- chaos: kill compute_machine, watch the breaker open, wait for heal --
+  // Runs LAST: the machine is dead/failing-fast for ~12s (respawn + breaker
+  // reset window) and nothing after this may depend on it.
+  const kill = await postJson(base, '/api/chaos/kill');
+  expect(kill.burst?.failed >= 5, `chaos burst should fail >=5 calls: ${JSON.stringify(kill.burst)}`);
+  expect(kill.circuitOpened === true, 'chaos kill should open the circuit breaker');
+  const killWire = (kill.wire ?? []).map((e) => e.type);
+  expect(killWire.includes('crash') && killWire.includes('circuit'),
+    `chaos wire should carry crash + circuit hook events (got ${killWire.join(',')})`);
+  console.log(`[smoke] POST /api/chaos/kill -> ${kill.burst.failed}/${kill.burst.attempted} burst calls failed, circuit open`);
+
+  const healDeadline = Date.now() + 30_000;
+  let sawFailFast = false;
+  let probe;
+  for (;;) {
+    probe = await postJson(base, '/api/chaos/probe');
+    if (probe.recovered) break;
+    if (probe.errorName === 'MachineCircuitOpenError') sawFailFast = true;
+    if (Date.now() > healDeadline) {
+      throw new Error(`chaos recovery timed out: ${JSON.stringify(probe)}`);
+    }
+    await sleep(1000);
+  }
+  expect(typeof probe.value === 'number', 'recovered chaos probe should carry the counter value');
+  expect(sawFailFast, 'dead-window probes should fail fast with MachineCircuitOpenError');
+  const healedDash = await fetch(`${base}/api/dashboard`).then((r) => r.json());
+  expect(healedDash.machines.find((m) => m.name === 'compute_machine')?.attached === true,
+    'compute_machine should be re-attached after chaos recovery');
+  console.log(`[smoke] chaos recovery -> circuit closed, machine re-attached, counter at ${probe.value}`);
 }

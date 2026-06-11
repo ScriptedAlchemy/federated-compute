@@ -71,4 +71,19 @@ export const exposes: Record<string, Record<string, ExposedFunction>> = {
       returns: '{ pid: number; platform: string; node: string; hint: string }',
     },
   },
+  './admin': {
+    // Chaos hook for the resilience demo: the machine kills itself shortly
+    // after answering, so the caller gets a clean response and every later
+    // call hits a genuinely dead process. Same trust model as the rest of
+    // the guest protocol: deliberately unauthenticated, loopback-bound.
+    die: {
+      handler: () => {
+        const delayMs = 100;
+        setTimeout(() => process.exit(1), delayMs);
+        return { pid: process.pid, exitingInMs: delayMs };
+      },
+      params: [],
+      returns: '{ pid: number; exitingInMs: number }',
+    },
+  },
 };
