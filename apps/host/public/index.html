@@ -726,7 +726,9 @@
       <code>machinen+pull+http://</code> entry forks it: snapshot re-fetched fresh each time
       (it's <code>no-store</code>), image already cached by digest — <b>HIT</b>, near-instant.
       Step 5 also <b>pins</b> <code>?digest=</code> to the exact image step 4 pulled. Clones own
-      their state; divergence is the point. <b>Attach to state you share; pull state you want to own.</b>
+      their state; divergence is the point. Pulls are deployment traffic — resolver-level fetches
+      that bypass the per-machine call circuit breaker by design.
+      <b>Attach to state you share; pull state you want to own.</b>
     </p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
     <code class="card-code">host.registerRemotes([{ name: <span class="str">'snap_machine'</span>,                              <span class="cm">// 1 · boot: image arrives over HTTP</span>

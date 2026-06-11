@@ -83,7 +83,7 @@ function wireHopHtml(e) {
       : '';
     return `<div class="whop">
       <span class="wchain">${chainHtml(['host', 'host'], ['machine', 'origin'])}</span>
-      <span class="wdetail"><b>pull ${esc(e.artifact)}</b> — resolved <code>${esc(e.entry)}</code>:
+      <span class="wdetail"><b>pull ${esc(e.artifact)}</b> (resolver-level fetch — bypasses the call circuit breaker by design) — resolved <code>${esc(e.entry)}</code>:
         <code>GET ${origin}/mf-manifest.json</code> (version negotiated <b>before</b> any artifact bytes moved)${snapshotHop}
         → image digest <b>${e.cacheHit ? 'HIT — image served from the local cache' : 'MISS — fetched + sha256-verified'}</b>${
           e.digest ? ` <code>${esc(String(e.digest).slice(0, 19))}…</code>` : ''}
