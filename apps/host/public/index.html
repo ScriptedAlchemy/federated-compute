@@ -15,6 +15,8 @@
     --hot: #e5534b;
     --snap: #c792ea;
     --pull: #4dd2bf;
+    --vm: #e0709a;
+    --replay: #f0b43c;
   }
   body {
     background-image:
@@ -419,6 +421,64 @@
   }
   .card-footer code { color: var(--ink-dim); background: var(--well); padding: 0 4px; border-radius: 3px; }
 
+  /* ---------- whole-VM lane (act 04 · phase 2) ---------- */
+  .vm-lane { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--panel-edge); }
+  .vm-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .vm-head h3 {
+    font-family: var(--display); font-size: 13px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--vm); margin: 0;
+  }
+  .vm-badge[data-mode=live] { color: var(--node); border-color: rgba(63, 185, 80, .4); }
+  .vm-badge[data-mode=replay] { color: var(--replay); border-color: rgba(240, 180, 60, .5); }
+  .vm-badge[data-mode=off] { color: var(--ink-dim); border-color: var(--panel-edge); }
+  .vm-badge[data-mode=checking] { color: var(--ink-faint); border-color: var(--panel-edge); }
+  .vm-meta { font-size: 10px; color: var(--ink-faint); }
+  .vm-steps button { border-color: rgba(224, 112, 154, .4); color: var(--vm); }
+  .vm-steps button:hover:not(:disabled) { border-color: var(--vm); box-shadow: 0 0 16px -6px rgba(224, 112, 154, .6); }
+  .vm-steps button:disabled { opacity: .35; cursor: not-allowed; }
+  .vm-steps #vm-replay-btn { border-color: rgba(240, 180, 60, .5); color: var(--replay); }
+  .vm-steps #vm-replay-btn:hover:not(:disabled) { border-color: var(--replay); box-shadow: 0 0 16px -6px rgba(240, 180, 60, .6); }
+  .vm-steps #vm-reset { padding: 5px 10px; font-size: 10px; color: var(--ink-dim); border-color: var(--panel-edge); }
+  .vm-step4 {
+    font-size: 11px; letter-spacing: .04em; color: var(--ink-faint);
+    border: 1px dashed var(--panel-edge); border-radius: 5px; padding: 6px 12px;
+    transition: color .4s, border-color .4s;
+  }
+  .vm-step4.lit { color: var(--node); border-color: rgba(63, 185, 80, .45); border-style: solid; }
+  .snap-phase[data-phase=published] i { background: var(--vm); box-shadow: 0 0 8px var(--vm); }
+  .vm-witness { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .vm-strip {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    font-size: 11px; color: var(--ink-dim);
+    background: var(--well); border: 1px solid var(--panel-edge); border-radius: 6px;
+    padding: 8px 13px;
+  }
+  .vm-strip .wk { color: var(--ink-faint); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; min-width: 150px; }
+  .vm-strip b {
+    font-family: var(--display); font-size: 14px; font-weight: 700;
+    color: var(--vm); font-variant-numeric: tabular-nums;
+  }
+  .vm-lane[data-replay='1'] .vm-strip b { color: var(--replay); }
+  .vm-strip.frozen { opacity: .65; border-style: dashed; }
+  .vm-strip.frozen b { color: var(--snap); text-decoration: line-through; text-decoration-color: rgba(199, 146, 234, .5); }
+  .vm-delta {
+    font-size: 11.5px; color: var(--ink-dim);
+    border-left: 3px solid rgba(63, 185, 80, .5); padding: 4px 0 4px 10px;
+  }
+  .vm-delta b { color: var(--node); font-weight: 600; }
+  .vm-stats {
+    font-size: 10.5px; color: var(--ink-dim); margin: 6px 0;
+    padding: 7px 11px; border-left: 3px solid rgba(224, 112, 154, .45);
+    background: var(--well); border-radius: 0 5px 5px 0; line-height: 1.7;
+  }
+  .vm-stats b { color: var(--vm); font-weight: 500; }
+  .vm-lane[data-replay='1'] .vm-stats b { color: var(--replay); }
+  .vm-stats code { font-size: 10px; color: var(--ink-dim); background: none; padding: 0; }
+  .vm-skip { font-size: 9.5px; color: var(--replay); letter-spacing: .08em; text-transform: uppercase; }
+  .vmc { color: var(--vm); }
+  .repc { color: var(--replay); }
+  .vm-narrative-note { font-size: 10px; color: var(--ink-faint); margin-top: 10px; }
+
   /* artifacts capability chip on machine cards (capability-as-presence). */
   .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
 
@@ -729,6 +789,9 @@
       their state; divergence is the point. Pulls are deployment traffic — resolver-level fetches
       that bypass the per-machine call circuit breaker by design.
       <b>Attach to state you share; pull state you want to own.</b>
+      One honest limit: this lane only moves what the guest <b>chose</b> to put in
+      <code>dehydrate()</code> — the hot solver in the whole-VM lane below is deliberately not in
+      it, so freeze/restore here would lose that heap.
     </p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
     <code class="card-code">host.registerRemotes([{ name: <span class="str">'snap_machine'</span>,                              <span class="cm">// 1 · boot: image arrives over HTTP</span>
@@ -784,11 +847,70 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
       <summary>what just happened on the wire<span class="wcount"></span></summary>
       <div class="wirebody"></div>
     </details>
-    <div class="card-footer">
-      Same flow with a whole microVM — heap, JIT, sockets — is <code>machinen-vmstate@1</code>:
-      ~2.5&nbsp;GB, arch-bound, registry-published (Phase 2). CLI preview: <code>pnpm demo:machinen</code>.
-      The pull protocol is deliberately unauthenticated and loopback-bound — publishing artifacts
-      means anyone who can reach the machine can take its code and its memory.
+
+    <!-- Phase 2: the whole-VM lane. Live on KVM hardware; a clearly-labeled
+         recorded trace everywhere else. Every number is a real hook/request
+         value (live) or comes from the committed real-KVM trace (replay). -->
+    <div class="vm-lane" id="vm-lane">
+      <div class="vm-head">
+        <h3>whole VM — machinen driver</h3>
+        <span class="chip vm-badge" id="vm-badge" data-mode="checking">checking hardware…</span>
+        <span class="vm-meta" id="vm-meta"></span>
+        <span class="vm-skip" id="vm-skip" hidden></span>
+      </div>
+      <p class="concept">
+        <b>Same federation, zero cooperation.</b> A hot route solver runs inside a
+        <b>real microVM</b>; its heap — memo cache, RNG state, iteration count, a ticking
+        <code>setInterval</code> — is <b>not</b> in <code>dehydrate()</code>. The app-state lane
+        above cannot move it. <span class="vmc">This lane moves the whole heap; nothing opted
+        in:</span> <code>plugin.publishMachine()</code> dumps the VM mid-flight into a
+        content-addressed <code>machinen-vmstate@1</code> bundle (GB-scale, arch-bound), and a
+        second MF instance pulls it with a <code>machinen+pull+…?artifact=vmstate</code> entry
+        and resumes it — heap, timers, kernel — without the guest ever being asked.
+      </p>
+      <div class="row snap-steps vm-steps">
+        <button id="vm-boot" disabled>1 · boot VM + start solver</button>
+        <span class="sarrow">→</span>
+        <button id="vm-publish" disabled>2 · freeze + publish (one verb)</button>
+        <span class="sarrow">→</span>
+        <button id="vm-restore" disabled>3 · pull vmstate to a second host</button>
+        <span class="sarrow">→</span>
+        <span class="vm-step4" id="vm-step4">4 · resumed — heap intact</span>
+        <button id="vm-replay-btn" hidden>▶ play recorded VM move</button>
+        <button id="vm-reset" disabled title="dispose VMs + reclaim the GB-scale artifacts">reset</button>
+        <span class="snap-phase" id="vm-phase" data-phase="cold"><i></i><span>cold</span></span>
+      </div>
+      <div class="vm-witness" id="vm-witness">
+        <div class="vm-strip" id="vm-strip-live" hidden>
+          <span class="wk">live heap — source VM</span>
+          <span>iteration <b data-f="iter">—</b></span>
+          <span>cache <b data-f="cache">—</b></span>
+          <span>best <b data-f="best">—</b></span>
+          <span>heap fp <b data-f="fp">—</b></span>
+          <span>pid <b data-f="pid">—</b></span>
+        </div>
+        <div class="vm-strip frozen" id="vm-strip-frozen" hidden>
+          <span class="wk">frozen at (the witness)</span>
+          <span>iteration <b data-f="iter">—</b></span>
+          <span>cache <b data-f="cache">—</b></span>
+          <span>best <b data-f="best">—</b></span>
+          <span>heap fp <b data-f="fp">—</b></span>
+          <span>pid <b data-f="pid">—</b></span>
+        </div>
+        <div class="vm-delta" id="vm-delta" hidden></div>
+      </div>
+      <div class="vm-stats" id="vm-publish-stats" hidden></div>
+      <div class="vm-stats" id="vm-pull-stats" hidden></div>
+      <div class="snap-narrative" id="vm-narrative"></div>
+      <details class="wiretrace" id="vm-wire" hidden>
+        <summary>what just happened on the wire<span class="wcount"></span></summary>
+        <div class="wirebody"></div>
+      </details>
+      <div class="vm-narrative-note">
+        The pull protocol is deliberately unauthenticated and loopback-bound — publishing a
+        vmstate bundle means anyone who can reach the endpoint can take the machine's code
+        <b>and its memory</b>. CLI version of this lane: <code>pnpm demo:machinen</code>.
+      </div>
     </div>
   </section>
 
@@ -1026,6 +1148,7 @@ async function refreshDashboard() {
   }
   if (payload.cache) renderCache(payload.cache);
   if (payload.lifecycle) syncLifecycleFromPoll(payload.lifecycle);
+  if (payload.vm) syncVmFromPoll(payload.vm);
   renderLog(payload.events);
 }
 
@@ -1326,6 +1449,342 @@ document.querySelectorAll('[data-lcounter]').forEach((btn) => {
     }
   };
 });
+
+/* ---------- whole-VM lane (act 04 · phase 2) ----------
+   Live mode drives the real /api/vm/* routes (KVM hardware); replay mode
+   schedules the committed real-KVM trace on its own timeline, renders into
+   THIS lane only, and is unmissably labeled. Never both at once. */
+const VM_CLI_POINTER = 'live version: pnpm demo:machinen, or any Linux box with /dev/kvm';
+let vmCap = null;
+let vmMode = 'off'; // 'live' | 'replay' | 'off'
+let vmPhase = 'cold';
+let vmBusy = false;
+let vmPollTimer = null;
+let vmTrace = null;
+let vmReplayActive = false;
+let vmReplayTimer = null;
+
+const fmtIter = (n) => Number(n ?? 0).toLocaleString('en-US');
+const fmtSec = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+function vmStrip(id, p, label) {
+  const el = $(id);
+  if (!p) { el.hidden = true; return; }
+  el.hidden = false;
+  if (label) el.querySelector('.wk').textContent = label;
+  const set = (k, v) => {
+    const slot = el.querySelector(`[data-f=${k}]`);
+    if (slot.textContent !== v) slot.textContent = v;
+  };
+  set('iter', fmtIter(p.iteration));
+  set('cache', `${p.cacheSize}/${p.cacheCapacity}`);
+  set('best', p.best === -1 ? '—' : String(p.best));
+  set('fp', p.fingerprint);
+  set('pid', String(p.pid));
+}
+
+function vmBadge(mode, text, title) {
+  const b = $('vm-badge');
+  b.dataset.mode = mode;
+  b.textContent = text;
+  b.title = title ?? '';
+}
+
+function vmChip(phase, label) {
+  $('vm-phase').dataset.phase = phase;
+  $('vm-phase').querySelector('span').textContent = label ?? phase;
+}
+
+function updateVmControls() {
+  const live = vmMode === 'live';
+  $('vm-boot').disabled = !live || vmBusy;
+  $('vm-publish').disabled = !live || vmBusy || vmPhase !== 'running';
+  $('vm-restore').disabled = !live || vmBusy || vmPhase !== 'published';
+  $('vm-reset').disabled = !live || vmBusy || vmPhase === 'cold';
+  $('vm-replay-btn').disabled = vmReplayActive;
+  $('vm-step4').classList.toggle('lit', vmPhase === 'restored');
+}
+
+/* Lane copy per phase — every interpolated number is server/trace data. */
+const VM_NARR = {
+  cold: () => `No microVM yet. Step 1 boots <b>vm_machine</b> as a <b>real microVM</b> (machinen driver) from the same guest bundle and starts the hot solver. Watch the witness strip fill with heap the app-state lane can't see.`,
+  running: (s) => `A real microVM is solving — booted in <b>${fmtSec(s.timings.bootMs)}</b>. The strip above is live heap, read over <code>/mf/call</code> every 500ms: telemetry, not serialization. Step 2 freezes the <b>whole VM</b> mid-flight — heap, timers, kernel — and publishes it as a content-addressed <code>machinen-vmstate@1</code> bundle with one verb: <code>plugin.publishMachine()</code>.`,
+  published: (s) => `Frozen mid-solve + published. The witness strip is now the <span class="snapc">freeze-point heap</span>: the restore must beat it or the demo fails loudly. ` +
+    (s.published?.sourceDead
+      ? `<b>The dump stopped the source VM</b> on this machinen version (a fixed engine would keep it running) — either way, <span class="vmc">the bundle is the machine now</span>. `
+      : `The source VM <b>survived the dump</b> (non-destructive checkpoint on this engine). `) +
+    `Step 3 pulls the bundle into a <b>second MF instance</b> — the "second host" — over the plugin's own artifact endpoint.`,
+  restored: (s) => `<b>The heap moved.</b> The clone resumed at iteration <b>${fmtIter(s.progress?.iteration)}</b> (frozen at ${fmtIter(s.frozenAt?.iteration)}) — same memo cache, same RNG stream, the solver's <code>setInterval</code> still ticking, and <b>nothing called rehydrate()</b>. The whole event loop was in the artifact.`,
+};
+
+function renderVmPublished(s, { replay } = {}) {
+  const p = s.published;
+  if (!p) { $('vm-publish-stats').hidden = true; return; }
+  $('vm-publish-stats').hidden = false;
+  $('vm-publish-stats').innerHTML =
+    `vmstate <code>${esc(p.digest.slice(0, 19))}…</code> · <b>${fmtBytes(p.bytes)}</b> · ` +
+    `dump + publish <b>${fmtSec(p.publishMs)}</b> · source VM ` +
+    (p.sourceDead
+      ? `<b>stopped by the dump</b> (this machinen version — it would survive on a fixed engine)`
+      : `<b>still running</b> (non-destructive checkpoint)`) +
+    (replay ? ` · <span class="repc">recorded</span>` : '');
+}
+
+function renderVmRestored(s, { replay } = {}) {
+  const pull = s.pull;
+  if (!pull) { $('vm-pull-stats').hidden = true; $('vm-delta').hidden = true; return; }
+  $('vm-pull-stats').hidden = false;
+  $('vm-pull-stats').innerHTML =
+    `pulled <b>${fmtBytes(pull.bytes)}</b> in <b>${fmtSec(pull.ms)}</b> · cache <b>${pull.cacheHit ? 'HIT' : 'MISS'}</b> · ` +
+    `pull + restore + first call <b>${fmtSec(s.timings.restoreMs)}</b>` +
+    (replay ? ` · <span class="repc">recorded</span>` : '') +
+    (s.entry ? `<br />the clone's whole deployment story: <code>${esc(s.entry)}</code>` : '');
+  if (s.progress && s.frozenAt) {
+    $('vm-delta').hidden = false;
+    $('vm-delta').innerHTML =
+      `resumed at iteration <b>${fmtIter(s.progress.iteration)}</b> (frozen at ${fmtIter(s.frozenAt.iteration)}) — ` +
+      `same heap, same RNG stream, same guest pid ${esc(s.progress.pid)}; nothing called rehydrate().`;
+  }
+}
+
+/** Render a full lane state (live responses + polled phase adoptions). */
+function applyVmState(s) {
+  vmPhase = s.phase;
+  const live = s.phase === 'running' || s.phase === 'restored';
+  if (s.progress && live) {
+    vmStrip('vm-strip-live', s.progress,
+      s.phase === 'restored' ? 'live heap — restored clone' : 'live heap — source VM');
+  } else {
+    $('vm-strip-live').hidden = true;
+  }
+  vmStrip('vm-strip-frozen', s.phase === 'published' || s.phase === 'restored' ? s.frozenAt : null);
+  if (s.phase === 'published' || s.phase === 'restored') renderVmPublished(s);
+  else $('vm-publish-stats').hidden = true;
+  if (s.phase === 'restored') renderVmRestored(s);
+  else { $('vm-pull-stats').hidden = true; $('vm-delta').hidden = true; }
+  vmChip(s.phase);
+  const narr = VM_NARR[s.phase];
+  if (narr) $('vm-narrative').innerHTML = narr(s);
+  updateVmControls();
+  vmPollLoop();
+}
+
+/** 500ms witness poll while a VM is live (lighter than the 1.5s dashboard). */
+function vmPollLoop() {
+  clearTimeout(vmPollTimer);
+  if (vmMode !== 'live' || !['running', 'restored'].includes(vmPhase)) return;
+  vmPollTimer = setTimeout(async () => {
+    if (!document.hidden && !vmBusy) {
+      try {
+        const s = await fetch('/api/vm/state').then((r) => r.json());
+        if (s.phase === vmPhase && s.progress) {
+          vmStrip('vm-strip-live', s.progress,
+            vmPhase === 'restored' ? 'live heap — restored clone' : 'live heap — source VM');
+        } else if (s.phase !== vmPhase) {
+          applyVmState(s);
+          return;
+        }
+      } catch { /* host hiccup — keep polling */ }
+    }
+    vmPollLoop();
+  }, 500);
+}
+
+/** Background dashboard poll: adopt phase changes made elsewhere. */
+function syncVmFromPoll(vm) {
+  if (vmMode !== 'live' || vmReplayActive || vmBusy) return;
+  if (vm.phase !== vmPhase) applyVmState(vm);
+}
+
+async function vmAction(route, runningLabel) {
+  vmBusy = true;
+  updateVmControls();
+  vmChip(vmPhase, `${vmPhase} · working…`);
+  $('vm-narrative').innerHTML = `<span class="running">${esc(runningLabel)}</span>`;
+  try {
+    const r = await post(route, {});
+    if (r.error) {
+      $('vm-narrative').innerHTML = `<span class="err">error: ${esc(r.error)}</span>`;
+      try {
+        const s = await fetch('/api/vm/state').then((x) => x.json());
+        vmPhase = s.phase;
+        vmChip(s.phase);
+      } catch { /* host unreachable — the poll loop recovers */ }
+      return null;
+    }
+    applyVmState(r);
+    if (r.wire) renderWireFx('vm-wire', `POST ${route}`, r.wire);
+    return r;
+  } catch (error) {
+    $('vm-narrative').innerHTML = `<span class="err">error: ${esc(String(error))}</span>`;
+    return null;
+  } finally {
+    vmBusy = false;
+    updateVmControls();
+  }
+}
+$('vm-boot').onclick = () =>
+  vmAction('/api/vm/boot', 'booting a real microVM (KVM) + starting the solver — 10–30s on this box, longer on a first run while base assets fetch…');
+$('vm-publish').onclick = () =>
+  vmAction('/api/vm/publish', 'freezing the whole VM mid-flight + publishing the vmstate bundle (GB-scale, content-addressed)…');
+$('vm-restore').onclick = () =>
+  vmAction('/api/vm/restore', 'pulling the vmstate bundle into a second MF instance + restoring — GBs are moving…');
+$('vm-reset').onclick = () =>
+  vmAction('/api/vm/reset', 'disposing VMs + reclaiming the GB-scale artifacts…');
+
+/* ---- replay: the committed real-KVM trace, scheduled on its own timeline ---- */
+const VM_GAP_CAP_MS = 2000;
+const VM_SKIP_LABEL = { running: 'boot', published: 'the vmstate dump + publish', restored: 'the pull + restore' };
+
+function vmShowSkip(skippedMs, nextKind) {
+  const el = $('vm-skip');
+  el.hidden = false;
+  el.textContent = `⏩ skipping ${Math.round(skippedMs / 1000)}s of ${VM_SKIP_LABEL[nextKind] ?? 'recorded time'}`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, VM_GAP_CAP_MS - 100);
+}
+
+function applyReplayEvent(e, restoredYet) {
+  const src = restoredYet ? 'recorded heap — restored clone' : 'recorded heap — source VM';
+  switch (e.kind) {
+    case 'boot-start':
+      vmChip('cold', 'replay · booting');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: booting a real microVM on the capture host…</span>';
+      break;
+    case 'running':
+      vmStrip('vm-strip-live', e.state.progress, src);
+      vmChip('running', 'replay · running');
+      $('vm-narrative').innerHTML = VM_NARR.running(e.state);
+      break;
+    case 'progress':
+      vmStrip('vm-strip-live', e.progress, src);
+      break;
+    case 'publish-start':
+      vmChip('running', 'replay · publishing');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: freezing the whole VM + publishing the vmstate bundle…</span>';
+      break;
+    case 'published':
+      $('vm-strip-live').hidden = true;
+      vmStrip('vm-strip-frozen', e.state.frozenAt);
+      renderVmPublished(e.state, { replay: true });
+      vmChip('published', 'replay · published');
+      $('vm-narrative').innerHTML = VM_NARR.published(e.state);
+      break;
+    case 'restore-start':
+      vmChip('published', 'replay · pulling');
+      $('vm-narrative').innerHTML = '<span class="running">recorded run: pulling the vmstate bundle to a second host + restoring…</span>';
+      break;
+    case 'restored':
+      vmStrip('vm-strip-live', e.state.progress, 'recorded heap — restored clone');
+      vmStrip('vm-strip-frozen', e.state.frozenAt);
+      renderVmRestored(e.state, { replay: true });
+      vmChip('restored', 'replay · restored');
+      $('vm-step4').classList.add('lit');
+      $('vm-narrative').innerHTML = VM_NARR.restored(e.state);
+      break;
+  }
+}
+
+async function playVmReplay() {
+  if (vmReplayActive) return;
+  if (!vmTrace) {
+    try {
+      const res = await fetch('/api/vm/replay');
+      if (!res.ok) throw new Error(`replay trace: HTTP ${res.status}`);
+      vmTrace = await res.json();
+    } catch (error) {
+      $('vm-narrative').innerHTML = `<span class="err">error: ${esc(String(error))}</span>`;
+      return;
+    }
+  }
+  vmReplayActive = true;
+  $('vm-lane').dataset.replay = '1';
+  updateVmControls();
+  // Reset lane-local renderings (and nothing else: replay never touches live
+  // counters, the activity log, or the topology's live state).
+  $('vm-strip-live').hidden = true;
+  $('vm-strip-frozen').hidden = true;
+  $('vm-delta').hidden = true;
+  $('vm-publish-stats').hidden = true;
+  $('vm-pull-stats').hidden = true;
+  $('vm-step4').classList.remove('lit');
+  const events = vmTrace.events;
+  let cursor = 0;
+  let restoredYet = false;
+  const step = () => {
+    if (cursor >= events.length) {
+      vmReplayActive = false;
+      vmReplayTimer = null;
+      $('vm-replay-btn').textContent = '↻ play the recording again';
+      updateVmControls();
+      return;
+    }
+    const e = events[cursor];
+    if (e.kind === 'restored') restoredYet = true;
+    applyReplayEvent(e, restoredYet);
+    cursor++;
+    if (cursor >= events.length) { step(); return; }
+    const gap = events[cursor].atMs - e.atMs;
+    const wait = Math.min(gap, VM_GAP_CAP_MS);
+    if (gap > VM_GAP_CAP_MS) vmShowSkip(gap - wait, events[cursor].kind);
+    vmReplayTimer = setTimeout(step, wait);
+  };
+  step();
+}
+$('vm-replay-btn').onclick = playVmReplay;
+
+async function initVmLane() {
+  // ?vm-replay forces the replay track for preview — still honestly labeled
+  // (it IS a recording); live controls stay disabled while it's set.
+  const forceReplay = new URLSearchParams(location.search).has('vm-replay');
+  try {
+    vmCap = await fetch('/api/vm/capability').then((r) => r.json());
+  } catch { vmCap = null; }
+  if (vmCap?.available && !forceReplay) {
+    vmMode = 'live';
+    vmBadge('live', 'Live: KVM', vmCap.detail);
+    $('vm-meta').textContent = `${vmCap.platform} · @machinen/runtime ${vmCap.runtime}`;
+    $('vm-narrative').innerHTML = VM_NARR.cold();
+    // Adopt whatever phase the server is already in (e.g. page reload mid-arc).
+    try {
+      const s = await fetch('/api/vm/state').then((r) => r.json());
+      if (s.phase !== 'cold') applyVmState(s);
+    } catch { /* poll loop recovers */ }
+    updateVmControls();
+    return;
+  }
+  const reason = forceReplay
+    ? 'replay preview forced (?vm-replay)'
+    : (vmCap?.detail ?? 'capability check failed');
+  let trace = null;
+  try {
+    const res = await fetch('/api/vm/replay');
+    if (res.ok) trace = await res.json();
+  } catch { /* fall through to the disabled lane */ }
+  for (const id of ['vm-boot', 'vm-publish', 'vm-restore', 'vm-reset']) $(id).title = reason;
+  if (trace) {
+    vmMode = 'replay';
+    vmTrace = trace;
+    vmBadge('replay', 'Replay: real KVM trace', reason);
+    $('vm-meta').textContent =
+      `captured ${trace.capturedAt.slice(0, 10)} on ${trace.platform}` +
+      (trace.runtime ? ` · @machinen/runtime ${trace.runtime}` : '') + ` — ${VM_CLI_POINTER}`;
+    $('vm-replay-btn').hidden = false;
+    $('vm-narrative').innerHTML =
+      `Live VM controls are disabled here: <b>${esc(reason)}</b>. ` +
+      `The recording is a real KVM run of this exact lane — nothing executes on this host. ` +
+      `<span class="repc">▶ play recorded VM move</span> to watch it.`;
+  } else {
+    vmMode = 'off';
+    vmBadge('off', vmCap?.reason ?? 'unavailable', reason);
+    $('vm-meta').textContent = VM_CLI_POINTER;
+    $('vm-narrative').innerHTML =
+      `Live VM track unavailable: <b>${esc(reason)}</b> — and no replay trace is committed. ` +
+      `${esc(VM_CLI_POINTER)}.`;
+  }
+  updateVmControls();
+}
+initVmLane();
 
 /* ---------- version negotiation: demand ^2.0.0, get refused ---------- */
 async function demandVersion(btn) {

@@ -21,7 +21,12 @@ const post = async (url, body) => {
 };
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const fmtBytes = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+// Scales through GB: Phase 1 artifacts are KB-scale, vmstate bundles are GBs.
+const fmtBytes = (n) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB`
+  : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB`
+  : n >= 1024 ? `${(n / 1024).toFixed(1)} KB`
+  : `${n} B`;
 
 // Eased number tween for metric count-ups; snaps instantly under reduced motion.
 function countUp(el, from, to, fmt = (v) => String(Math.round(v))) {
@@ -72,6 +77,7 @@ function wireHopHtml(e) {
   }
   if (e.type === 'artifact') {
     const origin = esc(e.origin ?? '');
+    const isVmstate = e.artifact === 'vmstate';
     const snapshotHop = e.artifact === 'snapshot'
       ? ` → <code>GET ${origin}/mf-snapshot</code> (<b>no-store</b> — every GET is a fresh fork point)`
       : '';
@@ -81,13 +87,20 @@ function wireHopHtml(e) {
     const pinHop = pin
       ? `<br />entry pins <code>${esc(pin.slice(0, 19))}…</code> — the resolver verified the pulled image against the pin before boot`
       : '';
+    const negotiated = isVmstate
+      ? `(bundle compatibility negotiated — OCI platform, exact runtime version, format — <b>before</b> any blob bytes moved)`
+      : `(version negotiated <b>before</b> any artifact bytes moved)`;
+    const noun = isVmstate ? 'vmstate bundle' : 'image digest';
+    const boots = isVmstate
+      ? 'the whole VM — heap, timers, kernel — restores from the cache'
+      : 'clone boots from the cache';
     return `<div class="whop">
       <span class="wchain">${chainHtml(['host', 'host'], ['machine', 'origin'])}</span>
       <span class="wdetail"><b>pull ${esc(e.artifact)}</b> (resolver-level fetch — bypasses the call circuit breaker by design) — resolved <code>${esc(e.entry)}</code>:
-        <code>GET ${origin}/mf-manifest.json</code> (version negotiated <b>before</b> any artifact bytes moved)${snapshotHop}
-        → image digest <b>${e.cacheHit ? 'HIT — image served from the local cache' : 'MISS — fetched + sha256-verified'}</b>${
+        <code>GET ${origin}/mf-manifest.json</code> ${negotiated}${snapshotHop}
+        → ${noun} <b>${e.cacheHit ? 'HIT — served from the local cache' : 'MISS — fetched + sha256-verified'}</b>${
           e.digest ? ` <code>${esc(String(e.digest).slice(0, 19))}…</code>` : ''}
-        → <span class="wres">${fmtBytes(e.bytes)} moved</span> in <span class="wms">${e.ms}ms</span>, clone boots from the cache${pinHop}</span>
+        → <span class="wres">${fmtBytes(e.bytes)} moved</span> in <span class="wms">${e.ms}ms</span>, ${boots}${pinHop}</span>
     </div>`;
   }
   if (e.type === 'crash') {
