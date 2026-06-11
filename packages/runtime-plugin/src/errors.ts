@@ -60,9 +60,16 @@ export class MachineCircuitOpenError extends Error {
 
 /** The machine's manifest version does not satisfy the entry's required range. */
 export class MachineVersionError extends Error {
-  constructor(message: string) {
+  /** The semver range the entry required (`?version=`). */
+  required?: string;
+  /** The version the manifest reported — possibly invalid semver, or undefined when absent. */
+  reported?: string;
+
+  constructor(message: string, opts: { required?: string; reported?: string } = {}) {
     super(message);
     this.name = 'MachineVersionError';
+    this.required = opts.required;
+    this.reported = opts.reported;
   }
 }
 

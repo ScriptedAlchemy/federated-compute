@@ -19,6 +19,7 @@ export {
 } from './errors.js';
 export {
   CircuitBreaker,
+  DEFAULT_POLICY,
   MetricsRecorder,
   type CallPolicy,
   type CircuitBreakerConfig,

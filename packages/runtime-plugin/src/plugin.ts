@@ -80,11 +80,13 @@ function checkVersion(spec: MachineSpec, manifest: MachineExposeManifest): void 
   if (!actual || !semverValid(actual)) {
     throw new MachineVersionError(
       `[machinen-plugin] entry for "${spec.remoteName}" requires version "${required}" but the machine manifest has no valid version (got "${actual}")`,
+      { required, reported: actual },
     );
   }
   if (!semverSatisfies(actual, required)) {
     throw new MachineVersionError(
       `[machinen-plugin] machine "${spec.remoteName}" version mismatch: required "${required}", machine reports "${actual}"`,
+      { required, reported: actual },
     );
   }
 }

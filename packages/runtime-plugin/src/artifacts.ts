@@ -106,11 +106,13 @@ function checkOriginVersion(spec: MachineSpec, manifest: MachineExposeManifest):
   if (!actual || !semverValid(actual)) {
     throw new MachineVersionError(
       `[machinen-plugin] pull "${spec.remoteName}": entry requires version "${required}" but the origin manifest has no valid version (got "${actual}")`,
+      { required, reported: actual },
     );
   }
   if (!semverSatisfies(actual, required)) {
     throw new MachineVersionError(
       `[machinen-plugin] pull "${spec.remoteName}": origin version mismatch before download: required "${required}", origin reports "${actual}"`,
+      { required, reported: actual },
     );
   }
 }
