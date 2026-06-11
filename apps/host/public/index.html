@@ -730,11 +730,11 @@
     </p>
     <div class="card-code-label"><span class="actor host">runs in the host</span> the fork is just another remote entry</div>
     <code class="card-code">host.registerRemotes([{ name: <span class="str">'snap_machine'</span>,                              <span class="cm">// 1 · boot: image arrives over HTTP</span>
-  entry: <span class="str">'machinen+pull+http://127.0.0.1:3801?artifact=image&amp;port=3811'</span> }]);
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3801?artifact=image&amp;port=3811&amp;version=^1.0.0'</span> }]);
 <span class="kw">await</span> plugin.snapshotMachine(<span class="str">'snap_machine'</span>);                                <span class="cm">// 2 · freeze -> .snap</span>
 host.registerRemotes([{ name: <span class="str">'snap_machine'</span>, entry: <span class="str">'machinen://….snap?port=3811'</span> }], { force: <span class="kw">true</span> });  <span class="cm">// 3 · restore</span>
 host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,                                <span class="cm">// 4 · fork by pull</span>
-  entry: <span class="str">'machinen+pull+http://127.0.0.1:3811?artifact=snapshot'</span> }]);
+  entry: <span class="str">'machinen+pull+http://127.0.0.1:3811?artifact=snapshot&amp;port=3812&amp;version=^1.0.0&amp;clone=a'</span> }]);
 <span class="kw">const</span> counter = <span class="kw">await</span> host.loadRemote(<span class="str">'snap_clone_a/counter'</span>);   <span class="cm">// pulls, verifies, boots the clone</span></code>
     <div class="row snap-steps">
       <button id="snap-boot">1 · boot &amp; work</button>
