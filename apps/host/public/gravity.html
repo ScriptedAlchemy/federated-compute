@@ -242,6 +242,15 @@
   .pull-note.visible { display: block; }
   .pull-note b { color: var(--pull); font-weight: 500; }
 
+  /* Phase 2 artifact-economics annotation: static copy, same placement rule. */
+  .vmstate-note {
+    margin-top: 12px; padding: 8px 11px;
+    border: 1px dashed rgba(224, 112, 154, .4); border-radius: 5px;
+    font-size: 10.5px; color: var(--ink-dim);
+  }
+  .vmstate-note b { color: #e0709a; font-weight: 500; }
+  .vmstate-note a { color: #e0709a; }
+
   /* Lesson callout: the anti-pattern, taught as text, not buttons. */
   .callout {
     border: 1px solid rgba(229, 83, 75, .3); border-left: 3px solid var(--wan);
@@ -479,6 +488,13 @@
     </div>
     <p class="lat-note" id="lat-note"></p>
     <p class="pull-note" id="pull-note"></p>
+    <p class="vmstate-note">
+      <b>Phase 2 moves whole VMs the same way:</b> ~2.6&nbsp;GB of vmstate instead of KBs of
+      image — worth it only when the warmth (heap, JIT, loaded models) beats the transfer.
+      Same placement rule for residency: restore the processing machine <b>inside</b> the
+      region; answers leave, raw data never does.
+      <a href="/#panel-lifecycle">see the lifecycle card's race card →</a>
+    </p>
     <p class="compare-hint">same queries, same answer — the only variable is where the loop runs (each bar is stamped with the WAN latency its run paid).</p>
   </section>
 
