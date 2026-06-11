@@ -657,7 +657,7 @@
         <div class="rbody">
           <div class="tedges" id="topo-edges" style="padding:0"></div>
           <div class="twan" id="topo-wan">
-            ⌁ wan&nbsp;→&nbsp;eu-west: <span id="topo-far"></span> — <a href="/gravity">data gravity demo →</a>
+            ⌁ wan&nbsp;→&nbsp;eu-west entries: <span id="topo-far"></span> — <a href="/gravity">data gravity demo →</a>
           </div>
         </div>
       </div>
@@ -814,7 +814,7 @@ host.registerRemotes([{ name: <span class="str">'snap_clone_a'</span>,          
     <code class="card-code"><span class="kw">const</span> math = <span class="kw">await</span> host.loadRemote(<span class="str">'compute_machine/math'</span>);
 <span class="kw">for await</span> (<span class="kw">const</span> tick <span class="kw">of</span> math.countdown(n)) { <span class="cm">/* …sse to the browser */</span> }</code>
     <div class="row">
-      countdown(<input class="num" id="cd-from" type="number" value="8" aria-label="countdown start" />)
+      countdown(<input class="num" id="cd-from" type="number" value="8" min="1" max="30" aria-label="countdown start" />)
       <button id="cd-run">stream</button>
     </div>
     <div class="ticks" id="ticks"></div>
@@ -1061,10 +1061,12 @@ async function refreshDashboard() {
   }
   if (payload.cache) renderCache(payload.cache);
   if (payload.lifecycle) syncLifecycleFromPoll(payload.lifecycle);
-  $('log').innerHTML = payload.events.slice().reverse().map((e) => {
-    const t = new Date(e.ts).toLocaleTimeString('en-GB');
-    return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
-  }).join('');
+  $('log').innerHTML = payload.events.length
+    ? payload.events.slice().reverse().map((e) => {
+        const t = new Date(e.ts).toLocaleTimeString('en-GB');
+        return `<div class="line" data-k="${esc(e.kind)}"><span class="t">${t}</span><span class="kb">${esc(e.kind)}</span><span class="msg">${esc(e.detail)}</span></div>`;
+      }).join('')
+    : '<div class="wempty">no hook events yet — run any card above and every attach, call, snapshot, and pull lands here</div>';
 }
 
 $('pipeline-run').onclick = async () => {
