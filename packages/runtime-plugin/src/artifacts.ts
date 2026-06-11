@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValid from 'semver/functions/valid.js';
@@ -156,9 +156,11 @@ async function readVerifiedCache(cachePath: string, hex: string): Promise<Buffer
   return undefined;
 }
 
-async function writeAtomic(cachePath: string, bytes: Buffer | string): Promise<void> {
-  const temp = `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  await writeFile(temp, bytes);
+function tempCachePath(cachePath: string): string {
+  return `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function commitAtomic(temp: string, cachePath: string): Promise<void> {
   try {
     await rename(temp, cachePath);
   } catch (error) {
@@ -173,6 +175,47 @@ async function writeAtomic(cachePath: string, bytes: Buffer | string): Promise<v
       throw error;
     }
   }
+}
+
+async function writeAtomic(cachePath: string, bytes: Buffer | string): Promise<void> {
+  const temp = tempCachePath(cachePath);
+  await writeFile(temp, bytes);
+  await commitAtomic(temp, cachePath);
+}
+
+async function streamVerifiedToTemp(
+  spec: MachineSpec,
+  res: Response,
+  expectedDigest: string,
+  temp: string,
+): Promise<number> {
+  if (!res.body) fail(spec, 'image artifact response had no body');
+  const reader = res.body.getReader();
+  const file = await open(temp, 'w');
+  const hash = createHash('sha256');
+  let bytesFetched = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      hash.update(value);
+      bytesFetched += value.byteLength;
+      await file.write(value);
+    }
+  } finally {
+    await file.close();
+    reader.releaseLock();
+  }
+
+  const actual = `sha256:${hash.digest('hex')}`;
+  if (actual !== expectedDigest) {
+    fail(
+      spec,
+      `image digest mismatch: origin advertised "${expectedDigest}" but served bytes hashing to "${actual}" — refusing to cache or boot it`,
+    );
+  }
+  return bytesFetched;
 }
 
 interface CachedImage {
@@ -202,16 +245,15 @@ async function ensureImageCached(
 
   const url = joinArtifactUrl(spec.url!, descriptor.href);
   const res = await fetchOk(spec, url, 'image artifact');
-  const bytes = Buffer.from(await res.arrayBuffer());
-  const actual = `sha256:${sha256Hex(bytes)}`;
-  if (actual !== expectedDigest) {
-    fail(
-      spec,
-      `image digest mismatch: origin advertised "${expectedDigest}" but served bytes hashing to "${actual}" — refusing to cache or boot it`,
-    );
+  const temp = tempCachePath(cachePath);
+  try {
+    const bytesFetched = await streamVerifiedToTemp(spec, res, expectedDigest, temp);
+    await commitAtomic(temp, cachePath);
+    return { localPath: cachePath, bytesFetched, fromCache: false };
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
   }
-  await writeAtomic(cachePath, bytes);
-  return { localPath: cachePath, bytesFetched: bytes.length, fromCache: false };
 }
 
 function selectArtifact(spec: MachineSpec): PullArtifactKind {

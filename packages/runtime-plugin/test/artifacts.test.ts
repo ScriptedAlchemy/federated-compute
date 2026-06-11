@@ -72,6 +72,12 @@ function serveImage(res: http.ServerResponse, bytes: Buffer = IMAGE_BYTES): void
   res.end(bytes);
 }
 
+function serveImageChunks(res: http.ServerResponse, chunks: Buffer[]): void {
+  res.writeHead(200, { 'content-type': 'text/javascript' });
+  for (const chunk of chunks.slice(0, -1)) res.write(chunk);
+  setImmediate(() => res.end(chunks.at(-1)));
+}
+
 const imageDescriptor = {
   href: '/mf-image',
   format: 'guest-bundle',
@@ -142,6 +148,33 @@ describe('resolvePullEntry: image artifacts', () => {
 
     expect(resolution.fromCache).toBe(false);
     expect(await readFile(cachePath)).toEqual(IMAGE_BYTES);
+  });
+
+  test('streams a multi-chunk image body through digest verification', async () => {
+    const chunks = [
+      Buffer.from('// streamed image part 1\n'),
+      Buffer.from('export const streamed = '),
+      Buffer.from('true;\n'),
+    ];
+    const bytes = Buffer.concat(chunks);
+    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    const origin = await startOrigin(
+      { artifacts: { image: { ...imageDescriptor, digest, bytes: bytes.length } } },
+      { '/mf-image': (res) => serveImageChunks(res, chunks) },
+    );
+    const arrayBuffer = Response.prototype.arrayBuffer;
+    Response.prototype.arrayBuffer = async () => {
+      throw new Error('image download must stream instead of buffering with arrayBuffer');
+    };
+    try {
+      const resolution = await resolvePullEntry(pullSpec(origin.url), { cacheDir });
+
+      expect(resolution.fromCache).toBe(false);
+      expect(resolution.bytesFetched).toBe(bytes.length);
+      expect(await readFile(resolution.localPath)).toEqual(bytes);
+    } finally {
+      Response.prototype.arrayBuffer = arrayBuffer;
+    }
   });
 
   test('a download whose bytes do not match the advertised digest fails and caches nothing', async () => {
