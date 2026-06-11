@@ -422,6 +422,23 @@
   /* artifacts capability chip on machine cards (capability-as-presence). */
   .chip.artcap { color: var(--pull); border-color: rgba(77, 210, 191, .35); margin-left: auto; }
 
+  /* typed-imports expander: the machine's own /mf-types.ts, proxied by the host. */
+  details.types { margin-top: 10px; border: 1px solid var(--panel-edge); border-radius: 6px; background: var(--well); }
+  details.types summary {
+    cursor: pointer; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 11px;
+    font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  details.types summary::before { content: '▸'; color: var(--ink-faint); transition: transform .15s; }
+  details.types[open] summary::before { transform: rotate(90deg); }
+  details.types pre {
+    margin: 0; padding: 8px 12px;
+    border-top: 1px dashed var(--panel-edge);
+    font-size: 10px; line-height: 1.55; color: var(--ink-dim);
+    max-height: 220px; overflow: auto;
+  }
+
   /* version negotiation control (java card): demand a version the machine
      can't satisfy and watch the attach get refused. */
   .vneg { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--panel-edge); }
@@ -895,6 +912,10 @@ function buildCard(name, idx, entry) {
     </dl>
     <div class="spark" data-f="spark" aria-hidden="true"></div>
     <div class="spark-label">p50 latency · last ${SPARK_SLOTS} polls</div>
+    <details class="types">
+      <summary>published types — /mf-types.ts</summary>
+      <pre></pre>
+    </details>
     ${name === 'java_machine' ? `
     <div class="vneg">
       <div class="row vneg-row">
@@ -908,6 +929,21 @@ function buildCard(name, idx, entry) {
     </div>` : ''}`;
   $('machines').appendChild(el);
   if (name === 'java_machine') $('vneg-btn').onclick = () => demandVersion($('vneg-btn'));
+  // Lazy-load the machine's published bindings on first expand. The browser
+  // can't reach machine addresses, so the host proxies GET <entry>/mf-types.ts.
+  const types = el.querySelector('details.types');
+  types.addEventListener('toggle', async () => {
+    if (!types.open || types.dataset.loaded) return;
+    const pre = types.querySelector('pre');
+    pre.textContent = 'fetching the machine\u2019s /mf-types.ts through the host\u2026';
+    try {
+      const r = await fetch(`/api/types?machine=${encodeURIComponent(name)}`).then((x) => x.json());
+      pre.textContent = r.error ? `error: ${r.error}` : r.types;
+      if (!r.error) types.dataset.loaded = '1';
+    } catch (error) {
+      pre.textContent = `error: ${error}`;
+    }
+  });
   const f = (k) => el.querySelector(`[data-f=${k}]`);
   const card = {
     el, state: f('state'), runtime: f('runtime'), version: f('version'),

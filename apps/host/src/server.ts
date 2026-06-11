@@ -552,6 +552,28 @@ function withVersionParam(entry: string, required: string): string {
   return `${base}?${[...params, `version=${required}`].join('&')}`;
 }
 
+// ---- typed-imports surface ---------------------------------------------------
+// Every machine serves /mf-types.ts — its own typed bindings, the MF
+// @mf-types analog (bindgen consumes exactly this). The browser can't reach
+// machine addresses, so the host proxies the fetch from the entry's URL.
+async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+  const name = url.searchParams.get('machine') ?? '';
+  const index = MACHINES.findIndex((m) => m.name === name);
+  if (index === -1) return json(res, 400, { error: `unknown machine "${name}"` });
+  const base = remotes[index].entry.replace(/^machinen\+/, '').split('?')[0];
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${base}/mf-types.ts`, { signal: AbortSignal.timeout(5_000) });
+  } catch (error) {
+    return json(res, 502, { error: `machine unreachable: ${errorMessage(error)}` });
+  }
+  if (!upstream.ok) {
+    return json(res, 502, { error: `machine answered ${upstream.status} for /mf-types.ts` });
+  }
+  json(res, 200, { machine: name, url: `${base}/mf-types.ts`, types: await upstream.text() });
+}
+// ----------------------------------------------------------------------------
+
 async function handleVersionDemand(_req: http.IncomingMessage, res: http.ServerResponse) {
   const javaEntry = remotes.find((r) => r.name === 'java_machine')!.entry;
   const entry = withVersionParam(javaEntry, STRICT_REQUIRED);
@@ -1033,6 +1055,7 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/chaos/kill', handleChaosKill],
   ['POST /api/chaos/probe', handleChaosProbe],
   ['POST /api/version/demand', handleVersionDemand],
+  ['GET /api/types', handleTypes],
   ['POST /api/lifecycle/boot', handleLifecycleBoot],
   ['POST /api/lifecycle/freeze', handleLifecycleFreeze],
   ['POST /api/lifecycle/restore', handleLifecycleRestore],

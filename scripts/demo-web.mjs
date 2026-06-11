@@ -302,6 +302,14 @@ async function runSmoke(base) {
   await postJson(base, '/api/region/latency', { ms: 75 }); // restore the default
   console.log('[smoke] report latency stamps -> remote at 50ms, colocated at 100ms');
 
+  // ---- typed-imports surface: the machine's own /mf-types.ts, proxied ------
+  const types = await fetch(`${base}/api/types?machine=java_machine`).then((r) => r.json());
+  expect(typeof types.types === 'string' && types.types.includes('export'),
+    `GET /api/types should proxy the machine's TS bindings: ${JSON.stringify(types).slice(0, 120)}`);
+  const badTypes = await fetch(`${base}/api/types?machine=nope`);
+  expect(badTypes.status === 400, `unknown machine should be a 400 (got ${badTypes.status})`);
+  console.log('[smoke] GET /api/types?machine=java_machine -> typed bindings proxied');
+
   // ---- version negotiation: demanding ^2.0.0 must be refused, repeatably ---
   for (const attempt of [1, 2]) {
     const demand = await postJson(base, '/api/version/demand');
