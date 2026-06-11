@@ -1,4 +1,5 @@
 import type { ExposedFunction } from '@federated-compute/machinen-plugin/guest';
+import { progress, start, stop } from './solver';
 
 function fib(n: number): number {
   return n <= 1 ? n : fib(n - 1) + fib(n - 2);
@@ -58,6 +59,29 @@ export const exposes: Record<string, Record<string, ExposedFunction>> = {
   './counter': {
     increment: { handler: () => ++counter, params: [], returns: 'number' },
     current: { handler: () => counter, params: [], returns: 'number' },
+  },
+  // The whole-VM demo workload. Deliberately NOT covered by `state` above:
+  // its heap (memo cache, RNG state, iteration count) only survives a
+  // whole-VM vmstate snapshot — telemetry is not serialization.
+  './solver': {
+    start: {
+      handler: start,
+      params: [],
+      returns:
+        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+    },
+    stop: {
+      handler: stop,
+      params: [],
+      returns:
+        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+    },
+    progress: {
+      handler: progress,
+      params: [],
+      returns:
+        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+    },
   },
   './system': {
     whereAmI: {
