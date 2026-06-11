@@ -80,6 +80,12 @@ export interface MachineExposeManifest {
     image?: ArtifactDescriptor;
     /** A freshly dehydrated warm snapshot (state + image digest reference). */
     snapshot?: ArtifactDescriptor;
+    /**
+     * A whole-VM vmstate bundle manifest (Phase 2). Published HOST-side by
+     * the plugin that owns the VMM — a guest cannot dump the VM it is
+     * inside — and restored by machinenDriver().
+     */
+    vmstate?: ArtifactDescriptor;
   };
   exposes: Record<string, Record<string, FunctionSignature>>;
 }

@@ -20,6 +20,17 @@ import {
   type MachineExposeManifest,
   type MachineSpec,
 } from './types.js';
+import {
+  VMSTATE_FORMAT,
+  ensureBlobCached,
+  installedMachinenRuntimeVersion,
+  materializeVmstateDir,
+  ociHostPlatform,
+  parseVmstateBundleManifest,
+  vmstateCompatibilityError,
+  type CachedBlob,
+  type VmstateBundleManifest,
+} from './vmstate.js';
 
 // Test-only memo observability, re-exported from the shared cache module so
 // existing consumers keep importing it from here.
@@ -40,7 +51,7 @@ const DIGEST_RE = /^sha256:([a-f0-9]{64})$/;
 // not be able to write outside the cache dir through it.
 const EXT_RE = /^\.[A-Za-z0-9]{1,16}$/;
 
-export type PullArtifactKind = 'image' | 'snapshot';
+export type PullArtifactKind = 'image' | 'snapshot' | 'vmstate';
 
 export interface PullResolution {
   /** The spec rewritten for local boot (`kind: 'image'`, `image` = cached path). */
@@ -70,6 +81,12 @@ export interface ResolvePullOptions {
    * capping the total transfer time of large artifacts. Default 30s.
    */
   streamIdleTimeoutMs?: number;
+  /**
+   * Override the installed @machinen/runtime version used for vmstate
+   * compatibility negotiation. Default: read from the installed package.
+   * (Exists for hermetic tests and unusual ops setups.)
+   */
+  machinenRuntimeVersion?: string;
 }
 
 /** ResolvePullOptions with defaults applied, threaded through resolution. */
@@ -77,6 +94,8 @@ interface PullContext {
   cacheDir: string;
   fetchTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  /** Undefined means "read from the installed package" at the vmstate gate. */
+  machinenRuntimeVersion?: string;
 }
 
 /** The wire shape of an `app-state@1` snapshot (`GET /mf-snapshot`). */
@@ -293,8 +312,11 @@ async function ensureImageCached(
 
 function selectArtifact(spec: MachineSpec): PullArtifactKind {
   const artifact = spec.params.get('artifact') ?? 'image';
-  if (artifact !== 'image' && artifact !== 'snapshot') {
-    fail(spec, `unknown ?artifact= value "${artifact}" (expected "image" or "snapshot")`);
+  if (artifact !== 'image' && artifact !== 'snapshot' && artifact !== 'vmstate') {
+    fail(
+      spec,
+      `unknown ?artifact= value "${artifact}" (expected "image", "snapshot", or "vmstate")`,
+    );
   }
   return artifact;
 }
@@ -461,6 +483,100 @@ async function resolveSnapshot(
   };
 }
 
+async function resolveVmstate(
+  spec: MachineSpec,
+  manifest: MachineExposeManifest,
+  ctx: PullContext,
+  startedAt: number,
+): Promise<PullResolution> {
+  const descriptor = requireDescriptor(spec, manifest, 'vmstate');
+  checkFormat(spec, descriptor, VMSTATE_FORMAT);
+
+  // vmstate is arch-bound and uses the OCI vocabulary; the descriptor gates
+  // before the bundle fetch, the bundle manifest is authoritative below.
+  const hostOci = ociHostPlatform();
+  if (descriptor.platform && descriptor.platform !== 'any' && descriptor.platform !== hostOci) {
+    fail(
+      spec,
+      `vmstate platform mismatch before download: artifact requires "${descriptor.platform}", this host is "${hostOci}"`,
+    );
+  }
+
+  // ?digest= pins the BUNDLE digest — the immutable identity of a vmstate
+  // pull, exactly as image pulls pin the image digest.
+  const pinned = spec.params.get('digest');
+  if (pinned && descriptor.digest && pinned !== descriptor.digest) {
+    fail(
+      spec,
+      `entry pins digest "${pinned}" but the origin offers "${descriptor.digest}" — the origin's published bundle changed`,
+    );
+  }
+  const expectedHex = parseDigest(spec, pinned ?? descriptor.digest, 'vmstate artifact');
+
+  const bundleUrl = joinArtifactUrl(spec.url!, descriptor.href);
+  const res = await fetchOk(spec, bundleUrl, 'vmstate bundle manifest', ctx.fetchTimeoutMs);
+  const bundleText = await readBodyOk(spec, res, bundleUrl, 'vmstate bundle manifest', ctx.fetchTimeoutMs);
+  const actualHex = sha256Hex(bundleText);
+  if (actualHex !== expectedHex) {
+    fail(
+      spec,
+      `vmstate bundle manifest digest mismatch: expected "sha256:${expectedHex}" but ${bundleUrl} served bytes hashing to "sha256:${actualHex}"`,
+    );
+  }
+  let bundle: VmstateBundleManifest;
+  try {
+    bundle = parseVmstateBundleManifest(bundleText, `at ${bundleUrl}`);
+  } catch (error) {
+    fail(spec, (error as Error).message);
+  }
+
+  // The requiredVersion analog for hardware/runtime: reject BEFORE any blob
+  // bytes move, with a negotiation-style error instead of a VMM crash.
+  const machinenRuntime = ctx.machinenRuntimeVersion ?? installedMachinenRuntimeVersion();
+  if (!machinenRuntime) {
+    fail(
+      spec,
+      'vmstate pull needs @machinen/runtime installed to negotiate bundle compatibility ' +
+        '(it is an optional peer dependency: `pnpm add @machinen/runtime@0.4.0`)',
+    );
+  }
+  const incompatible = vmstateCompatibilityError(bundle.compatibility, {
+    platform: hostOci,
+    machinenRuntime,
+  });
+  if (incompatible) fail(spec, incompatible);
+
+  const blobDir = path.join(ctx.cacheDir, 'blobs', 'sha256');
+  let bytesFetched = 0;
+  const blobPaths: string[] = [];
+  for (const file of bundle.files) {
+    let blob: CachedBlob;
+    try {
+      blob = await ensureBlobCached(joinArtifactUrl(spec.url!, file.href), file, blobDir, {
+        fetchTimeoutMs: ctx.fetchTimeoutMs,
+        streamIdleTimeoutMs: ctx.streamIdleTimeoutMs,
+      });
+    } catch (error) {
+      fail(spec, (error as Error).message);
+    }
+    bytesFetched += blob.fetched;
+    blobPaths.push(blob.localPath);
+  }
+
+  const destDir = path.join(ctx.cacheDir, 'vmstate', `sha256-${expectedHex}`);
+  await materializeVmstateDir(bundle, blobPaths, destDir);
+
+  return {
+    spec: rewriteSpec(spec, destDir),
+    artifact: 'vmstate',
+    descriptor,
+    localPath: destDir,
+    bytesFetched,
+    fromCache: bytesFetched === 0,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 /**
  * Resolve a `kind: 'pull'` spec into a locally bootable `kind: 'image'` spec.
  * Fetches the origin manifest, negotiates the entry's `?version=` BEFORE any
@@ -482,6 +598,7 @@ export async function resolvePullEntry(
     cacheDir: options.cacheDir ?? DEFAULT_ARTIFACT_CACHE_DIR,
     fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     streamIdleTimeoutMs: options.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    machinenRuntimeVersion: options.machinenRuntimeVersion,
   };
   await mkdir(ctx.cacheDir, { recursive: true });
 
@@ -510,6 +627,8 @@ export async function resolvePullEntry(
       return resolveImage(spec, manifest, ctx, startedAt);
     case 'snapshot':
       return resolveSnapshot(spec, manifest, ctx, startedAt);
+    case 'vmstate':
+      return resolveVmstate(spec, manifest, ctx, startedAt);
     default: {
       const unreachable: never = artifact;
       throw new Error(`[machinen-plugin] unknown artifact kind: ${String(unreachable)}`);
