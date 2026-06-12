@@ -229,6 +229,31 @@ data is implemented, not hypothetical: `machinenDriver()` freezes a running
 microVM and a `machinen://<snapDir>` entry restores it anywhere
 (`pnpm demo:machinen`) — the topology change needs no code change.
 
+## Android lab (freeze a whole operating system)
+
+The third page (http://localhost:3800/android, or `pnpm demo:android` for the
+CLI) pushes the lifecycle arc to its extreme: a real machinen microVM boots
+Debian, installs QEMU + adb inside itself, and powers on an emulated
+Android-x86 4.4 device (single-core TCG — the guest has no nested KVM, so
+the first power-on takes minutes; the lab then caches the booted device as a
+golden vmstate bundle and later power-ons restore it in ~25s — boot once,
+restore forever). An app is launched over adb, then the OUTER VM
+is frozen into a ~1.9 GiB vmstate bundle and restored. The Android kernel,
+the app, adbd, and every TCP connection between them thaw mid-instruction:
+same app pid, same kernel `boot_id`, uptime continued — with screenshots of
+the same app instance taken on both sides of the freeze. Requires Linux with
+usable `/dev/kvm` (or Apple Silicon).
+
+The fourth page (http://localhost:3800/screen) is a live, clickable VNC view
+of the same device: the inner qemu's display backend is its built-in
+websocket VNC server, a gvproxy forward maps it onto a host loopback port,
+and the host server splices the browser's `GET /vnc` upgrade onto that port
+as a dumb TCP pipe (qemu completes the handshake itself; noVNC renders).
+Mouse and keyboard go the whole way down — usb-tablet absolute pointer
+events land as Android touch input. Freezing the lab visibly kills the
+session (the far end of the websocket stops existing); the page reconnects
+against the thawed device, which kept drawing the same frame.
+
 ## machinen.config.json
 
 A consumer app declares its machines once, in a `machinen.config.json` that

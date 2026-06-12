@@ -9,6 +9,7 @@
     "demo:snapshot": "node scripts/demo-snapshot.mjs",
     "demo:pull": "node scripts/demo-pull.mjs",
     "demo:machinen": "node scripts/demo-machinen.mjs",
+    "demo:android": "node scripts/demo-android.mjs",
     "demo:web": "node scripts/demo-web.mjs",
     "demo:gravity": "node scripts/demo-gravity.mjs",
     "bindgen": "node scripts/bindgen.mjs"
