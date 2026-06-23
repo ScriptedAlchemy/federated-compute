@@ -23,7 +23,8 @@ const FILES: Record<string, Buffer> = {
   ),
 };
 
-const HOST_RUNTIME = '0.4.0';
+const HOST_RUNTIME = '0.6.1';
+const INCOMPATIBLE_RUNTIME = '0.5.1';
 
 function makeBundle(compat: Partial<VmstateCompatibility> = {}) {
   const files = Object.entries(FILES).map(([filePath, bytes]) => ({
@@ -193,12 +194,14 @@ describe('resolvePullEntry: vmstate artifacts', () => {
   });
 
   test('a machinen runtime mismatch names both versions and downloads nothing', async () => {
-    const bundle = makeBundle({ machinenRuntime: '0.5.1' });
+    const bundle = makeBundle({ machinenRuntime: INCOMPATIBLE_RUNTIME });
     const origin = await startVmstateOrigin(bundle);
 
     await expect(
       resolvePullEntry(pullSpec(origin.url), { cacheDir, ...RESOLVE }),
-    ).rejects.toThrow(/requires @machinen\/runtime 0\.5\.1.*installed 0\.4\.0/s);
+    ).rejects.toThrow(
+      `requires @machinen/runtime ${INCOMPATIBLE_RUNTIME}, installed ${HOST_RUNTIME}`,
+    );
     expect(origin.requests.filter((r) => r.startsWith('/blobs/'))).toHaveLength(0);
   });
 

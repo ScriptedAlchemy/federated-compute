@@ -3,74 +3,25 @@
 // machinen+pull+...?artifact=vmstate entry, and proves the restored clone
 // continues mid-heap and diverges. Skips with the reason when machinen
 // cannot run here (same honesty contract as machinen-driver.test.ts).
-import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import { createMachines, type MachinesClient } from '../src/client.js';
 import { machinenDriver } from '../src/drivers/machinen.js';
-
-const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
-const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
-const MACHINEN_BIN = path.join(
-  PACKAGE_ROOT,
-  'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'machinen.cmd' : 'machinen',
-);
-const GUEST_BUNDLE = path.join(REPO_ROOT, 'apps/remote/dist/index.js');
+import {
+  GUEST_BUNDLE,
+  ensureGuestBundle,
+  expectNoMachinenVmLeftovers,
+  machinenUnavailableReason,
+} from './real-machinen.js';
 // Producer cold boot + snapshot + two restores + local 2.5GB transfers.
 const FULL_CYCLE_TIMEOUT_MS = 600_000;
 const BOOT_TIMEOUT_MS = 300_000;
 
-async function machinenUnavailableReason(): Promise<string | null> {
-  if (process.platform !== 'linux' && process.platform !== 'darwin') {
-    return `unsupported platform ${process.platform}`;
-  }
-  if (process.platform === 'linux') {
-    if (!existsSync('/dev/kvm')) return 'no /dev/kvm on this host';
-    try {
-      accessSync('/dev/kvm', constants.R_OK | constants.W_OK);
-    } catch {
-      return '/dev/kvm exists but is not read/writable by this user';
-    }
-  }
-  try {
-    const runtime = await import('@machinen/runtime');
-    try {
-      runtime.resolveBaseRootfs();
-    } catch {
-      if (!existsSync(MACHINEN_BIN)) {
-        return `repo-local machinen CLI missing at ${MACHINEN_BIN}; run pnpm install`;
-      }
-      const install = spawnSync(MACHINEN_BIN, ['install'], {
-        cwd: PACKAGE_ROOT,
-        stdio: 'inherit',
-        timeout: 240_000,
-      });
-      if (install.status !== 0) return 'machinen install (base asset fetch) failed';
-      runtime.resolveBaseRootfs();
-    }
-  } catch (error) {
-    return `@machinen/runtime not loadable: ${(error as Error).message}`;
-  }
-  return null;
-}
-
 const unavailable = await machinenUnavailableReason();
 if (unavailable) {
   console.warn(`[vmstate-machinen.test] skipping real-VM suite: ${unavailable}`);
-}
-
-function ensureGuestBundle(): void {
-  if (existsSync(GUEST_BUNDLE)) return;
-  const result = spawnSync('pnpm', ['--filter', 'remote', 'build'], {
-    cwd: REPO_ROOT,
-    stdio: 'inherit',
-  });
-  if (result.status !== 0) throw new Error('pnpm --filter remote build failed');
 }
 
 describe.skipIf(unavailable !== null)('vmstate fork-by-pull (real microVMs)', () => {
@@ -81,9 +32,7 @@ describe.skipIf(unavailable !== null)('vmstate fork-by-pull (real microVMs)', ()
     for (const client of clients) {
       await client.plugin.disposeMachines().catch(() => {});
     }
-    const runtime = await import('@machinen/runtime');
-    const leftovers = runtime.list().filter((entry) => entry.name?.startsWith('fc-vm_machine'));
-    expect(leftovers).toEqual([]);
+    await expectNoMachinenVmLeftovers();
     if (work) await rm(work, { recursive: true, force: true });
   }, 120_000);
 

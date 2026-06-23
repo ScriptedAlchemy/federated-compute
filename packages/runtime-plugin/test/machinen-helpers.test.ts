@@ -130,7 +130,7 @@ describe('Machinen pure helpers', () => {
     const { loadRuntime } = await importMachinen();
 
     await expect(loadRuntime()).rejects.toThrow(/optional peer dependency.*@machinen\/runtime/s);
-    await expect(loadRuntime()).rejects.toThrow(/pnpm add @machinen\/runtime@0\.4\.0 @machinen\/cli@0\.4\.0/s);
+    await expect(loadRuntime()).rejects.toThrow(/pnpm add @machinen\/runtime@0\.6\.1 @machinen\/cli@0\.6\.1/s);
     await expect(loadRuntime()).rejects.toThrow(/pnpm exec machinen install/s);
   });
 });

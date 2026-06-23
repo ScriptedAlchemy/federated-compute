@@ -151,11 +151,12 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   }
 
   function resolveEntry(name: string, opts?: MachineModuleOptions): string {
-    const fromConfig = configFile()?.machines[name];
+    const config = configFile();
+    const fromConfig = config?.machines[name];
     const base = options.remotes?.[name] ?? process.env[envKeyFor(name)] ?? fromConfig?.url;
     if (!base) {
-      const searched = configFile()
-        ? `add it to ${configFile()!.path}`
+      const searched = config
+        ? `add it to ${config.path}`
         : 'add a machinen.config.json (none found from the working directory upward)';
       throw new Error(
         `[machinen] no address for machine "${name}". Pass it in createMachines({ remotes }), ` +
@@ -321,11 +322,13 @@ export function machineModule<M extends AnyModule>(
       if (!stringProp(fnName)) return undefined;
       let wrapper = wrappers.get(fnName);
       if (!wrapper) {
-        wrapper = streams.has(fnName)
-          ? async function* (...args: unknown[]) {
-              yield* binding(fnName)(...args);
-            }
-          : async (...args: unknown[]) => binding(fnName)(...args);
+        if (streams.has(fnName)) {
+          wrapper = async function* (...args: unknown[]) {
+            yield* binding(fnName)(...args);
+          };
+        } else {
+          wrapper = async (...args: unknown[]) => binding(fnName)(...args);
+        }
         wrappers.set(fnName, wrapper);
       }
       return wrapper;

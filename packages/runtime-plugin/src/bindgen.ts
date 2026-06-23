@@ -163,7 +163,7 @@ export async function fetchBindingsSource(machineUrl: string): Promise<string> {
   const base = machineUrl.replace(/\/$/, '');
 
   const published = await fetch(`${base}/mf-types.ts`);
-  if (published.ok) return await published.text();
+  if (published.ok) return published.text();
 
   return generateBindings(await fetchMachineManifest(machineUrl));
 }

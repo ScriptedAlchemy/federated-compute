@@ -184,7 +184,7 @@ export async function loadRuntime(): Promise<MachinenRuntime> {
       throw new Error(
         '[machinen-plugin] machinenDriver needs @machinen/runtime, which is not installed ' +
           '(it is an optional peer dependency). Install it next to this package: ' +
-          '`pnpm add @machinen/runtime@0.4.0 @machinen/cli@0.4.0` then `pnpm exec machinen install` to fetch ' +
+          '`pnpm add @machinen/runtime@0.6.1 @machinen/cli@0.6.1` then `pnpm exec machinen install` to fetch ' +
           `base assets. Underlying error: ${(error as Error)?.message ?? error}`,
       );
     },
@@ -370,7 +370,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
 
     const fork = async (): Promise<never> => {
       throw new Error(
-        '[machinen-plugin] machinenDriver: fork() is not supported on amd64 with machinen 0.4.0 ' +
+        '[machinen-plugin] machinenDriver: fork() is not supported on amd64 with machinen 0.6.1 ' +
           '(upstream bug: the forked sibling does not resume reliably on x86_64/KVM). ' +
           'Use handle.snapshot() and boot a machinen://<snapDir> entry instead; ' +
           'fork support returns when the upstream fix ships.',

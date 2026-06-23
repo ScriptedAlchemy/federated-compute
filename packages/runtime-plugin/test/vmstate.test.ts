@@ -19,9 +19,12 @@ import {
   type VmstateCompatibility,
 } from '../src/vmstate.js';
 
+const HOST_RUNTIME = '0.6.1';
+const INCOMPATIBLE_RUNTIME = '0.5.1';
+
 const COMPAT: VmstateCompatibility = {
   platform: 'linux/amd64',
-  machinenRuntime: '0.4.0',
+  machinenRuntime: HOST_RUNTIME,
   vmstateFormat: VMSTATE_FORMAT,
   snapshotEngine: 'machinen-default',
   reseed: 'machinen-0.4.0-shim@1',
@@ -168,7 +171,7 @@ describe('parseVmstateBundleManifest', () => {
 });
 
 describe('vmstateCompatibilityError', () => {
-  const host = { platform: 'linux/amd64', machinenRuntime: '0.4.0' };
+  const host = { platform: 'linux/amd64', machinenRuntime: HOST_RUNTIME };
 
   test('compatible bundle returns undefined', () => {
     expect(vmstateCompatibilityError(COMPAT, host)).toBeUndefined();
@@ -185,10 +188,11 @@ describe('vmstateCompatibilityError', () => {
 
   test('runtime mismatch names both versions', () => {
     const message = vmstateCompatibilityError(
-      { ...COMPAT, machinenRuntime: '0.5.1' },
+      { ...COMPAT, machinenRuntime: INCOMPATIBLE_RUNTIME },
       host,
     );
-    expect(message).toMatch(/requires @machinen\/runtime 0\.5\.1.*installed 0\.4\.0/s);
+    expect(message).toContain(`requires @machinen/runtime ${INCOMPATIBLE_RUNTIME}`);
+    expect(message).toContain(`installed ${HOST_RUNTIME}`);
   });
 
   test('unknown snapshot engine is rejected by name', () => {
@@ -202,8 +206,7 @@ describe('vmstateCompatibilityError', () => {
 
 describe('installedMachinenRuntimeVersion', () => {
   test('reads the devDependency version without loading the native runtime', () => {
-    // @machinen/runtime@0.4.0 is a devDependency of this package.
-    expect(installedMachinenRuntimeVersion()).toBe('0.4.0');
+    expect(installedMachinenRuntimeVersion()).toBe(HOST_RUNTIME);
   });
 });
 
