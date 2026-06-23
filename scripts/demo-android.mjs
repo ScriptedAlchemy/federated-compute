@@ -33,7 +33,7 @@ const require = createRequire(
 );
 const runtime = await import(pathToFileURL(require.resolve('@machinen/runtime')).href);
 
-// Outer guest RAM. Hard ceiling ~1.9 GiB: machinen 0.4.0 reads state.vmstate
+// Outer guest RAM. Hard ceiling ~1.9 GiB: machinen reads state.vmstate
 // back with readFileSync (2 GiB buffer limit), and a vmstate is essentially a
 // full RAM image.
 const OUTER_MIB = 1880;
@@ -48,7 +48,7 @@ const ISO_URL =
 const APP = 'com.android.settings';
 const ADB = `adb -s 127.0.0.1:${ADB_FWD}`;
 
-// machinen 0.4.0 amd64 ships an aarch64 reseed helper; identical functional
+// Some amd64 bases ship an aarch64 reseed helper; identical functional
 // shim to the machinen driver / e2e (reseeds the guest CSPRNG on restore).
 const RESEED_SHIM = `#!/bin/sh
 if [ -x /usr/bin/perl ]; then

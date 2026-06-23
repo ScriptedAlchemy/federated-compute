@@ -5,6 +5,9 @@ function fib(n: number): number {
   return n <= 1 ? n : fib(n - 1) + fib(n - 2);
 }
 
+const SOLVER_PROGRESS_RETURNS =
+  '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }';
+
 // Warm state that survives snapshot/restore.
 let counter = 0;
 
@@ -67,20 +70,17 @@ export const exposes: Record<string, Record<string, ExposedFunction>> = {
     start: {
       handler: start,
       params: [],
-      returns:
-        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+      returns: SOLVER_PROGRESS_RETURNS,
     },
     stop: {
       handler: stop,
       params: [],
-      returns:
-        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+      returns: SOLVER_PROGRESS_RETURNS,
     },
     progress: {
       handler: progress,
       params: [],
-      returns:
-        '{ running: boolean; iteration: number; cacheSize: number; cacheCapacity: number; best: number; fingerprint: string; pid: number }',
+      returns: SOLVER_PROGRESS_RETURNS,
     },
   },
   './system': {

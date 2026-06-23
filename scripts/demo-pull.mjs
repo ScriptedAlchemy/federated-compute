@@ -50,8 +50,8 @@ try {
   const originCounter = origin.machine('compute_machine').counter;
   await originCounter.increment();
   await originCounter.increment();
-  const worked = await originCounter.increment();
-  console.log(`  origin warm at 127.0.0.1:${originPort}, counter = ${worked}`);
+  const originValue = await originCounter.increment();
+  console.log(`  origin warm at 127.0.0.1:${originPort}, counter = ${originValue}`);
   const manifest = await (await fetch(`http://127.0.0.1:${originPort}/mf-manifest.json`)).json();
   console.log(
     `  origin manifest publishes artifacts: image (${manifest.artifacts.image.digest.slice(0, 19)}..., ` +
@@ -59,17 +59,17 @@ try {
   );
 
   console.log('\n=== Act 2: fork-by-fetch — a consumer pulls a WARM clone ===');
-  const forker = createMachines({
+  const warmCloneHost = createMachines({
     driver: processDriver(),
     artifactCacheDir: cacheDir,
     remotes: {
       compute_machine: `machinen+pull+http://127.0.0.1:${originPort}?artifact=snapshot&version=^1.0.0`,
     },
   });
-  hosts.push(forker);
-  telemetry(forker, 'fork host');
+  hosts.push(warmCloneHost);
+  telemetry(warmCloneHost, 'fork host');
 
-  const clone = forker.machine('compute_machine').counter;
+  const clone = warmCloneHost.machine('compute_machine').counter;
   const resumed = await clone.current(); // first call pulls + boots the clone
   const cloneNext = await clone.increment();
   console.log(`  clone resumed at counter=${resumed}, continued -> ${cloneNext}`);
@@ -82,17 +82,17 @@ try {
   }
 
   console.log('\n=== Act 3: cold pull — the image alone, like fetching remoteEntry.js ===');
-  const colder = createMachines({
+  const coldImageHost = createMachines({
     driver: processDriver(),
     artifactCacheDir: cacheDir,
     remotes: {
       compute_machine: `machinen+pull+http://127.0.0.1:${originPort}?artifact=image`,
     },
   });
-  hosts.push(colder);
-  telemetry(colder, 'cold host');
+  hosts.push(coldImageHost);
+  telemetry(coldImageHost, 'cold host');
 
-  const fresh = colder.machine('compute_machine').counter;
+  const fresh = coldImageHost.machine('compute_machine').counter;
   const freshStart = await fresh.current(); // image already in cache from Act 2
   const freshNext = await fresh.increment();
   console.log(`  cold clone booted from the cached image: counter ${freshStart} -> ${freshNext}`);

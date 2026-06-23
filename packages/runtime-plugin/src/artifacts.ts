@@ -537,7 +537,7 @@ async function resolveVmstate(
     fail(
       spec,
       'vmstate pull needs @machinen/runtime installed to negotiate bundle compatibility ' +
-        '(it is an optional peer dependency: `pnpm add @machinen/runtime@0.4.0`)',
+        '(it is an optional peer dependency: `pnpm add @machinen/runtime@0.6.1`)',
     );
   }
   const incompatible = vmstateCompatibilityError(bundle.compatibility, {

@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@machinen/cli':
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.6.1
+        version: 0.6.1
 
   apps/host:
     dependencies:
@@ -22,8 +22,8 @@ importers:
         version: 2.5.1
     devDependencies:
       '@machinen/runtime':
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.6.1
+        version: 0.6.1
       '@rsbuild/core':
         specifier: ^2.0.9
         version: 2.0.11
@@ -75,11 +75,11 @@ importers:
         version: 7.8.3
     devDependencies:
       '@machinen/cli':
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.6.1
+        version: 0.6.1
       '@machinen/runtime':
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.6.1
+        version: 0.6.1
       '@types/node':
         specifier: ^25.9.2
         version: 25.9.2
@@ -266,30 +266,30 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
-  '@machinen/cli@0.4.0':
-    resolution: {integrity: sha512-qc5moxFJOxmvHeM+KwFox5gQVQ/3/vqak9xNYns/sP+qjvlvgwf97HitMUIptqZ7Vn+DfHs5hQt9bM3Cxw5frA==}
+  '@machinen/cli@0.6.1':
+    resolution: {integrity: sha512-2pxahizTsxEnYv4KaEBcokj2TMw3YNSxlu2OklPzPDAlwd+zOkXHiXc/FMOC8zL3vdJepA9n4PPkCAB7e9S9oA==}
     hasBin: true
 
-  '@machinen/native-arm64-darwin@0.4.0':
-    resolution: {integrity: sha512-07B4Fzi1oHX6JrijIuMFdC7J7ZbxiEyX01HttMbhlxsq0QPQYgKqEEKDzwzI7Q+Ja/xzL4DUtadIVPEi7gozcg==}
+  '@machinen/native-arm64-darwin@0.6.1':
+    resolution: {integrity: sha512-Xob406hq0LM+QthrQbI6HZqQS8I0HSGZsVom7eMq4l+AaRDiBX+eE2pOjfxFYHTuPp41BWIXFlx1FINHI5gE4g==}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@machinen/native-arm64-linux@0.4.0':
-    resolution: {integrity: sha512-lzzK3v7uK0X03TWCGgP58znhGJ8eG4BmEgYQplOylvwKUn5knJLg4repTGndY8DakIK+Os73bzshXFbxo6aQPg==}
+  '@machinen/native-arm64-linux@0.6.1':
+    resolution: {integrity: sha512-JNJ0UJiAKMgjL0uK4f9EhKkHESgp6nEb1+SzjGiF5DUctjs+nMlrGKCi0wWLRhogaR5p4tfAxp/oVO2z+LfMqA==}
     cpu: [arm64]
     os: [linux]
     hasBin: true
 
-  '@machinen/native-x64-linux@0.4.0':
-    resolution: {integrity: sha512-55ZEYGlz4n5iUxwlqL3eLt42IcH89IyNHTMC9YDjk2X+NuhibGn/7UZ4gJfcsHjoxkXgS1P9BRA6hjQ6FWJeeg==}
+  '@machinen/native-x64-linux@0.6.1':
+    resolution: {integrity: sha512-teCfHidWNwf5A1Om1CvKevPxD/I0CXInn2dQ6qu54kgFU/oaqT6SED9WkOq4UUJLbkSNJ9XXUH8cnnI2++uecA==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@machinen/runtime@0.4.0':
-    resolution: {integrity: sha512-R/RKE8ntcy40iP8LGQRLoacr5phFh1hfHQj5YVzp371eikbdo2L1R9ULw8t89tbupVyqlO+YZXr3p0Ny9iWDiw==}
+  '@machinen/runtime@0.6.1':
+    resolution: {integrity: sha512-r04U71qLVeStPBQi/ZrvxMtACojRXMJcKhSklQranAnBMIyG/BVTx78cF9FssS/e8CP9z73qHCZV5rTXp+bTFg==}
 
   '@module-federation/error-codes@2.5.1':
     resolution: {integrity: sha512-3KIR8XbEW0Y+Fn8IAnxzDWMvXQWiS40Z1TE/Fft9aTeXP9dDAM7AiVhjTh5yF2csAwHSt/1LJVZbiCmS13mE8A==}
@@ -1037,34 +1037,34 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@machinen/cli@0.4.0':
+  '@machinen/cli@0.6.1':
     dependencies:
-      '@machinen/runtime': 0.4.0
+      '@machinen/runtime': 0.6.1
       debug: 4.4.3
     optionalDependencies:
-      '@machinen/native-arm64-darwin': 0.4.0
-      '@machinen/native-arm64-linux': 0.4.0
-      '@machinen/native-x64-linux': 0.4.0
+      '@machinen/native-arm64-darwin': 0.6.1
+      '@machinen/native-arm64-linux': 0.6.1
+      '@machinen/native-x64-linux': 0.6.1
     transitivePeerDependencies:
       - supports-color
 
-  '@machinen/native-arm64-darwin@0.4.0':
+  '@machinen/native-arm64-darwin@0.6.1':
     optional: true
 
-  '@machinen/native-arm64-linux@0.4.0':
+  '@machinen/native-arm64-linux@0.6.1':
     optional: true
 
-  '@machinen/native-x64-linux@0.4.0':
+  '@machinen/native-x64-linux@0.6.1':
     optional: true
 
-  '@machinen/runtime@0.4.0':
+  '@machinen/runtime@0.6.1':
     dependencies:
       '@homebridge/node-pty-prebuilt-multiarch': 0.12.0
       debug: 4.4.3
     optionalDependencies:
-      '@machinen/native-arm64-darwin': 0.4.0
-      '@machinen/native-arm64-linux': 0.4.0
-      '@machinen/native-x64-linux': 0.4.0
+      '@machinen/native-arm64-darwin': 0.6.1
+      '@machinen/native-arm64-linux': 0.6.1
+      '@machinen/native-x64-linux': 0.6.1
     transitivePeerDependencies:
       - supports-color
 

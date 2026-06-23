@@ -37,7 +37,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GUEST_BUNDLE = join(repoRoot, 'apps/remote/dist/index.js');
 const GUEST_PORT = 3801;
 const EXIT_UNAVAILABLE = 78;
-// Modest explicit guest RAM. machinen 0.4.0's auto-sizing picks up to 4 GiB,
+// Modest explicit guest RAM. machinen auto-sizing can pick up to 4 GiB,
 // which places the main memory region across the 32-bit MMIO gap and breaks
 // boot on some x86 hosts ("Cannot find an available gap in the 32-bit address
 // range"); 1 GiB is plenty for the guest and boots everywhere.
@@ -82,8 +82,8 @@ if (!existsSync(GUEST_BUNDLE)) {
   fail(`guest bundle missing at ${GUEST_BUNDLE} — run \`pnpm --filter remote build\` first`);
 }
 
-// machinen 0.4.0 ships an arm64 /sbin/machinen-vmstate-reseed in the x64
-// guest payload, so every vmstate restore dies with Exec format error
+// Some x64 guest payloads ship an arm64 /sbin/machinen-vmstate-reseed, so
+// every vmstate restore dies with Exec format error
 // (BOOT_VMSTATE_RESEED_FAILED, exit 126). We drop a functionally equivalent
 // shell shim over it inside the source VM before snapshotting; the restored
 // guest then reseeds its CSPRNG for real and the restore completes.
@@ -384,7 +384,7 @@ try {
 
   log('snapshotting ...');
   t0 = Date.now();
-  // Snapshot through an attach handle: machinen 0.4.0's snapshot path can
+  // Snapshot through an attach handle: machinen's snapshot path can
   // await errorOutput(), which on a boot-owned handle only resolves when the
   // VM exits — deadlock. Attach handles return console state immediately,
   // matching how the machinen CLI itself snapshots.
