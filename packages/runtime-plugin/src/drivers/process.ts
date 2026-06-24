@@ -33,6 +33,12 @@ export function resolveBootCommand(image: string, overrides: BootCommandMap = {}
 // Not ".json": MF's snapshot handler would treat the entry as a manifest URL
 // and fetch it before our loadEntry hook can claim it.
 const SNAP_SUFFIX = '.snap';
+// Keep explicit child-process ports away from OS-assigned listen(0) ports.
+// Linux defaults its ephemeral range to 32768+, and our tests spin up many
+// listen(0) HTTP servers in parallel with process guests.
+const RESERVED_PORT_MIN = 20_000;
+const RESERVED_PORT_MAX = 32_000;
+const PORT_PROBE_ATTEMPTS = 100;
 
 interface SnapshotBundle {
   name: string;
@@ -164,14 +170,32 @@ export function processDriver(opts: ProcessDriverOptions = {}): MachineDriver {
   };
 }
 
-export function getFreePort(): Promise<number> {
+function probePort(port: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
+    probe.listen(port, '127.0.0.1', () => {
       const port = (probe.address() as net.AddressInfo).port;
       probe.close(() => resolve(port));
     });
+  });
+}
+
+export async function getFreePort(): Promise<number> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PORT_PROBE_ATTEMPTS; attempt++) {
+    const candidate =
+      RESERVED_PORT_MIN + Math.floor(Math.random() * (RESERVED_PORT_MAX - RESERVED_PORT_MIN));
+    try {
+      return await probePort(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  // Fallback to the kernel's choice if the reserved range is unexpectedly
+  // saturated or unavailable; preserve the old behavior instead of failing.
+  return probePort(0).catch(() => {
+    throw lastError;
   });
 }
 

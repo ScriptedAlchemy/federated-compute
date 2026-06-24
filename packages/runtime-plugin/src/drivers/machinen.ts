@@ -3,6 +3,12 @@ import { mkdir, readFile, stat, writeFile as writeHostFile } from 'node:fs/promi
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { MachineDriver, MachineHandle, MachineSpec } from '../types.js';
+import {
+  isVmstateShellIdentity,
+  sameShell,
+  sha256File,
+  type VmstateShellIdentity,
+} from '../vmstate.js';
 import { httpMachineHandle } from './http.js';
 import { getFreePort } from './process.js';
 
@@ -10,12 +16,12 @@ import { getFreePort } from './process.js';
  * The REAL Machinen driver: boots `machinen://` entries as actual microVMs
  * through `@machinen/runtime` (KVM on Linux, HVF on Apple Silicon).
  *
- * Boot model (verified against machinen 0.4.0 on x86_64/KVM):
+ * Boot model (verified against machinen 0.6.1 on x86_64/KVM):
  *   1. boot the debian base rootfs with an idle supervised cmd,
- *   2. `vm.exec` an apt-get install of node (~5s; skipped when `opts.image`
- *      ships node prebaked),
- *   3. `vm.writeFile` the guest bundle + a launcher script carrying
- *      PORT/HOST, start it detached inside the guest,
+ *   2. for lightweight guest bundles, `vm.exec` installs the needed runtime
+ *      unless `opts.image` already ships it,
+ *   3. `vm.writeFile` the guest program payload + a launcher script carrying
+ *      PORT/HOST, then starts it detached inside the guest,
  *   4. talk guest protocol v3 over a gvproxy host->guest port forward —
  *      the returned handle is `httpMachineHandle` against the forward.
  *
@@ -23,11 +29,11 @@ import { getFreePort } from './process.js';
  * vCPU state); booting a `machinen://<snapDir>` entry restores it and the
  * guest process resumes mid-heap.
  *
- * amd64 0.4.0 workarounds baked in (each one empirically diagnosed):
+ * Current x86_64/KVM runtime workarounds baked in (each one empirically diagnosed):
  *   - explicit `memory` always passed (default 2048 MiB): the runtime's
  *     auto-sizing collides with the KVM APIC page (KvmCreateVcpuFailed),
  *   - `provision()` is NOT used (its exec stalls until a 300s timeout);
- *     boot-then-exec installs node in ~5s instead,
+ *     boot-then-exec installs the guest runtime in ~5s instead,
  *   - `/sbin/machinen-vmstate-reseed` in the amd64 rootfs is an aarch64
  *     binary ("Exec format error" -> BOOT_VMSTATE_RESEED_FAILED on
  *     restore); snapshot() first replaces it with a functional shell shim
@@ -40,14 +46,18 @@ import { getFreePort } from './process.js';
 
 const DEFAULT_GUEST_PORT = 3801;
 const DEFAULT_MEMORY_MIB = 2048;
+const DEFAULT_JAVA_ROOT_DISK_BYTES = 4 * 1024 ** 3;
 const DEFAULT_BOOT_TIMEOUT_MS = 120_000;
 const GUEST_DIR = '/opt/federated';
-const GUEST_BUNDLE = `${GUEST_DIR}/guest.mjs`;
+const NODE_GUEST_BUNDLE = `${GUEST_DIR}/guest.mjs`;
+const JAVA_GUEST_BUNDLE = `${GUEST_DIR}/guest.jar`;
+const JAVA_TYPES_FILE = `${GUEST_DIR}/mf-types.ts`;
 const GUEST_LAUNCHER = `${GUEST_DIR}/run.sh`;
 const GUEST_LOG = '/var/log/federated-guest.log';
 const RESEED_BINARY = '/sbin/machinen-vmstate-reseed';
+const MACHINE_IMAGE_MANIFEST = 'machinen-machine.json';
 /**
- * Functional replacement for machinen 0.4.0's mis-arched reseed helper
+ * Functional replacement for the x86_64 rootfs' mis-arched reseed helper
  * (identical to the shim in scripts/machinen-e2e.mjs, which asserts its
  * behavior). The amd64 base rootfs ships an aarch64 binary at
  * RESEED_BINARY, so every vmstate restore dies with "Exec format error"
@@ -61,7 +71,7 @@ const RESEED_BINARY = '/sbin/machinen-vmstate-reseed';
  * credits the host seed, RNDRESEEDCRNG forces an immediate crng rekey.
  */
 const RESEED_SHIM = `#!/bin/sh
-# x64 shim for machinen 0.4.0's mis-arched arm64 reseed helper. $1 is the
+# x64 shim for the mis-arched arm64 reseed helper. $1 is the
 # hex seed the host runtime generates fresh for every restore.
 if [ -x /usr/bin/perl ]; then
   exec /usr/bin/perl -e '
@@ -120,7 +130,7 @@ interface MachinenRuntime {
 
 /**
  * The CLI resolves kernel/dtb before spawning the VMM, but programmatic
- * `boot()`/`restore()` in 0.4.0 do not — without an explicit `kernel` the
+ * `boot()`/`restore()` do not — without an explicit `kernel` the
  * VMM exits with "MACHINEN_KERNEL is unset" and exec never comes up.
  */
 function baseBootAssets(runtime: MachinenRuntime): { kernel: string; dtb?: string } {
@@ -133,7 +143,28 @@ interface SnapMarker {
   remoteName: string;
   guestPort: number;
   image: string;
+  shell: VmstateShellIdentity;
   snappedAt: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSnapMarker(value: unknown): value is SnapMarker {
+  return (
+    isRecord(value) &&
+    typeof value.remoteName === 'string' &&
+    Number.isInteger(value.guestPort) &&
+    typeof value.image === 'string' &&
+    isVmstateShellIdentity(value.shell) &&
+    typeof value.snappedAt === 'string'
+  );
+}
+
+function describeShell(shell: VmstateShellIdentity): string {
+  const dtb = shell.dtbDigest ? `, dtb=${shell.dtbDigest}` : '';
+  return `rootfs=${shell.rootfsDigest}, kernel=${shell.kernelDigest}${dtb}`;
 }
 
 export interface MachinenSnapshotDescriptor {
@@ -141,21 +172,28 @@ export interface MachinenSnapshotDescriptor {
   snapDir: string;
   /** Rootfs tarball the source VM booted from (recorded for cross-host moves). */
   image: string;
+  /** Digest identity of the MachineN shell that produced the vmstate. */
+  shell: VmstateShellIdentity;
 }
 
 export interface MachinenDriverOptions {
   /**
    * Guest RAM ceiling in MiB. Default 2048. Always passed explicitly:
-   * machinen 0.4.0's auto-sizing on amd64 picks layouts that collide with
+   * MachineN auto-sizing on amd64 picks layouts that collide with
    * the KVM APIC page (KvmCreateVcpuFailed). Keep it <= ~3500 on amd64.
    */
   memoryMib?: number;
   /** Where handle.snapshot() writes VM bundles. Default: .machinen/vm-snapshots */
   snapshotDir?: string;
   /**
-   * Rootfs tarball with node prebaked. When set, the boot-time
-   * `apt-get install nodejs` step is skipped. Default: the machinen
-   * debian base (node installed at boot, ~5s).
+   * Sparse guest root disk size in bytes. The machinen runtime default is
+   * used except for Java machine bundles, which default to 4 GiB so Debian's
+   * JRE packages have room to unpack.
+   */
+  rootDiskSizeBytes?: number;
+  /**
+   * Rootfs tarball with the needed guest runtime prebaked. When set, the
+   * boot-time apt install is skipped. Default: the machinen debian base.
    */
   image?: string;
   /** Extra env baked into the guest launcher (merged over PORT/HOST). */
@@ -215,12 +253,123 @@ export function resolveGuestPort(spec: MachineSpec, marker?: Pick<SnapMarker, 'g
   return marker?.guestPort ?? guestPortFor(spec);
 }
 
+type GuestProgram = {
+  runtimeName: 'node' | 'java';
+  bundlePath: string;
+  guestPath: string;
+  installPackages: string[];
+  launchCommand: string;
+  typesPath?: string;
+  rootDiskSizeBytes?: number;
+};
+
+interface MachinenMachineManifest {
+  format?: string;
+  runtime?: string;
+  program?: string;
+  types?: string;
+  rootDiskSizeBytes?: number;
+}
+
+function safeMachineImageMember(root: string, member: string, field: string): string {
+  if (!member || path.isAbsolute(member)) {
+    throw new Error(`[machinen-plugin] machine image ${field} must be a relative path`);
+  }
+  const target = path.resolve(root, member);
+  const rootWithSep = `${path.resolve(root)}${path.sep}`;
+  if (!target.startsWith(rootWithSep)) {
+    throw new Error(`[machinen-plugin] machine image ${field} escapes the image directory`);
+  }
+  return target;
+}
+
+async function guestProgramForMachineImage(imageDir: string): Promise<GuestProgram | undefined> {
+  const manifestPath = path.join(imageDir, MACHINE_IMAGE_MANIFEST);
+  if (!existsSync(manifestPath)) return undefined;
+
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as MachinenMachineManifest;
+  if (manifest.format !== 'machinen-machine@1') {
+    throw new Error(
+      `[machinen-plugin] machine image manifest ${manifestPath} has unsupported format "${String(manifest.format)}"`,
+    );
+  }
+  if (manifest.runtime !== 'java') {
+    throw new Error(
+      `[machinen-plugin] machine image manifest ${manifestPath} has unsupported runtime "${String(manifest.runtime)}"`,
+    );
+  }
+  if (typeof manifest.program !== 'string') {
+    throw new Error(`[machinen-plugin] machine image manifest ${manifestPath} must name a program`);
+  }
+
+  return {
+    runtimeName: 'java',
+    bundlePath: safeMachineImageMember(imageDir, manifest.program, 'program'),
+    guestPath: JAVA_GUEST_BUNDLE,
+    installPackages: ['default-jre-headless', 'ca-certificates'],
+    launchCommand: `exec java -jar ${JAVA_GUEST_BUNDLE}`,
+    typesPath:
+      typeof manifest.types === 'string'
+        ? safeMachineImageMember(imageDir, manifest.types, 'types')
+        : undefined,
+    rootDiskSizeBytes: manifest.rootDiskSizeBytes,
+  };
+}
+
+async function guestProgramFor(bundlePath: string): Promise<GuestProgram | undefined> {
+  const info = await stat(bundlePath).catch(() => undefined);
+  if (info?.isDirectory()) {
+    return guestProgramForMachineImage(bundlePath);
+  }
+  if (/\.(mjs|js)$/.test(bundlePath)) {
+    return {
+      runtimeName: 'node',
+      bundlePath,
+      guestPath: NODE_GUEST_BUNDLE,
+      installPackages: ['nodejs', 'ca-certificates'],
+      launchCommand: `exec node ${NODE_GUEST_BUNDLE}`,
+    };
+  }
+  return undefined;
+}
+
+function installCommand(packages: string[]): string {
+  return (
+    'mkdir -p /usr/share/man/man1 && DEBIAN_FRONTEND=noninteractive apt-get update && ' +
+    `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packages.join(' ')} </dev/null 1>&2 || ` +
+    "{ status=$?; tail -120 /var/log/apt/term.log /var/log/dpkg.log 2>/dev/null >&2; exit $status; }"
+  );
+}
+
 function assertValidEnvKey(key: string): void {
   if (!ENV_KEY_RE.test(key)) {
     throw new Error(
       `[machinen-plugin] invalid env key "${key}": keys must match ${ENV_KEY_RE.source}`,
     );
   }
+}
+
+function assertValidEnvKeys(env: Record<string, string> | undefined): void {
+  for (const key of Object.keys(env ?? {})) assertValidEnvKey(key);
+}
+
+function buildGuestEnv(guestPort: number, extraEnv: Record<string, string> | undefined): Record<string, string> {
+  const env: Record<string, string> = {
+    HOST: '0.0.0.0', // gvproxy forwards arrive over the guest NIC, not loopback
+    PORT: String(guestPort),
+    ...(extraEnv ?? {}),
+  };
+  assertValidEnvKeys(env);
+  return env;
+}
+
+function buildGuestLauncher(env: Record<string, string>, launchCommand: string): string {
+  return [
+    '#!/bin/sh',
+    ...Object.entries(env).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}`),
+    `${launchCommand} >>/var/log/federated-guest.log 2>&1`,
+    '',
+  ].join('\n');
 }
 
 async function checkedExec(
@@ -254,6 +403,12 @@ async function withGuestLogOnHealthTimeout(vm: MachinenVm, error: unknown): Prom
       `${error.message}\nGuest log tail (${GUEST_LOG}) unavailable: ${(tailError as Error).message}`,
     );
   }
+}
+
+async function throwWithGuestLogAndKill(vm: MachinenVm, error: unknown): Promise<never> {
+  const enriched = await withGuestLogOnHealthTimeout(vm, error);
+  await vm.kill().catch(() => {});
+  throw enriched;
 }
 
 async function killByNameIfSupported(runtime: MachinenRuntime, name: string): Promise<void> {
@@ -318,82 +473,130 @@ async function waitForGuest(
   );
 }
 
+async function readSnapshotMarker(snapDir: string): Promise<SnapMarker | undefined> {
+  let raw: string;
+  try {
+    raw = await readFile(path.join(snapDir, SNAP_MARKER), 'utf8');
+  } catch {
+    // Bundle produced outside this driver — fall back to entry params.
+    return undefined;
+  }
+  let marker: unknown;
+  try {
+    marker = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `[machinen-plugin] snapshot "${snapDir}" has an invalid ${SNAP_MARKER}; refusing ambiguous restore`,
+    );
+  }
+  if (!isSnapMarker(marker)) {
+    throw new Error(
+      `[machinen-plugin] snapshot "${snapDir}" has an invalid MachineN shell marker; refusing ambiguous restore`,
+    );
+  }
+  return marker;
+}
+
+async function shellIdentity(
+  image: string,
+  assets: { kernel: string; dtb?: string },
+): Promise<VmstateShellIdentity> {
+  const rootfsDigest = `sha256:${await sha256File(image)}`;
+  const kernelDigest = `sha256:${await sha256File(assets.kernel)}`;
+  if (!assets.dtb) return { rootfsDigest, kernelDigest };
+  return {
+    rootfsDigest,
+    kernelDigest,
+    dtbDigest: `sha256:${await sha256File(assets.dtb)}`,
+  };
+}
+
+function buildHandle(
+  spec: MachineSpec,
+  vm: MachinenVm,
+  hostPort: number,
+  guestPort: number,
+  image: string,
+  shell: () => Promise<VmstateShellIdentity>,
+  snapshotDir: string,
+  log: (line: string) => void,
+): MachineHandle {
+  const handle = httpMachineHandle(`http://127.0.0.1:${hostPort}`);
+
+  const snapshot = async (): Promise<MachinenSnapshotDescriptor> => {
+    // The x86_64 base rootfs ships an aarch64 /sbin/machinen-vmstate-reseed in the
+    // debian rootfs; the restored guest runs it and dies with
+    // BOOT_VMSTATE_RESEED_FAILED ("Exec format error"). Overwrite it with
+    // the functional shell shim before every snapshot so the state we
+    // freeze contains a helper that actually reseeds the guest CSPRNG
+    // from the host-provided seed on restore.
+    await vm.writeFile(RESEED_BINARY, RESEED_SHIM, { mode: 0o755 });
+
+    await mkdir(snapshotDir, { recursive: true });
+    const outDir = path.resolve(snapshotDir, `${spec.remoteName}-${Date.now().toString(36)}`);
+    const started = Date.now();
+    // Snapshot through an attach() handle, never the boot-owned `vm`.
+    // The default vmstate engine is safe either way, but with
+    // MACHINEN_SNAPSHOT_ENGINE=criu (host env, outside our control) the
+    // CRIU snapshot path awaits ctx.errorOutput(), which on a boot-owned
+    // handle is a collect(child.stderr) promise that only resolves when
+    // the VM exits — a guaranteed deadlock. Attach handles resolve
+    // errorOutput() immediately (this is also how the machinen CLI
+    // snapshots), so the same driver code is safe under every engine.
+    const runtime = await loadRuntime();
+    const snapVm = await runtime.attach({ pid: vm.pid });
+    await snapVm.snapshot({ outDir });
+    const marker: SnapMarker = {
+      remoteName: spec.remoteName,
+      guestPort,
+      image,
+      shell: await shell(),
+      snappedAt: new Date().toISOString(),
+    };
+    await writeHostFile(path.join(outDir, SNAP_MARKER), JSON.stringify(marker, null, 2));
+    log(`[machinen] ${spec.remoteName}: snapshot -> ${outDir} (${Date.now() - started}ms)`);
+    return { snapDir: outDir, image, shell: marker.shell };
+  };
+
+  const fork = async (): Promise<never> => {
+    throw new Error(
+      '[machinen-plugin] machinenDriver: fork() is not supported on amd64 with machinen 0.6.1 ' +
+        '(upstream bug: the forked sibling does not resume reliably on x86_64/KVM). ' +
+        'Use handle.snapshot() and boot a machinen://<snapDir> entry instead; ' +
+        'fork support returns when the upstream fix ships.',
+    );
+  };
+
+  return {
+    ...handle,
+    snapshot,
+    fork,
+    dispose: async () => {
+      await vm.kill();
+    },
+  };
+}
+
 export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver {
   const snapshotDir = opts.snapshotDir ?? path.join('.machinen', 'vm-snapshots');
   const guestReadyTimeoutMs = opts.guestReadyTimeoutMs ?? 60_000;
   const bootTimeoutMs = opts.bootTimeoutMs ?? Math.max(DEFAULT_BOOT_TIMEOUT_MS, guestReadyTimeoutMs);
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
-  for (const key of Object.keys(opts.env ?? {})) assertValidEnvKey(key);
+  assertValidEnvKeys(opts.env);
 
-  function buildHandle(
-    spec: MachineSpec,
-    vm: MachinenVm,
-    hostPort: number,
-    guestPort: number,
-    image: string,
-  ): MachineHandle {
-    const handle = httpMachineHandle(`http://127.0.0.1:${hostPort}`);
-
-    const snapshot = async (): Promise<MachinenSnapshotDescriptor> => {
-      // amd64 0.4.0 ships an aarch64 /sbin/machinen-vmstate-reseed in the
-      // debian rootfs; the restored guest runs it and dies with
-      // BOOT_VMSTATE_RESEED_FAILED ("Exec format error"). Overwrite it with
-      // the functional shell shim before every snapshot so the state we
-      // freeze contains a helper that actually reseeds the guest CSPRNG
-      // from the host-provided seed on restore.
-      await vm.writeFile(RESEED_BINARY, RESEED_SHIM, { mode: 0o755 });
-
-      await mkdir(snapshotDir, { recursive: true });
-      const outDir = path.resolve(snapshotDir, `${spec.remoteName}-${Date.now().toString(36)}`);
-      const started = Date.now();
-      // Snapshot through an attach() handle, never the boot-owned `vm`.
-      // The default vmstate engine is safe either way, but with
-      // MACHINEN_SNAPSHOT_ENGINE=criu (host env, outside our control) the
-      // CRIU snapshot path awaits ctx.errorOutput(), which on a boot-owned
-      // handle is a collect(child.stderr) promise that only resolves when
-      // the VM exits — a guaranteed deadlock. Attach handles resolve
-      // errorOutput() immediately (this is also how the machinen CLI
-      // snapshots), so the same driver code is safe under every engine.
-      const runtime = await loadRuntime();
-      const snapVm = await runtime.attach({ pid: vm.pid });
-      await snapVm.snapshot({ outDir });
-      const marker: SnapMarker = {
-        remoteName: spec.remoteName,
-        guestPort,
-        image,
-        snappedAt: new Date().toISOString(),
-      };
-      await writeHostFile(path.join(outDir, SNAP_MARKER), JSON.stringify(marker, null, 2));
-      log(`[machinen] ${spec.remoteName}: snapshot -> ${outDir} (${Date.now() - started}ms)`);
-      return { snapDir: outDir, image };
-    };
-
-    const fork = async (): Promise<never> => {
-      throw new Error(
-        '[machinen-plugin] machinenDriver: fork() is not supported on amd64 with machinen 0.6.1 ' +
-          '(upstream bug: the forked sibling does not resume reliably on x86_64/KVM). ' +
-          'Use handle.snapshot() and boot a machinen://<snapDir> entry instead; ' +
-          'fork support returns when the upstream fix ships.',
-      );
-    };
-
-    return {
-      ...handle,
-      snapshot,
-      fork,
-      dispose: async () => {
-        await vm.kill();
-      },
-    };
-  }
-
-  async function bootFresh(spec: MachineSpec, bundlePath: string): Promise<MachineHandle> {
+  async function bootFresh(spec: MachineSpec, program: GuestProgram): Promise<MachineHandle> {
     const runtime = await loadRuntime();
-    const bundle = await readFile(bundlePath);
+    const bundle = await readFile(program.bundlePath);
     const image = opts.image ?? runtime.resolveBaseRootfs();
+    const assets = baseBootAssets(runtime);
     const guestPort = guestPortFor(spec);
     const hostPort = await getFreePort();
     const memory = Number(spec.params.get('memory')) || opts.memoryMib || DEFAULT_MEMORY_MIB;
+    const rootDiskSizeBytes =
+      Number(spec.params.get('rootDiskSizeBytes')) ||
+      opts.rootDiskSizeBytes ||
+      program.rootDiskSizeBytes ||
+      (program.runtimeName === 'java' ? DEFAULT_JAVA_ROOT_DISK_BYTES : undefined);
     const name = vmName(spec.remoteName);
 
     const t0 = Date.now();
@@ -401,7 +604,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const vm = await withVmStartTimeout(
       runtime.boot({
         image,
-        ...baseBootAssets(runtime),
+        ...assets,
         // The supervised cmd just keeps PID 1's workload alive; the actual
         // guest server is started via exec below so the same base image works
         // before node is installed. Whole-VM snapshots capture it regardless.
@@ -409,6 +612,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
         name,
         // Explicit memory always (amd64 KVM APIC-page collision in auto-sizing).
         memory,
+        ...(rootDiskSizeBytes ? { rootDiskSizeBytes } : {}),
         portForward: [{ hostPort, guestPort }],
         timeoutMs: bootTimeoutMs,
       }),
@@ -420,31 +624,25 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
 
     try {
       const booted = Date.now();
-      if (!opts.image) {
-        // provision() stalls on amd64 0.4.0 (vsock exec inside provision
+      if (!opts.image && program.installPackages.length > 0) {
+        // provision() stalls on x86_64/KVM (vsock exec inside provision
         // times out at 300s); boot-then-exec does the same install in ~5s.
         await checkedExec(
           vm,
-          'apt-get update && apt-get install -y --no-install-recommends nodejs ca-certificates',
-          'install node in guest',
+          installCommand(program.installPackages),
+          `install ${program.runtimeName} in guest`,
           { execTimeoutMs: 240_000 },
         );
-        log(`[machinen] ${spec.remoteName}: node installed in guest (${Date.now() - booted}ms)`);
+        log(`[machinen] ${spec.remoteName}: ${program.runtimeName} installed in guest (${Date.now() - booted}ms)`);
       }
 
-      await vm.writeFile(GUEST_BUNDLE, bundle);
-      const env: Record<string, string> = {
-        HOST: '0.0.0.0', // gvproxy forwards arrive over the guest NIC, not loopback
-        PORT: String(guestPort),
-        ...(opts.env ?? {}),
-      };
-      for (const key of Object.keys(env)) assertValidEnvKey(key);
-      const launcher = [
-        '#!/bin/sh',
-        ...Object.entries(env).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}`),
-        `exec node ${GUEST_BUNDLE} >>/var/log/federated-guest.log 2>&1`,
-        '',
-      ].join('\n');
+      await vm.writeFile(program.guestPath, bundle);
+      const env = buildGuestEnv(guestPort, opts.env);
+      if (program.typesPath && existsSync(program.typesPath)) {
+        await vm.writeFile(JAVA_TYPES_FILE, await readFile(program.typesPath));
+        env.MACHINEN_TYPES_FILE ??= JAVA_TYPES_FILE;
+      }
+      const launcher = buildGuestLauncher(env, program.launchCommand);
       await vm.writeFile(GUEST_LAUNCHER, launcher, { mode: 0o600 });
       await checkedExec(
         vm,
@@ -452,7 +650,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
         'start guest launcher',
       );
 
-      const handle = buildHandle(spec, vm, hostPort, guestPort, image);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, image, () => shellIdentity(image, assets), snapshotDir, log);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `boot of "${spec.remoteName}"`,
@@ -461,23 +659,29 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       log(`[machinen] ${spec.remoteName}: guest healthy ${readyMs}ms after start (${Date.now() - t0}ms total)`);
       return handle;
     } catch (error) {
-      const enriched = await withGuestLogOnHealthTimeout(vm, error);
-      await vm.kill().catch(() => {});
-      throw enriched;
+      return await throwWithGuestLogAndKill(vm, error);
     }
   }
 
   async function bootFromSnapshot(spec: MachineSpec, snapDir: string): Promise<MachineHandle> {
     const runtime = await loadRuntime();
-    let marker: SnapMarker | undefined;
-    try {
-      marker = JSON.parse(await readFile(path.join(snapDir, SNAP_MARKER), 'utf8')) as SnapMarker;
-    } catch {
-      // Bundle produced outside this driver — fall back to entry params.
+    const marker = await readSnapshotMarker(snapDir);
+    if (!marker?.shell) {
+      throw new Error(
+        `[machinen-plugin] snapshot "${snapDir}" has no MachineN shell identity; refusing ambiguous restore`,
+      );
     }
     const guestPort = resolveGuestPort(spec, marker);
     const hostPort = await getFreePort();
     const name = vmName(spec.remoteName);
+    const assets = baseBootAssets(runtime);
+    const localShell = await shellIdentity(marker.image, assets);
+    if (!sameShell(marker.shell, localShell)) {
+      throw new Error(
+        `[machinen-plugin] snapshot "${snapDir}" shell mismatch: snapshot requires ` +
+          `${describeShell(marker.shell)}, this host has ${describeShell(localShell)}`,
+      );
+    }
 
     const t0 = Date.now();
     log(`[machinen] ${spec.remoteName}: restoring VM "${name}" from ${snapDir} (127.0.0.1:${hostPort} -> guest:${guestPort})`);
@@ -486,7 +690,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const vm = await withVmStartTimeout(
       runtime.restore({
         snapDir,
-        ...baseBootAssets(runtime),
+        ...assets,
         name,
         portForward: [{ hostPort, guestPort }],
         timeoutMs: bootTimeoutMs,
@@ -498,7 +702,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     );
 
     try {
-      const handle = buildHandle(spec, vm, hostPort, guestPort, marker?.image ?? snapDir);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, marker.image, async () => marker.shell, snapshotDir, log);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `restore of "${spec.remoteName}"`,
@@ -507,9 +711,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       log(`[machinen] ${spec.remoteName}: restored guest healthy in ${Date.now() - t0}ms (poll ${readyMs}ms)`);
       return handle;
     } catch (error) {
-      const enriched = await withGuestLogOnHealthTimeout(vm, error);
-      await vm.kill().catch(() => {});
-      throw enriched;
+      return await throwWithGuestLogAndKill(vm, error);
     }
   }
 
@@ -523,12 +725,13 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
       if (await isMachinenSnapshotDir(spec.image)) {
         return bootFromSnapshot(spec, spec.image);
       }
-      if (/\.(mjs|js)$/.test(spec.image)) {
-        return bootFresh(spec, spec.image);
+      const program = await guestProgramFor(spec.image);
+      if (program) {
+        return bootFresh(spec, program);
       }
       throw new Error(
         `[machinen-plugin] machinenDriver cannot boot "${spec.image}": expected a .js/.mjs ` +
-          'guest bundle (run inside the machinen base image) or a machinen snapshot bundle directory',
+          'guest bundle, a machinen-machine@1 image directory, or a machinen snapshot bundle directory',
       );
     },
   };

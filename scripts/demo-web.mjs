@@ -29,9 +29,16 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const smoke = process.argv.includes('--smoke');
+const javaVm = process.env.MACHINEN_JAVA_VM === '1';
+const machineNames = Object.keys(PORTS);
+const hostRemoteNames = javaVm
+  ? machineNames.filter((name) => name !== 'java_machine')
+  : machineNames;
 
 // eu-west starts WITHOUT analytics: scenario 2 deploys it live, by pull.
-const { machines, stop } = await startMachines({ exclude: ['analytics_machine'] });
+const { machines, stop } = await startMachines({
+  exclude: ['analytics_machine', ...(javaVm ? ['java_machine'] : [])],
+});
 
 const children = [];
 const stopAll = () => {
@@ -92,7 +99,8 @@ const host = spawn('node', [path.join(ROOT, 'apps/host/dist/server.js')], {
   env: {
     ...process.env,
     // Everything in the data region is reached THROUGH the WAN links.
-    ...remoteEnv(Object.keys(PORTS), { wan: Object.keys(WAN_PORTS) }),
+    ...remoteEnv(hostRemoteNames, { wan: Object.keys(WAN_PORTS) }),
+    ...(javaVm ? { MACHINEN_JAVA_VM: '1' } : {}),
     REGION_LINKS: wan.regionLinks,
     REGION_AGENT_URL: `http://127.0.0.1:${WAN_AGENT_PORT}`,
   },
@@ -224,6 +232,13 @@ async function runSmoke(base) {
   }
   console.log('[smoke] GET /gravity -> 200, references demo-base.js');
 
+  const fluid = await fetch(`${base}/fluid`);
+  const fluidBody = await fluid.text();
+  if (fluid.status !== 200 || !fluidBody.includes('demo-base.js')) {
+    throw new Error(`GET /fluid (${fluid.status}) does not reference demo-base.js`);
+  }
+  console.log('[smoke] GET /fluid -> 200, references demo-base.js');
+
   const android = await fetch(`${base}/android`);
   const androidBody = await android.text();
   if (android.status !== 200 || !androidBody.includes('demo-base.js')) {
@@ -260,6 +275,48 @@ async function runSmoke(base) {
   const pipelineBody = await postJson(base, '/api/pipeline', { text: 'smoke test' });
   expect(typeof pipelineBody.totalMs === 'number', 'POST /api/pipeline returned no totalMs');
   console.log(`[smoke] POST /api/pipeline -> totalMs=${pipelineBody.totalMs.toFixed(0)}`);
+
+  const fluidPrepared = await postJson(base, '/api/fluid/prepare');
+  expect(fluidPrepared.phase === 'prepared',
+    `fluid prepare should publish a prepared vmstate: ${JSON.stringify(fluidPrepared)}`);
+  expect(String(fluidPrepared.published?.digest).startsWith('sha256:'),
+    `fluid prepare should publish a digest: ${JSON.stringify(fluidPrepared.published)}`);
+  console.log(`[smoke] POST /api/fluid/prepare -> ${fluidPrepared.published.bytes} bytes, ` +
+    `${fluidPrepared.published.digest.slice(0, 19)}…`);
+
+  const fluidBodyJson = await postJson(base, '/api/fluid/query', {
+    query: 'ship this function across regions and stream the answer back',
+    policy: 'distribute',
+    callerRegion: 'us-east',
+  });
+  expect(fluidBodyJson.decision?.mode === 'distribute',
+    `fluid query should choose distribute: ${JSON.stringify(fluidBodyJson.decision)}`);
+  expect(fluidBodyJson.decision?.connection?.state === 'opened',
+    `fluid query should open a back-channel: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+  expect(fluidBodyJson.decision?.connection?.kind === 'host-mediated-backhaul',
+    `fluid query should report the actual backhaul mode: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+  expect(fluidBodyJson.restore?.artifact === 'vmstate',
+    `fluid query should restore vmstate, not cold boot image: ${JSON.stringify(fluidBodyJson.restore)}`);
+  expect(decodeURIComponent(String(fluidBodyJson.restore.entry)).includes(`digest=${fluidPrepared.published.digest}`),
+    `fluid query should pin the prepared vmstate digest: ${JSON.stringify(fluidBodyJson.restore)}`);
+  expect((fluidBodyJson.timeline ?? []).map((s) => s.kind).join(',') ===
+    'query,invoke,decide,restore,connect,return',
+    `fluid timeline malformed: ${JSON.stringify(fluidBodyJson.timeline)}`);
+  expect((fluidBodyJson.wire ?? []).some((e) => e.type === 'artifact' && e.artifact === 'vmstate'),
+    'fluid query should include real vmstate pull wire evidence');
+  console.log(`[smoke] POST /api/fluid/query -> ${fluidBodyJson.decision.mode}, ` +
+    `${fluidBodyJson.decision.connection.from} -> ${fluidBodyJson.decision.connection.to}`);
+
+  const fluidAdaptive = await postJson(base, '/api/fluid/adapt', {
+    hotRegion: 'eu-west',
+    requestCount: 32,
+  });
+  expect(fluidAdaptive.migration?.atRequest === 8,
+    `adaptive fluid burst should migrate after sustained heat: ${JSON.stringify(fluidAdaptive.migration)}`);
+  expect(fluidAdaptive.finalRegion === 'eu-west' && fluidAdaptive.savedMs > 0,
+    `adaptive fluid burst should pay back colocating compute: ${JSON.stringify(fluidAdaptive)}`);
+  console.log(`[smoke] POST /api/fluid/adapt -> moved at request ${fluidAdaptive.migration.atRequest}, ` +
+    `saved ${Math.round(fluidAdaptive.savedMs)}ms`);
 
   // ---- lifecycle arc: boot -> freeze -> restore -> fork -> fork again ------
   // 100% HTTP: the origin's image is pulled from compute_machine's /mf-image

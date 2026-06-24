@@ -1,7 +1,7 @@
 /** Parsed form of a machine entry.
  *
  * Three transports:
- * - `machinen://<image>?...`             boot a machine from a local image (driver owns transport)
+ * - `machinen://<local-path>?...`        boot a local machine artifact (driver owns transport)
  * - `machinen+http://host:port?...`      attach to an independently deployed machine
  * - `machinen+pull+http://host:port?...` fetch the machine's published artifact, then boot it locally
  */
@@ -10,7 +10,7 @@ export interface MachineSpec {
   /** The normalized entry string — used for map keys, hooks, and error messages. */
   entry: string;
   kind: 'image' | 'attach' | 'pull';
-  /** Image/path portion for `kind: 'image'`. */
+  /** Local artifact path for `kind: 'image'` (machine image, guest bundle, or snapshot). */
   image?: string;
   /** Base URL for `kind: 'attach'` and `kind: 'pull'`. */
   url?: string;
@@ -51,7 +51,7 @@ export interface ArtifactDescriptor {
   format: string;
   /** `sha256:<hex>` of the artifact bytes. Required for immutable artifacts (image). */
   digest?: string;
-  /** File extension (".js", ".jar", ".py"...) the cached artifact must keep so drivers can boot it. */
+  /** File extension the cached artifact must keep for drivers that dispatch by extension. */
   ext?: string;
   /** Informational content type (e.g. "application/java-archive"). */
   mediaType?: string;

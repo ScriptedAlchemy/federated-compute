@@ -53,7 +53,7 @@ The full version of each story lives in the
 ```
 packages/runtime-plugin   @federated-compute/machinen-plugin (plugin, hooks, drivers, guest runtime, bindgen)
 apps/remote               machine: Node guest (Rsbuild, node target)
-apps/remote-java          machine: Java 21 service (src/dev/machinen/* — server, runtime, modules, state; builds dist/java-machine.jar, zero deps)
+apps/remote-java          machine: Java 21 service (src/dev/machinen/* — server, runtime, modules, state; builds dist/java-machine.jar plus dist/java_machine.machine, zero deps)
 apps/remote-python        machine: Python 3 service (machinen_guest package — protocol, registry, server, modules; stdlib only)
 apps/machine-db           machine: in-memory database guest for the data gravity demo
 apps/machine-analytics    machine: analytics guest co-located with the db (itself a consumer of db_machine)
@@ -70,7 +70,7 @@ docs/writing-a-machine.md how to build a new machine in any language
 ```bash
 pnpm install
 pnpm test           # unit tests + cross-language conformance suite
-pnpm -r build       # plugin, node apps, and the Java machine's jar
+pnpm -r build       # plugin, node apps, and the Java machine jar/bundle
 pnpm demo           # boots all machines as separate services, runs the host
 pnpm demo:snapshot  # boot once -> freeze -> restore elsewhere, state intact
 pnpm demo:pull      # fork-by-fetch: pull a machine's image/snapshot, boot a clone
@@ -80,6 +80,10 @@ pnpm demo:gravity   # data gravity comparison, CLI edition
 pnpm bindgen        # pull typed bindings from the deployed machines
 pnpm bindgen --check  # verify committed bindings match the machines (CI gate)
 ```
+
+`pnpm demo:machinen` is runtime validation for deployment owners. Normal
+consumer wiring uses deployed machine addresses or published machine artifacts;
+Java jars are build inputs, not the machine entries consumers pass around.
 
 Requires Node 22+, a JDK 21+ for the Java machine, and Python 3 for the
 Python machine. CI runs the full suite plus all three demos and the web

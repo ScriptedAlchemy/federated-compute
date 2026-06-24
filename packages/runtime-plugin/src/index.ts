@@ -1,6 +1,7 @@
 export { machinenPlugin, type MachinenPlugin, type MachinenPluginOptions } from './plugin.js';
 export {
   DEFAULT_ARTIFACT_CACHE_DIR,
+  DEFAULT_PULL_BODY_MAX_BYTES,
   joinArtifactUrl,
   resolvePullEntry,
   type PullArtifactKind,
@@ -10,6 +11,7 @@ export {
 export { AsyncSeriesHook, createMachineHooks, type MachineHooks } from './hooks.js';
 export {
   DEFAULT_PUBLISH_DIR,
+  assertValidPublishedMachineName,
   publishSnapshotDir,
   startArtifactEndpoint,
   type ArtifactEndpoint,
@@ -27,12 +29,14 @@ export {
   ociHostPlatform,
   parseVmstateBundleManifest,
   sha256File,
+  sameShell,
   vmstateCompatibilityError,
   type BuiltVmstateBundle,
   type VmstateBundleManifest,
   type VmstateCompatibility,
   type VmstateFileEntry,
   type VmstateHost,
+  type VmstateShellIdentity,
 } from './vmstate.js';
 export {
   GuestError,

@@ -20,6 +20,7 @@ public final class Main {
   private Main() {}
 
   public static void main(String[] args) throws Exception {
+    String host = System.getenv().getOrDefault("HOST", "127.0.0.1");
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "3802"));
 
     MachineState state = new MachineState();
@@ -29,9 +30,9 @@ public final class Main {
         new CounterModule(state),
         new JvmModule()));
 
-    GuestServer server = new GuestServer(port, exposes, state);
+    GuestServer server = new GuestServer(host, port, exposes, state);
     server.start();
-    System.out.println("[remote-java] machine guest listening on 127.0.0.1:" + port);
+    System.out.println("[remote-java] machine guest listening on " + host + ":" + port);
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       server.stop();

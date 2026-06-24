@@ -50,6 +50,7 @@
     max-width: 1480px;
     margin: 0 auto;
   }
+  main > *, .hero > *, .panel { min-width: 0; }
   .panel { padding: 20px 22px; }
 
   /* ---------- hero ---------- */
@@ -644,6 +645,7 @@
     <a href="/gravity"><span class="tno">02</span>data gravity</a>
     <a href="/android"><span class="tno">03</span>android lab</a>
     <a href="/screen"><span class="tno">04</span>device screen</a>
+    <a href="/fluid"><span class="tno">05</span>fluid compute</a>
   </nav>
 </header>
 
@@ -667,16 +669,23 @@
     <div>
       <div class="hero-code-label">the host, verbatim — apps/host/src/server.ts (runs in the host process, never the browser)</div>
       <code class="block"><span class="kw">import</span> { createInstance } <span class="kw">from</span> <span class="str">'@module-federation/runtime'</span>;
-<span class="kw">import</span> { machinenPlugin, httpAttachDriver } <span class="kw">from</span> <span class="str">'@federated-compute/machinen-plugin'</span>;
+<span class="kw">import</span> { machinenPlugin, httpAttachDriver, machinenDriver } <span class="kw">from</span> <span class="str">'@federated-compute/machinen-plugin'</span>;
 
 <span class="cm">// three entry kinds, one runtime — code only moves between machines over HTTP:</span>
 <span class="cm">//   machinen+http://host:port    attach to a deployment (calls move, code doesn't)</span>
 <span class="cm">//   machinen+pull+http://…       fetch the artifact over HTTP, boot a local clone</span>
 <span class="cm">//   machinen://&lt;path&gt;            boot from a local path (deployments booting their own code)</span>
+<span class="kw">const</span> attach = <span class="fn">httpAttachDriver</span>();
+<span class="kw">const</span> vm = <span class="fn">machinenDriver</span>();
+<span class="kw">const</span> driver = {
+  boot: (spec) => spec.kind === <span class="str">'attach'</span>
+    ? attach.boot(spec)
+    : vm.boot(spec),
+};
 <span class="kw">const</span> host = <span class="fn">createInstance</span>({
   name: <span class="str">'host'</span>,
-  remotes: [{ name: <span class="str">'java_machine'</span>, entry: <span class="str">'machinen+http://127.0.0.1:3802'</span> }, <span class="cm">/* … */</span>],
-  plugins: [<span class="fn">machinenPlugin</span>({ driver: <span class="fn">httpAttachDriver</span>() })],
+  remotes: [{ name: <span class="str">'java_machine'</span>, entry: <span class="str">'machinen+http://127.0.0.1:3802?version=^1.0.0'</span> }, <span class="cm">/* … */</span>],
+  plugins: [<span class="fn">machinenPlugin</span>({ driver })],
 });
 
 <span class="cm">// loadRemote, exactly like any federated module — but it's a JVM</span>

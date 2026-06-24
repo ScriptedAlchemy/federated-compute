@@ -10,6 +10,7 @@ const SOLVER_PROGRESS_RETURNS =
 
 // Warm state that survives snapshot/restore.
 let counter = 0;
+const fluidInbox: { from: string; chunk: string; at: string }[] = [];
 
 export const state = {
   dehydrate: () => ({ counter }),
@@ -62,6 +63,46 @@ export const exposes: Record<string, Record<string, ExposedFunction>> = {
   './counter': {
     increment: { handler: () => ++counter, params: [], returns: 'number' },
     current: { handler: () => counter, params: [], returns: 'number' },
+  },
+  './fluid': {
+    compute: {
+      handler: (query: string, placement: string) => {
+        const words = query.trim().split(/\s+/).filter(Boolean);
+        return {
+          chunk: `${words.slice(0, 8).join(' ')}${words.length > 8 ? ' ...' : ''}`.toUpperCase(),
+          words: words.length,
+          placement,
+          pid: process.pid,
+          node: process.version,
+        };
+      },
+      params: [
+        { name: 'query', type: 'string' },
+        { name: 'placement', type: 'string' },
+      ],
+      returns: '{ chunk: string; words: number; placement: string; pid: number; node: string }',
+    },
+    acceptBackhaul: {
+      handler: (from: string, chunk: string) => {
+        fluidInbox.push({ from, chunk, at: new Date().toISOString() });
+        return {
+          accepted: true,
+          inboxSize: fluidInbox.length,
+          from,
+          pid: process.pid,
+        };
+      },
+      params: [
+        { name: 'from', type: 'string' },
+        { name: 'chunk', type: 'string' },
+      ],
+      returns: '{ accepted: boolean; inboxSize: number; from: string; pid: number }',
+    },
+    inbox: {
+      handler: () => fluidInbox.slice(-8),
+      params: [],
+      returns: '{ from: string; chunk: string; at: string }[]',
+    },
   },
   // The whole-VM demo workload. Deliberately NOT covered by `state` above:
   // its heap (memo cache, RNG state, iteration count) only survives a

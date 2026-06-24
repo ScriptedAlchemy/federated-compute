@@ -15,7 +15,7 @@ describe('resolveBootCommand', () => {
     expect(resolveBootCommand('/images/Main.java')).toEqual(['java', '/images/Main.java']);
   });
 
-  test('jar images run with java -jar', () => {
+  test('jar images remain supported by the host process fallback', () => {
     expect(resolveBootCommand('/images/app.jar')).toEqual(['java', '-jar', '/images/app.jar']);
   });
 

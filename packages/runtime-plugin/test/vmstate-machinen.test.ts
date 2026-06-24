@@ -61,6 +61,7 @@ describe.skipIf(unavailable !== null)('vmstate fork-by-pull (real microVMs)', ()
       const consumerA = createMachines({
         driver: machinenDriver(),
         artifactCacheDir: path.join(work, 'cache-a'),
+        vmstateShell: published.compatibility.shell,
         bootTimeoutMs: BOOT_TIMEOUT_MS,
         remotes: { vm_machine: `machinen+pull+${published.url}?artifact=vmstate` },
       });
@@ -76,6 +77,7 @@ describe.skipIf(unavailable !== null)('vmstate fork-by-pull (real microVMs)', ()
       const consumerB = createMachines({
         driver: machinenDriver(),
         artifactCacheDir: path.join(work, 'cache-b'),
+        vmstateShell: published.compatibility.shell,
         bootTimeoutMs: BOOT_TIMEOUT_MS,
         remotes: { vm_machine: `machinen+pull+${rootUrl}?artifact=vmstate` },
       });

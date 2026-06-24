@@ -1,0 +1,17 @@
+{
+  "name": "machine-artifact",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Artifact registry machine: catalog/control plane for published Machinen artifacts.",
+  "scripts": {
+    "build": "rsbuild build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@federated-compute/machinen-plugin": "workspace:*"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^2.0.9"
+  }
+}

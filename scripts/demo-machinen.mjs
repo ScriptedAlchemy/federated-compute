@@ -1,11 +1,12 @@
 // The real thing, no fakes: this demo drives ACTUAL machinen microVMs (KVM)
-// through the full federation stack. A `machinen://` entry pointing at the
-// repo's Node guest bundle boots a real VM (debian base + node installed
-// inside, ~10s), counter calls flow host -> federation bindings -> gvproxy
-// port forward -> guest protocol v3 inside the VM. The warm VM is then frozen
-// into a whole-VM vmstate snapshot (~2.5GB: RAM + rootdisk + vCPU state),
-// killed, and a SECOND federation client whose entry is the snapshot
-// directory restores it — the counter continues from in-VM process heap.
+// through the full federation stack. `machinen://` entries pointing at the
+// repo's Node guest bundle and Java machine image each boot a real VM (debian base +
+// the needed runtime installed inside), calls flow host -> federation
+// bindings -> gvproxy port forward -> guest protocol v3 inside the VM. The
+// warm Node VM is then frozen into a whole-VM vmstate snapshot (~2.5GB: RAM +
+// rootdisk + vCPU state), killed, and a SECOND federation client whose entry
+// is the snapshot directory restores it — the counter continues from in-VM
+// process heap.
 //
 // Requires Linux with usable /dev/kvm (or Apple Silicon) and machinen base
 // assets (`pnpm exec machinen install`, fetched automatically on first boot).
@@ -24,9 +25,14 @@ import { machinenDriver } from '../packages/runtime-plugin/dist/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUEST_BUNDLE = path.join(ROOT, 'apps/remote/dist/index.js');
+const JAVA_MACHINE_IMAGE = path.join(ROOT, 'apps/remote-java/dist/java_machine.machine');
 
 if (!existsSync(GUEST_BUNDLE)) {
   console.error(`guest bundle missing at ${GUEST_BUNDLE} — run \`pnpm --filter remote build\` first`);
+  process.exit(1);
+}
+if (!existsSync(JAVA_MACHINE_IMAGE)) {
+  console.error(`java machine image missing at ${JAVA_MACHINE_IMAGE} — run \`pnpm --filter remote-java build\` first`);
   process.exit(1);
 }
 if (process.platform === 'linux' && !existsSync('/dev/kvm')) {
@@ -46,7 +52,10 @@ try {
   hostA = createMachines({
     driver,
     bootTimeoutMs: 180_000,
-    remotes: { compute_machine: `machinen://${GUEST_BUNDLE}` },
+    remotes: {
+      compute_machine: `machinen://${GUEST_BUNDLE}`,
+      java_machine: `machinen://${JAVA_MACHINE_IMAGE}`,
+    },
   });
 
   let t0 = Date.now();
@@ -60,6 +69,20 @@ try {
   const three = await counterA.increment();
   timings.twoWarmCalls = since(t0);
   console.log(`  two warm calls -> counter=${three} (${timings.twoWarmCalls} for both, VM stays hot)`);
+
+  console.log('\n=== Act 1b: federation boots a JVM inside a REAL microVM ===');
+  t0 = Date.now();
+  const javaStrings = hostA.machine('java_machine').strings;
+  const javaJvm = hostA.machine('java_machine').jvm;
+  const [upper, info] = await Promise.all([
+    javaStrings.upper('java inside machinen'),
+    javaJvm.info(),
+  ]);
+  timings.javaVmFirstCall = since(t0);
+  console.log(
+    `  java_machine upper(...)="${upper}", runtime=${info.javaVersion} ` +
+      `(${timings.javaVmFirstCall})`,
+  );
 
   console.log('\n=== Act 2: freeze the whole VM (RAM + disk + vCPUs) ===');
   t0 = Date.now();

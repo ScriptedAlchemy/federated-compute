@@ -4,7 +4,7 @@
 `machinen://` entries as **actual microVMs** through
 [`@machinen/runtime`](https://www.npmjs.com/package/@machinen/runtime) — KVM
 on Linux (x86_64 and arm64), HVF on Apple Silicon. Status: **working today**
-on machinen 0.4.0; verified end to end on x86_64/KVM by
+on machinen 0.6.1; verified end to end on x86_64/KVM by
 `packages/runtime-plugin/test/machinen-driver.test.ts` (a real-VM integration
 test that skips itself honestly when `/dev/kvm` or the package is missing)
 and by `pnpm demo:machinen`.
@@ -19,14 +19,15 @@ const machines = createMachines({
 });
 await machines.machine('compute_machine').counter.increment(); // runs inside a microVM
 
-const snap = await machines.plugin.snapshotMachine('compute_machine'); // whole-VM vmstate bundle
+const snap = await machines.plugin.snapshotMachine('compute_machine'); // includes vmstate shell identity
 // later, anywhere: an entry pointing at the bundle dir restores the VM mid-heap
 // remotes: { compute_machine: `machinen://${snap.snapDir}` }
 ```
 
-Boot model: the driver boots the machinen debian base, installs node inside
-the guest over vsock exec (~5s; pass `image:` with node prebaked to skip),
-`vm.writeFile`s the guest bundle plus a launcher carrying
+Boot model: the driver boots a Machinen image or restores a vmstate bundle.
+For today’s lightweight Node guest bundle path, it can still boot the
+machinen debian base, install `nodejs`, and `vm.writeFile` the guest bundle
+plus a launcher carrying
 `PORT`/`HOST`, starts it, and serves all calls through a
 gvproxy host→guest port forward — the handle is the same `httpMachineHandle`
 the other drivers use. `handle.snapshot()` freezes the whole VM (RAM +
@@ -36,22 +37,37 @@ restores it and the guest process resumes mid-heap. `@machinen/runtime` is an
 pull the ~18MB native package, and the error when it's missing says exactly
 what to install.
 
+Every vmstate snapshot records the MachineN shell it was frozen against:
+rootfs, kernel, and optional dtb digests. `publishMachine()` refuses ambiguous
+snapshots without that identity, and `machinen+pull+...?artifact=vmstate`
+consumers must pass `vmstateShell` so the resolver can reject incompatible
+regions before downloading multi-GB state. MachineN 0.6.1 still restores the
+bundle's root disk; the shell contract is the preflight and placement layer
+that makes a later local-shell/delta restore API possible without changing the
+federation surface.
+
+Java is built into a machine image bundle (`java_machine.machine`); the jar is
+payload inside that bundle, not the machine entry consumers pass around.
+Direct jar execution remains a host `processDriver()` build/dev fallback.
+When a Java machine image needs a different sparse root disk size, pass
+`?rootDiskSizeBytes=<bytes>` or `machinenDriver({ rootDiskSizeBytes })`.
+
 The amd64 reseed workaround performs a *real*
 reseed: the shim feeds the host-provided seed to the guest CSPRNG on restore,
 so VMs restored from one bundle do not share RNG/UUID/key state.
 
-Measured on x86_64/KVM (machinen 0.4.0, nested KVM, warm asset cache):
+Measured on x86_64/KVM (machinen 0.6.1, nested KVM, warm asset cache):
 
 | phase | wall time |
 | --- | --- |
 | VM boot (debian base) | ~5.3s |
-| apt + node install in guest | ~5–6s |
+| apt + guest runtime install | ~5–6s |
 | boot → guest healthy, total | ~9.5s |
 | warm federated call | ~1–2ms |
 | whole-VM snapshot (2.5GB bundle) | ~7s |
 | restore → guest healthy | ~5.5s |
 
-Four amd64 0.4.0 upstream bugs were diagnosed empirically and are worked
+Four x86_64/KVM upstream quirks were diagnosed empirically and are worked
 around inside the driver (each carries a comment at the call site):
 
 1. **Auto memory sizing crashes the VMM** — default sizing picks a guest RAM

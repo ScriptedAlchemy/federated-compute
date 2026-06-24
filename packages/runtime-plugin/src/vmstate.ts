@@ -46,6 +46,35 @@ export interface VmstateFileEntry {
   bytes: number;
 }
 
+export interface VmstateShellIdentity {
+  /** Digest of the MachineN rootfs/base image the VM was booted from. */
+  rootfsDigest: string;
+  /** Digest of the guest kernel supplied for boot/restore. */
+  kernelDigest: string;
+  /** Digest of the guest dtb when the architecture uses one. */
+  dtbDigest?: string;
+}
+
+export function isVmstateShellIdentity(value: unknown): value is VmstateShellIdentity {
+  if (!isPlainObject(value)) return false;
+  return (
+    typeof value.rootfsDigest === 'string' &&
+    DIGEST_RE.test(value.rootfsDigest) &&
+    typeof value.kernelDigest === 'string' &&
+    DIGEST_RE.test(value.kernelDigest) &&
+    (value.dtbDigest === undefined ||
+      (typeof value.dtbDigest === 'string' && DIGEST_RE.test(value.dtbDigest)))
+  );
+}
+
+export function assertVmstateShellIdentity(
+  value: unknown,
+  what: string,
+): VmstateShellIdentity {
+  if (isVmstateShellIdentity(value)) return value;
+  throw new Error(`${what} must include shell rootfs/kernel digests as sha256:<hex>`);
+}
+
 export interface VmstateCompatibility {
   /** OCI-style platform, e.g. "linux/amd64" — vmstate is arch-bound. */
   platform: string;
@@ -56,6 +85,13 @@ export interface VmstateCompatibility {
   snapshotEngine: string;
   /** Reseed mechanism baked into the bundle before the dump. */
   reseed: string;
+  /**
+   * Stable identity of the local MachineN shell this state belongs to. The
+   * current MachineN restore API still restores the bundle's root disk, but
+   * this lets schedulers reject incompatible regions before multi-GB state
+   * transfer and prepares the artifact contract for state/delta restores.
+   */
+  shell: VmstateShellIdentity;
 }
 
 export interface VmstateBundleManifest {
@@ -140,10 +176,90 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const COMPATIBILITY_STRING_FIELDS = [
+  'platform',
+  'machinenRuntime',
+  'snapshotEngine',
+  'reseed',
+] as const;
+
 /** Safe relative bundle path: non-empty slash-joined SEGMENT_RE segments. */
 export function isSafeBundlePath(candidate: string): boolean {
   if (!candidate || candidate.length > 512) return false;
   return candidate.split('/').every((segment) => SEGMENT_RE.test(segment));
+}
+
+function requiredCompatibilityString(
+  compat: Record<string, unknown>,
+  key: (typeof COMPATIBILITY_STRING_FIELDS)[number],
+  where: string,
+): string {
+  const value = compat[key];
+  if (typeof value !== 'string' || !value) {
+    parseFail(where, `compatibility.${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function parseVmstateCompatibility(
+  value: unknown,
+  where: string,
+): VmstateCompatibility {
+  if (!isPlainObject(value)) parseFail(where, 'has no "compatibility" object');
+  if (value.vmstateFormat !== VMSTATE_FORMAT) {
+    parseFail(
+      where,
+      `compatibility.vmstateFormat is "${String(value.vmstateFormat)}", expected "${VMSTATE_FORMAT}"`,
+    );
+  }
+  return {
+    platform: requiredCompatibilityString(value, 'platform', where),
+    machinenRuntime: requiredCompatibilityString(value, 'machinenRuntime', where),
+    vmstateFormat: VMSTATE_FORMAT,
+    snapshotEngine: requiredCompatibilityString(value, 'snapshotEngine', where),
+    reseed: requiredCompatibilityString(value, 'reseed', where),
+    shell: parseVmstateShellIdentity(value.shell, where),
+  };
+}
+
+function parseVmstateShellIdentity(value: unknown, where: string): VmstateShellIdentity {
+  if (!isVmstateShellIdentity(value)) {
+    parseFail(where, 'compatibility.shell must include rootfs/kernel digests as sha256:<hex>');
+  }
+  return value;
+}
+
+function parseVmstateFileEntry(
+  entry: unknown,
+  i: number,
+  where: string,
+): VmstateFileEntry {
+  if (!isPlainObject(entry)) parseFail(where, `files[${i}] must be an object`);
+  const { path: filePath, href, digest, bytes } = entry;
+  if (typeof filePath !== 'string' || !isSafeBundlePath(filePath)) {
+    parseFail(where, `files[${i}].path "${String(filePath)}" is not a safe relative path`);
+  }
+  if (typeof href !== 'string' || !href) parseFail(where, `files[${i}].href must be a non-empty string`);
+  if (typeof digest !== 'string' || !DIGEST_RE.test(digest)) {
+    parseFail(where, `files[${i}].digest is not a sha256:<hex> digest`);
+  }
+  if (typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes < 0) {
+    parseFail(where, `files[${i}].bytes must be a non-negative integer`);
+  }
+  return { path: filePath, href, digest, bytes };
+}
+
+function parseVmstateFiles(value: unknown, where: string): VmstateFileEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    parseFail(where, '"files" must be a non-empty array');
+  }
+  const files = value.map((entry, i) => parseVmstateFileEntry(entry, i, where));
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (seen.has(file.path)) parseFail(where, `has a duplicate file path "${file.path}"`);
+    seen.add(file.path);
+  }
+  return files;
 }
 
 /** Validate untrusted bundle JSON into a typed manifest, or throw. */
@@ -160,53 +276,13 @@ export function parseVmstateBundleManifest(raw: string, where: string): VmstateB
   }
   if (typeof json.name !== 'string' || !json.name) parseFail(where, 'has no "name"');
   if (typeof json.createdAt !== 'string') parseFail(where, 'has no "createdAt"');
-  const compat = json.compatibility;
-  if (!isPlainObject(compat)) parseFail(where, 'has no "compatibility" object');
-  for (const key of ['platform', 'machinenRuntime', 'snapshotEngine', 'reseed'] as const) {
-    if (typeof compat[key] !== 'string' || !compat[key]) {
-      parseFail(where, `compatibility.${key} must be a non-empty string`);
-    }
-  }
-  if (compat.vmstateFormat !== VMSTATE_FORMAT) {
-    parseFail(
-      where,
-      `compatibility.vmstateFormat is "${String(compat.vmstateFormat)}", expected "${VMSTATE_FORMAT}"`,
-    );
-  }
-  if (!Array.isArray(json.files) || json.files.length === 0) {
-    parseFail(where, '"files" must be a non-empty array');
-  }
-  const files: VmstateFileEntry[] = json.files.map((entry, i) => {
-    if (!isPlainObject(entry)) parseFail(where, `files[${i}] must be an object`);
-    const { path: filePath, href, digest, bytes } = entry;
-    if (typeof filePath !== 'string' || !isSafeBundlePath(filePath)) {
-      parseFail(where, `files[${i}].path "${String(filePath)}" is not a safe relative path`);
-    }
-    if (typeof href !== 'string' || !href) parseFail(where, `files[${i}].href must be a non-empty string`);
-    if (typeof digest !== 'string' || !DIGEST_RE.test(digest)) {
-      parseFail(where, `files[${i}].digest is not a sha256:<hex> digest`);
-    }
-    if (typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes < 0) {
-      parseFail(where, `files[${i}].bytes must be a non-negative integer`);
-    }
-    return { path: filePath, href, digest, bytes };
-  });
-  const seen = new Set<string>();
-  for (const file of files) {
-    if (seen.has(file.path)) parseFail(where, `has a duplicate file path "${file.path}"`);
-    seen.add(file.path);
-  }
+  const compatibility = parseVmstateCompatibility(json.compatibility, where);
+  const files = parseVmstateFiles(json.files, where);
   return {
     format: VMSTATE_FORMAT,
     name: json.name,
     createdAt: json.createdAt,
-    compatibility: {
-      platform: compat.platform as string,
-      machinenRuntime: compat.machinenRuntime as string,
-      vmstateFormat: VMSTATE_FORMAT,
-      snapshotEngine: compat.snapshotEngine as string,
-      reseed: compat.reseed as string,
-    },
+    compatibility,
     files,
   };
 }
@@ -253,6 +329,8 @@ export interface VmstateHost {
   platform: string;
   /** Installed @machinen/runtime version. */
   machinenRuntime: string;
+  /** Local MachineN shell identity available to restore this state. */
+  shell: VmstateShellIdentity;
 }
 
 /**
@@ -284,7 +362,26 @@ export function vmstateCompatibilityError(
       `(this consumer supports "${VMSTATE_SNAPSHOT_ENGINE}")`
     );
   }
+  if (!sameShell(compat.shell, host.shell)) {
+    return (
+      `vmstate shell mismatch before download: artifact requires ` +
+      `${formatShell(compat.shell)}, this host has ${formatShell(host.shell)}`
+    );
+  }
   return undefined;
+}
+
+export function sameShell(a: VmstateShellIdentity, b: VmstateShellIdentity): boolean {
+  return (
+    a.rootfsDigest === b.rootfsDigest &&
+    a.kernelDigest === b.kernelDigest &&
+    a.dtbDigest === b.dtbDigest
+  );
+}
+
+function formatShell(shell: VmstateShellIdentity): string {
+  const dtb = shell.dtbDigest ? `, dtb=${shell.dtbDigest}` : '';
+  return `rootfs=${shell.rootfsDigest}, kernel=${shell.kernelDigest}${dtb}`;
 }
 
 export interface CachedBlob {
@@ -340,7 +437,9 @@ export async function ensureBlobCached(
         noBody: () => new Error(`blob request to ${url} had no response body`),
         stalled: (ms) =>
           new Error(`blob download from ${url} stalled: no data for ${ms}ms (stream idle timeout)`),
-      });
+        exceeded: (maxBytes) =>
+          new Error(`blob download from ${url} exceeded advertised size ${maxBytes} bytes`),
+      }, entry.bytes);
       if (actual !== hex) {
         throw new Error(
           `blob digest mismatch for "${entry.path}": expected sha256:${hex}, ` +
@@ -385,12 +484,16 @@ async function renameDirIntoPlace(temp: string, dest: string): Promise<void> {
 
 async function isMaterialized(manifest: VmstateBundleManifest, destDir: string): Promise<boolean> {
   for (const file of manifest.files) {
+    const expected = DIGEST_RE.exec(file.digest)?.[1];
+    if (!expected) return false;
+    const target = path.join(destDir, ...file.path.split('/'));
     try {
-      const info = await stat(path.join(destDir, ...file.path.split('/')));
+      const info = await stat(target);
       if (!info.isFile() || info.size !== file.bytes) return false;
     } catch {
       return false;
     }
+    if ((await sha256File(target)) !== expected) return false;
   }
   return true;
 }
@@ -399,8 +502,7 @@ async function isMaterialized(manifest: VmstateBundleManifest, destDir: string):
  * Materialize a verified bundle as a driver-bootable snapshot directory.
  * Builds in a temp dir and renames into place so a half-built dir can never
  * boot; a complete existing dir (concurrent resolver, earlier pull) is
- * reused as-is. Blob bytes were digest-verified by ensureBlobCached, so the
- * completeness check here is existence + size.
+ * reused only when its files still match the bundle digests.
  */
 export async function materializeVmstateDir(
   manifest: VmstateBundleManifest,
@@ -413,7 +515,7 @@ export async function materializeVmstateDir(
     for (const [i, file] of manifest.files.entries()) {
       const target = path.join(temp, ...file.path.split('/'));
       await mkdir(path.dirname(target), { recursive: true });
-      await linkOrCopy(blobPaths[i], target);
+      await copyFile(blobPaths[i], target);
     }
     // A known-incomplete destination blocks rename (ENOTEMPTY) — clear it.
     await rm(destDir, { recursive: true, force: true });

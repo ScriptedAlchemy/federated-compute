@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>federated-compute — fluid compute</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/demo-base.css" />
+<style>
+  :root {
+    --origin: #3fb950;
+    --replica: #58a6ff;
+    --choice: #f0883e;
+    --link: #4dd2bf;
+    --return: #c792ea;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 70% 42% at 78% -8%, rgba(77, 210, 191, .08), transparent),
+      radial-gradient(ellipse 60% 40% at 8% -10%, rgba(240, 136, 62, .06), transparent),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, .012) 2px 4px);
+  }
+  body::before {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50;
+    background: linear-gradient(90deg, var(--origin), var(--replica), var(--choice), var(--link), var(--return));
+    opacity: .85;
+  }
+  header h1 .accent { color: var(--link); text-shadow: 0 0 18px rgba(77, 210, 191, .45); }
+  main {
+    max-width: 1180px; margin: 0 auto;
+    padding: 28px 40px 72px;
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px;
+  }
+  .panel { padding: 22px 24px; }
+  #panel-idea { grid-column: span 12; --sec: var(--link); }
+  #panel-call { grid-column: span 5; --sec: var(--choice); }
+  #panel-super { grid-column: span 7; --sec: var(--replica); }
+  #panel-result { grid-column: span 5; --sec: var(--return); }
+  #panel-wire { grid-column: span 7; --sec: var(--origin); }
+  #panel-adapt { grid-column: span 12; --sec: var(--choice); }
+  .lede { color: var(--ink-dim); max-width: 92ch; }
+  .lede b { color: var(--ink); font-weight: 500; }
+  .controls { display: grid; gap: 12px; }
+  textarea { min-height: 122px; resize: vertical; width: 100%; }
+  .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: grid; gap: 5px; color: var(--ink-dim); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+  .btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #run-fluid { color: var(--link); border-color: rgba(77, 210, 191, .45); }
+  #run-fluid:hover:not(:disabled) { border-color: var(--link); box-shadow: 0 0 18px -6px rgba(77, 210, 191, .7); }
+  #prepare-fluid { color: var(--choice); border-color: rgba(240, 136, 62, .45); }
+  #prepare-fluid:hover:not(:disabled) { border-color: var(--choice); box-shadow: 0 0 18px -6px rgba(240, 136, 62, .7); }
+  #run-adapt { color: var(--choice); border-color: rgba(240, 136, 62, .45); }
+  #run-adapt:hover:not(:disabled) { border-color: var(--choice); box-shadow: 0 0 18px -6px rgba(240, 136, 62, .7); }
+  .topology {
+    display: grid; grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr) 88px minmax(0, 1fr);
+    align-items: center; gap: 10px; margin-top: 18px;
+  }
+  .zone {
+    min-width: 0;
+    min-height: 118px; border: 1px solid var(--panel-edge); border-radius: 8px;
+    background: var(--well); padding: 12px;
+  }
+  .zone h3 {
+    font-family: var(--display); font-size: 10px; color: var(--ink-dim);
+    letter-spacing: .16em; text-transform: uppercase; margin-bottom: 10px;
+  }
+  .machine-node {
+    border: 1px solid var(--panel-edge-2); border-radius: 6px;
+    padding: 9px 10px; background: linear-gradient(180deg, #101824, #0a1018);
+    font-size: 12px;
+  }
+  .machine-node b { display: block; font-family: var(--display); letter-spacing: .08em; text-transform: uppercase; }
+  .machine-node small { color: var(--ink-dim); }
+  .machine-node.origin { border-color: rgba(63, 185, 80, .42); }
+  .machine-node.replica { border-color: rgba(88, 166, 255, .42); }
+  .machine-node.active { box-shadow: 0 0 0 1px var(--link), 0 0 22px -10px var(--link); }
+  .jump {
+    height: 2px; background: repeating-linear-gradient(90deg, var(--ink-faint) 0 8px, transparent 8px 15px);
+    position: relative;
+  }
+  .jump::after {
+    content: ''; position: absolute; right: 0; top: -4px; width: 9px; height: 9px;
+    border-right: 2px solid var(--ink-faint); border-top: 2px solid var(--ink-faint);
+    transform: rotate(45deg);
+  }
+  .jump.hot { background: linear-gradient(90deg, var(--choice), var(--link)); }
+  .jump.hot::after { border-color: var(--link); }
+  .timeline { display: grid; gap: 9px; margin-top: 12px; }
+  .step {
+    display: grid; grid-template-columns: 88px 96px 1fr; gap: 10px; align-items: center;
+    border: 1px solid var(--panel-edge); border-radius: 6px; padding: 8px 10px;
+    background: rgba(255, 255, 255, .015);
+  }
+  .step .kind {
+    font-family: var(--display); font-size: 10px; color: var(--link);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .step .region { color: var(--ink-dim); font-size: 11px; }
+  .step .detail { color: var(--ink); }
+  .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
+  .metric {
+    border: 1px solid var(--panel-edge); border-radius: 6px; padding: 10px;
+    background: var(--well);
+  }
+  .metric span { display: block; color: var(--ink-dim); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+  .metric b { font-family: var(--display); font-size: 20px; color: var(--return); }
+  .result-box {
+    margin-top: 12px; border: 1px solid rgba(199, 146, 234, .28);
+    border-radius: 6px; padding: 12px; background: rgba(199, 146, 234, .05);
+    color: var(--ink);
+  }
+  .traffic-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+  .traffic-list { display: grid; gap: 7px; max-height: 360px; overflow: auto; padding-right: 4px; }
+  .traffic-row {
+    display: grid; grid-template-columns: 44px 90px 120px 1fr 76px; gap: 10px; align-items: center;
+    border: 1px solid var(--panel-edge); border-radius: 6px; padding: 7px 9px;
+    background: rgba(255, 255, 255, .014);
+  }
+  .traffic-row.migrating { border-color: rgba(240, 136, 62, .5); background: rgba(240, 136, 62, .06); }
+  .traffic-row.colocated { border-color: rgba(77, 210, 191, .28); }
+  .traffic-row .idx { font-family: var(--display); color: var(--ink-dim); }
+  .traffic-row .latency { font-family: var(--display); color: var(--return); text-align: right; }
+  .traffic-row .machine { color: var(--ink-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 1000px) {
+    #panel-call, #panel-super, #panel-result, #panel-wire { grid-column: span 12; }
+    .traffic-grid { grid-template-columns: 1fr; }
+    .topology { grid-template-columns: 1fr; }
+    .jump { height: 40px; width: 2px; justify-self: center; background: repeating-linear-gradient(0deg, var(--ink-faint) 0 8px, transparent 8px 15px); }
+    .jump::after { right: -4px; top: auto; bottom: 0; transform: rotate(135deg); }
+  }
+  @media (max-width: 700px) {
+    main { padding: 20px 18px 56px; grid-template-columns: 1fr; }
+    #panel-idea, #panel-call, #panel-super, #panel-result, #panel-wire, #panel-adapt { grid-column: span 1; }
+    .control-grid, .metric-grid, .step, .traffic-row { grid-template-columns: 1fr; }
+    header { padding: 22px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="reveal" style="--d:0">
+  <h1>fluid <span class="accent">compute</span></h1>
+  <span class="sub">superpositioned module federation across machine placements</span>
+  <nav>
+    <a href="/"><span class="tno">01</span>federation console</a>
+    <a href="/gravity"><span class="tno">02</span>data gravity</a>
+    <a href="/android"><span class="tno">03</span>android lab</a>
+    <a href="/screen"><span class="tno">04</span>device screen</a>
+    <a href="/fluid" class="tab-active" aria-current="page"><span class="tno">05</span>fluid compute</a>
+  </nav>
+</header>
+
+<main>
+  <section class="panel reveal" id="panel-idea" style="--d:1">
+    <h2>Compute superposition</h2>
+    <p class="lede">
+      The browser still calls one API. The host still imports one federated module. The difference is that the module
+      can hold multiple possible placements at once: origin, caller edge, or data region. A placement decision collapses
+      that superposition into a running machine only when the target advertises the same MachineN shell as the prepared
+      vmstate. The selected replica returns through the origin with an explicit host-mediated backhaul.
+    </p>
+  </section>
+
+  <section class="panel reveal" id="panel-call" style="--d:2">
+    <h2>The function call</h2>
+    <div class="controls">
+      <label>
+        query
+        <textarea id="fluid-query">Bring more machine instances near the data, run this function there, and send the answer back to the original module.</textarea>
+      </label>
+      <div class="control-grid">
+        <label>
+          policy
+          <select id="fluid-policy">
+            <option value="auto">auto</option>
+            <option value="local">local</option>
+            <option value="colocate">co-locate with caller</option>
+            <option value="distribute" selected>distribute to data</option>
+          </select>
+        </label>
+        <label>
+          caller region
+          <select id="fluid-region">
+            <option value="us-east">us-east</option>
+            <option value="ap-south">ap-south</option>
+            <option value="eu-west">eu-west</option>
+          </select>
+        </label>
+      </div>
+      <div class="btn-row">
+        <button id="prepare-fluid">prepare snapshot</button>
+        <button id="run-fluid" disabled>call function</button>
+        <span class="chip" id="fluid-state">idle</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel reveal" id="panel-super" style="--d:3">
+    <h2>Shell-compatible placements</h2>
+    <div class="topology">
+      <div class="zone">
+        <h3>origin</h3>
+        <div class="machine-node origin" id="node-origin"><b>fluid_origin</b><small>compute_machine image</small></div>
+      </div>
+      <div class="jump" id="jump-a"></div>
+      <div class="zone">
+        <h3>caller edge</h3>
+        <div class="machine-node replica" id="node-caller"><b>fluid_replica</b><small>not selected</small></div>
+      </div>
+      <div class="jump" id="jump-b"></div>
+      <div class="zone">
+        <h3>data region</h3>
+        <div class="machine-node replica" id="node-data"><b>fluid_replica</b><small>not selected</small></div>
+      </div>
+    </div>
+    <div class="timeline" id="fluid-timeline"></div>
+  </section>
+
+  <section class="panel reveal" id="panel-result" style="--d:4">
+    <h2>Result returned through origin</h2>
+    <div class="metric-grid">
+      <div class="metric"><span>snapshot</span><b id="metric-snapshot">—</b></div>
+      <div class="metric"><span id="metric-restore-label">boot + publish</span><b id="metric-restore">—</b></div>
+      <div class="metric"><span>worker pid</span><b id="metric-worker">—</b></div>
+      <div class="metric"><span>origin inbox</span><b id="metric-inbox">—</b></div>
+    </div>
+    <div class="result-box" id="fluid-result">No call yet.</div>
+  </section>
+
+  <section class="panel reveal" id="panel-wire" style="--d:5">
+    <h2>The wire</h2>
+    <details class="wiretrace" id="fluid-wire" hidden open>
+      <summary>what just happened on the wire<span class="wcount"></span></summary>
+      <div class="wirebody"></div>
+    </details>
+  </section>
+
+  <section class="panel reveal" id="panel-adapt" style="--d:6">
+    <h2>Adaptive traffic burst</h2>
+    <div class="traffic-grid">
+      <div class="controls">
+        <div class="control-grid">
+          <label>
+            hot region
+            <select id="adapt-region">
+              <option value="eu-west" selected>eu-west</option>
+              <option value="ap-south">ap-south</option>
+            </select>
+          </label>
+          <label>
+            requests
+            <input id="adapt-count" type="number" min="8" max="96" value="32" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button id="run-adapt">run traffic burst</button>
+          <span class="chip" id="adapt-state">simulation</span>
+        </div>
+        <div class="metric-grid">
+          <div class="metric"><span>baseline</span><b id="adapt-baseline">—</b></div>
+          <div class="metric"><span>adaptive</span><b id="adapt-total">—</b></div>
+          <div class="metric"><span>restore cost</span><b id="adapt-cost">—</b></div>
+          <div class="metric"><span>saved</span><b id="adapt-saved">—</b></div>
+        </div>
+        <div class="result-box" id="adapt-result">No burst yet.</div>
+      </div>
+      <div class="traffic-list" id="adapt-list"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/demo-base.js"></script>
+<script>
+function setNodeState(decision) {
+  for (const id of ['node-origin', 'node-caller', 'node-data']) $(id).classList.remove('active');
+  $('jump-a').classList.remove('hot');
+  $('jump-b').classList.remove('hot');
+  $('node-caller').querySelector('small').textContent = 'not selected';
+  $('node-data').querySelector('small').textContent = 'not selected';
+  if (!decision) return;
+  if (decision.mode === 'local') {
+    $('node-origin').classList.add('active');
+  } else if (decision.mode === 'colocate') {
+    $('node-caller').classList.add('active');
+    $('jump-a').classList.add('hot');
+    $('node-caller').querySelector('small').textContent = decision.replica;
+  } else {
+    $('node-data').classList.add('active');
+    $('jump-a').classList.add('hot');
+    $('jump-b').classList.add('hot');
+    $('node-data').querySelector('small').textContent = decision.replica;
+  }
+}
+
+let prepared = false;
+
+function updateRunFluidState() {
+  $('run-fluid').disabled = $('fluid-policy').value !== 'local' && !prepared;
+}
+
+function renderTimeline(steps) {
+  $('fluid-timeline').innerHTML = steps.map((step) => `
+    <div class="step">
+      <span class="kind">${esc(step.kind)}</span>
+      <span class="region">${esc(step.region)}</span>
+      <span class="detail">${esc(step.detail)}</span>
+    </div>
+  `).join('');
+}
+
+$('prepare-fluid').onclick = async () => {
+  $('prepare-fluid').disabled = true;
+  $('run-fluid').disabled = true;
+  $('fluid-state').textContent = 'booting + freezing';
+  try {
+    const r = await post('/api/fluid/prepare', { reset: true });
+    if (r.error) {
+      $('fluid-state').textContent = 'prepare failed';
+      $('fluid-result').innerHTML = `<span class="err">${esc(r.error)}</span>`;
+      return;
+    }
+    prepared = true;
+    updateRunFluidState();
+    $('fluid-state').textContent = 'snapshot prepared';
+    $('metric-snapshot').textContent = fmtBytes(r.published.bytes);
+    $('metric-restore-label').textContent = 'boot + publish';
+    $('metric-restore').textContent = `${Math.round(r.timings.bootMs + r.timings.publishMs)}ms`;
+    $('fluid-result').innerHTML =
+      `<b>prepared vmstate ${esc(String(r.published.digest).slice(0, 19))}…</b><br />` +
+      `<span style="color: var(--ink-dim)">CI boot ${Math.round(r.timings.bootMs)}ms · freeze/publish ${Math.round(r.timings.publishMs)}ms</span>`;
+    renderWire('fluid-wire', 'POST /api/fluid/prepare', r.wire);
+  } finally {
+    $('prepare-fluid').disabled = false;
+    updateRunFluidState();
+  }
+};
+
+$('run-fluid').onclick = async () => {
+  $('run-fluid').disabled = true;
+  $('fluid-state').textContent = prepared ? 'restoring placement' : 'needs snapshot';
+  try {
+    const r = await post('/api/fluid/query', {
+      query: $('fluid-query').value,
+      policy: $('fluid-policy').value,
+      callerRegion: $('fluid-region').value,
+    });
+    if (r.error) {
+      $('fluid-state').textContent = 'failed';
+      $('fluid-result').innerHTML = `<span class="err">${esc(r.error)}</span>`;
+      return;
+    }
+    prepared = !!r.prepared;
+    updateRunFluidState();
+    $('fluid-state').textContent = `${r.decision.mode} · ${r.remote}`;
+    setNodeState(r.decision);
+    renderTimeline(r.timeline);
+    $('metric-snapshot').textContent = r.prepared?.published?.bytes ? fmtBytes(r.prepared.published.bytes) : 'local';
+    $('metric-restore-label').textContent = r.restore ? 'restore' : 'compute';
+    $('metric-restore').textContent = r.restore ? `${r.restore.ms}ms` : `${Math.round(r.totalMs)}ms`;
+    $('metric-worker').textContent = String(r.result.computed.pid);
+    $('metric-inbox').textContent = String(r.result.backhaul.inboxSize);
+    $('fluid-result').innerHTML =
+      `<b>${esc(r.result.answer)}</b><br />` +
+      `<span style="color: var(--ink-dim)">${r.restore ? `restore ${esc(r.restore.artifact)}` : 'origin execution'} · ${esc(r.decision.connection.kind)} ${esc(r.decision.connection.from)} → ${esc(r.decision.connection.to)}</span>`;
+    renderWire('fluid-wire', 'POST /api/fluid/query', r.wire);
+  } finally {
+    updateRunFluidState();
+  }
+};
+
+function renderAdaptiveTraffic(r) {
+  $('adapt-baseline').textContent = `${Math.round(r.baselineTotalMs)}ms`;
+  $('adapt-total').textContent = `${Math.round(r.adaptiveTotalMs)}ms`;
+  $('adapt-cost').textContent = `${Math.round(r.migration.costMs)}ms`;
+  $('adapt-saved').textContent = `${Math.round(r.savedMs)}ms`;
+  $('adapt-result').innerHTML =
+    `<b>${esc(r.finalRegion === r.originRegion ? 'kept at origin' : `co-located at ${r.finalRegion}`)}</b><br />` +
+    `<span style="color: var(--ink-dim)">request ${r.migration.atRequest || '—'} · ${esc(r.migration.reason)}</span>`;
+  $('adapt-list').innerHTML = r.samples.map((sample) => `
+    <div class="traffic-row ${esc(sample.phase)}">
+      <span class="idx">#${sample.index}</span>
+      <span>${esc(sample.callerRegion)}</span>
+      <span>${esc(sample.computeRegion)}</span>
+      <span class="machine">${esc(sample.machine)}</span>
+      <span class="latency">${Math.round(sample.latencyMs)}ms</span>
+    </div>
+  `).join('');
+}
+
+$('run-adapt').onclick = async () => {
+  $('run-adapt').disabled = true;
+  $('adapt-state').textContent = 'routing burst';
+  try {
+    const r = await post('/api/fluid/adapt', {
+      hotRegion: $('adapt-region').value,
+      requestCount: Number($('adapt-count').value),
+    });
+    if (r.error) {
+      $('adapt-state').textContent = 'failed';
+      $('adapt-result').innerHTML = `<span class="err">${esc(r.error)}</span>`;
+      return;
+    }
+    $('adapt-state').textContent = `${r.requestCount} calls · ${r.finalRegion}`;
+    renderAdaptiveTraffic(r);
+  } finally {
+    $('run-adapt').disabled = false;
+  }
+};
+$('fluid-policy').onchange = updateRunFluidState;
+updateRunFluidState();
+</script>
+</body>
+</html>

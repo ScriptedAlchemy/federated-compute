@@ -6,6 +6,7 @@ import {
   machinenDriver,
   machinenPlugin,
   type MachinenPlugin,
+  type VmstateShellIdentity,
 } from '@federated-compute/machinen-plugin';
 import { logEvent } from './dashboard.js';
 import { HttpError, errorMessage, json } from './http-util.js';
@@ -76,11 +77,12 @@ interface VmLaneState {
     publishMs: number;
     /**
      * Whether the dump stopped the source guest, observed by probing it.
-     * machinen 0.4.0/amd64: true (despite docs calling checkpoints
+     * Current x86_64/KVM runtime: true (despite docs calling checkpoints
      * non-destructive — pinned by the vmstate e2e). On a fixed engine the
      * source would survive and this reports false, honestly.
      */
     sourceDead: boolean;
+    shell: VmstateShellIdentity;
   };
   pull?: { bytes: number; ms: number; cacheHit: boolean; digest?: string };
   /** The consumer's whole deployment story: one pull entry string. */
@@ -99,6 +101,7 @@ let vmPlugin: MachinenPlugin | undefined;
 let vmPullPlugin: MachinenPlugin | undefined;
 let vmHost: ReturnType<typeof createInstance> | undefined;
 let vmPullHost: ReturnType<typeof createInstance> | undefined;
+let vmPullShellKey: string | undefined;
 
 /**
  * Feed a vm plugin's hooks into the dashboard log — but NOT per-call events:
@@ -123,6 +126,10 @@ function logVmHooks(p: MachinenPlugin): void {
   });
 }
 
+function vmstateShellKey(shell: VmstateShellIdentity): string {
+  return JSON.stringify(shell);
+}
+
 function ensureVmInstances(): void {
   if (vmPlugin) return;
   vmPlugin = machinenPlugin({
@@ -131,16 +138,24 @@ function ensureVmInstances(): void {
     publish: { dir: VM_PUBLISH_DIR, hostname: '127.0.0.1', port: VM_PUBLISH_PORT },
   });
   vmHost = createInstance({ name: 'vm_lane_host', remotes: [], plugins: [vmPlugin] });
+  logVmHooks(vmPlugin);
+  recordWire(vmPlugin);
+}
+
+async function ensureVmPullInstance(shell: VmstateShellIdentity): Promise<void> {
+  const shellKey = vmstateShellKey(shell);
+  if (vmPullPlugin && vmPullShellKey === shellKey) return;
+  await vmPullPlugin?.disposeMachines();
   vmPullPlugin = machinenPlugin({
     driver: machinenDriver({ snapshotDir: VM_SNAP_DIR }),
     bootTimeoutMs: VM_BOOT_TIMEOUT_MS,
     artifactCacheDir: VM_PULL_CACHE,
+    vmstateShell: shell,
   });
   vmPullHost = createInstance({ name: 'vm_pull_host', remotes: [], plugins: [vmPullPlugin] });
-  for (const p of [vmPlugin, vmPullPlugin]) {
-    logVmHooks(p);
-    recordWire(p);
-  }
+  vmPullShellKey = shellKey;
+  logVmHooks(vmPullPlugin);
+  recordWire(vmPullPlugin);
 }
 
 export function vmLaneBody() {
@@ -205,7 +220,7 @@ export async function handleVmBoot(_req: http.IncomingMessage, res: http.ServerR
     // the previous run's bundles so each full run is honestly a cold pull
     // (and a multi-GB registry never accumulates across runs).
     await vmPlugin!.disposeMachines();
-    await vmPullPlugin!.disposeMachines();
+    await vmPullPlugin?.disposeMachines();
     await rm(VM_PULL_CACHE, { recursive: true, force: true });
     await rm(VM_PUBLISH_DIR, { recursive: true, force: true });
     await rm(VM_SNAP_DIR, { recursive: true, force: true });
@@ -215,6 +230,7 @@ export async function handleVmBoot(_req: http.IncomingMessage, res: http.ServerR
     vmLane.pull = undefined;
     vmLane.entry = undefined;
     vmLane.timings = {};
+    vmPullShellKey = undefined;
     vmHost!.registerRemotes([{ name: VM_NAME, entry: VM_ENTRY }], { force: true });
     const t0 = performance.now();
     const solver = await solverOn(vmHost!);
@@ -240,7 +256,7 @@ export async function handleVmPublish(_req: http.IncomingMessage, res: http.Serv
       // started loopback artifact endpoint.
       const published = await vmPlugin!.publishMachine(VM_NAME);
       const publishMs = Math.round(performance.now() - t0);
-      // Honesty note: machinen 0.4.0 on amd64 kills the source guest at dump
+      // Honesty note: the current x86_64/KVM runtime kills the source guest at dump
       // time despite the API docs calling checkpoints non-destructive (pinned
       // by the vmstate e2e). PROBE the source rather than assert: the failed
       // call routes through the plugin's own crash machinery, which evicts
@@ -258,6 +274,7 @@ export async function handleVmPublish(_req: http.IncomingMessage, res: http.Serv
         url: published.url,
         publishMs,
         sourceDead,
+        shell: published.compatibility.shell,
       };
       vmLane.timings.publishMs = publishMs;
       vmLane.phase = 'published';
@@ -266,7 +283,7 @@ export async function handleVmPublish(_req: http.IncomingMessage, res: http.Serv
         `${VM_NAME} frozen mid-solve + published as vmstate (${published.digest.slice(0, 19)}…, ` +
           `${published.bytes} bytes) — ` +
           (sourceDead
-            ? 'the dump stopped the source VM (machinen 0.4.0 amd64)'
+            ? 'the dump stopped the source VM (current x86_64/KVM runtime)'
             : 'source VM survived the dump'),
       );
       return {};
@@ -287,6 +304,7 @@ export async function handleVmRestore(_req: http.IncomingMessage, res: http.Serv
   await vmStep(res, ['published'], async () => {
     // The clone's whole deployment story is this one entry string.
     const entry = `machinen+pull+${vmLane.published!.url}?artifact=vmstate&version=^1.0.0`;
+    await ensureVmPullInstance(vmLane.published!.shell);
     vmPullHost!.registerRemotes([{ name: VM_NAME, entry }], { force: true });
     const t0 = performance.now();
     const solver = await solverOn(vmPullHost!);
@@ -364,6 +382,7 @@ export async function disposeVmLane(): Promise<void> {
     await rm(VM_PULL_CACHE, { recursive: true, force: true });
     await rm(VM_PUBLISH_DIR, { recursive: true, force: true });
     await rm(VM_SNAP_DIR, { recursive: true, force: true });
+    vmPullShellKey = undefined;
   } catch (error) {
     console.error(`[host] vm lane teardown: ${errorMessage(error)}`);
   }

@@ -4,7 +4,8 @@
     "java_machine": { "url": "machinen+http://127.0.0.1:3802", "version": "^1.0.0" },
     "python_machine": { "url": "machinen+http://127.0.0.1:3803", "version": "^1.0.0" },
     "db_machine": { "url": "machinen+http://127.0.0.1:3804", "version": "^1.0.0" },
-    "analytics_machine": { "url": "machinen+http://127.0.0.1:3805", "version": "^1.0.0" }
+    "analytics_machine": { "url": "machinen+http://127.0.0.1:3805", "version": "^1.0.0" },
+    "artifact_machine": { "url": "machinen+http://127.0.0.1:3807", "version": "^1.0.0" }
   },
   "bindgen": { "outDir": "src/generated" }
 }

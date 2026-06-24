@@ -4,7 +4,7 @@
 // publish the machine's static /mf-types.ts artifact (dist/mf-types.ts) by
 // booting the fresh jar and pointing machinen-bindgen at it.
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -15,6 +15,7 @@ const srcDir = join(root, "src");
 const classesDir = join(root, "build", "classes");
 const jarFile = join(root, "dist", "java-machine.jar");
 const typesFile = join(root, "dist", "mf-types.ts");
+const machineImageDir = join(root, "dist", "java_machine.machine");
 const pluginDir = join(root, "..", "..", "packages", "runtime-plugin");
 const bindgenCli = join(pluginDir, "dist", "cli.js");
 
@@ -48,7 +49,7 @@ mkdirSync(classesDir, { recursive: true });
 mkdirSync(dirname(jarFile), { recursive: true });
 
 console.log(`[build] compiling ${sources.length} source files`);
-run("javac", ["-d", classesDir, ...sources]);
+run("javac", ["--release", "17", "-d", classesDir, ...sources]);
 
 console.log(`[build] packaging ${jarFile}`);
 run("jar", [
@@ -63,6 +64,7 @@ await publishTypesArtifact();
 if (process.exitCode) {
   console.error("[build] finished with errors — mf-types generation failed");
 } else {
+  writeMachineImageBundle();
   console.log("[build] done");
 }
 
@@ -102,6 +104,28 @@ async function publishTypesArtifact() {
   } finally {
     guest.kill();
   }
+}
+
+function writeMachineImageBundle() {
+  rmSync(machineImageDir, { recursive: true, force: true });
+  mkdirSync(machineImageDir, { recursive: true });
+  copyFileSync(jarFile, join(machineImageDir, "guest.jar"));
+  if (existsSync(typesFile)) copyFileSync(typesFile, join(machineImageDir, "mf-types.ts"));
+  writeFileSync(
+    join(machineImageDir, "machinen-machine.json"),
+    JSON.stringify(
+      {
+        format: "machinen-machine@1",
+        runtime: "java",
+        program: "guest.jar",
+        types: "mf-types.ts",
+        rootDiskSizeBytes: 4 * 1024 ** 3,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(`[build] machine image bundle ${machineImageDir}`);
 }
 
 function freePort() {

@@ -10,6 +10,7 @@ import {
   stripExposePrefix,
   type MachineDriver,
 } from './types.js';
+import type { VmstateShellIdentity } from './vmstate.js';
 
 /**
  * End-user facade. Importing a machine function should feel like importing a
@@ -42,6 +43,8 @@ export interface MachinesOptions {
   configDir?: string;
   /** Where machinen+pull+ entries cache fetched artifacts. Default: .machinen/cache */
   artifactCacheDir?: string;
+  /** Local MachineN shell available for vmstate restores. Required for vmstate pulls. */
+  vmstateShell?: VmstateShellIdentity;
   /** Deadline for a pull entry's header/small fetches (manifest, snapshot). Default 30s. */
   artifactFetchTimeoutMs?: number;
   /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
@@ -115,17 +118,44 @@ function lazyResult(getFn: Promise<AnyFn>, args: unknown[]): any {
 
 let clientCounter = 0;
 
-export function createMachines(options: MachinesOptions = {}): MachinesClient {
-  const plugin = machinenPlugin({
+function createClientPlugin(options: MachinesOptions): MachinenPlugin {
+  return machinenPlugin({
     driver: options.driver ?? httpAttachDriver(),
     restartOnCrash: options.restartOnCrash ?? true,
     bootTimeoutMs: options.bootTimeoutMs,
     calls: options.calls,
     artifactCacheDir: options.artifactCacheDir,
+    vmstateShell: options.vmstateShell,
     artifactFetchTimeoutMs: options.artifactFetchTimeoutMs,
     artifactStreamIdleTimeoutMs: options.artifactStreamIdleTimeoutMs,
     publish: options.publish,
   });
+}
+
+function configReader(configDir: string | undefined): () => MachinenConfig | undefined {
+  let configLoaded = false;
+  let machinenConfig: MachinenConfig | undefined;
+
+  return () => {
+    if (!configLoaded) {
+      machinenConfig = loadMachinenConfig(configDir);
+      configLoaded = true;
+    }
+    return machinenConfig;
+  };
+}
+
+function getCached<K, V>(cache: Map<K, V>, key: K, create: () => V): V {
+  let value = cache.get(key);
+  if (!value) {
+    value = create();
+    cache.set(key, value);
+  }
+  return value;
+}
+
+export function createMachines(options: MachinesOptions = {}): MachinesClient {
+  const plugin = createClientPlugin(options);
 
   clientCounter++;
   const instance = createInstance({
@@ -139,16 +169,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   const moduleProxies = new Map<string, AnyModule>();
   const modules = new Map<string, Promise<AnyModule>>();
   const callables = new Map<string, AnyFn>();
-
-  let configLoaded = false;
-  let machinenConfig: MachinenConfig | undefined;
-  function configFile(): MachinenConfig | undefined {
-    if (!configLoaded) {
-      machinenConfig = loadMachinenConfig(options.configDir);
-      configLoaded = true;
-    }
-    return machinenConfig;
-  }
+  const configFile = configReader(options.configDir);
 
   function resolveEntry(name: string, opts?: MachineModuleOptions): string {
     const config = configFile();
@@ -172,29 +193,25 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
   }
 
   function ensureRegistered(name: string, opts?: MachineModuleOptions): string {
-    let entry = registered.get(name);
-    if (!entry) {
-      entry = resolveEntry(name, opts);
-      registered.set(name, entry);
+    return getCached(registered, name, () => {
+      const entry = resolveEntry(name, opts);
       instance.registerRemotes([{ name, entry }]);
-    }
-    return entry;
+      return entry;
+    });
   }
 
   function loadModule(name: string, modulePath: string, opts?: MachineModuleOptions) {
     const key = `${name}|${modulePath}`;
-    let loading = modules.get(key);
-    if (!loading) {
-      loading = (async () => {
+    return getCached(modules, key, () => {
+      const loading = (async () => {
         ensureRegistered(name, opts);
         const mod = await instance.loadRemote<AnyModule>(`${name}/${stripExposePrefix(modulePath)}`);
         if (!mod) throw new Error(`[machinen] module "${modulePath}" not found on "${name}"`);
         return mod;
       })();
       loading.catch(() => modules.delete(key));
-      modules.set(key, loading);
-    }
-    return loading;
+      return loading;
+    });
   }
 
   function callable(
@@ -204,8 +221,7 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
     opts?: MachineModuleOptions,
   ): AnyFn {
     const key = `${name}|${modulePath}|${fnName}`;
-    let fn = callables.get(key);
-    if (!fn) {
+    return getCached(callables, key, () => {
       const resolved = () =>
         loadModule(name, modulePath, opts).then((mod) => {
           const target = mod[fnName];
@@ -214,39 +230,32 @@ export function createMachines(options: MachinesOptions = {}): MachinesClient {
           }
           return target as AnyFn;
         });
-      fn = (...args: unknown[]) => lazyResult(resolved(), args);
-      callables.set(key, fn);
-    }
-    return fn;
+      return (...args: unknown[]) => lazyResult(resolved(), args);
+    });
   }
 
   function moduleProxy(name: string, modulePath: string, opts?: MachineModuleOptions): AnyModule {
     const key = `${name}|${modulePath}`;
-    let proxy = moduleProxies.get(key);
-    if (!proxy) {
-      proxy = new Proxy({} as AnyModule, {
+    return getCached(moduleProxies, key, () =>
+      new Proxy({} as AnyModule, {
         get(_target, fnName) {
           if (!stringProp(fnName)) return undefined;
           return callable(name, modulePath, fnName, opts);
         },
-      });
-      moduleProxies.set(key, proxy);
-    }
-    return proxy;
+      }),
+    );
   }
 
   return {
     machine<M extends AnyModules = AnyModules>(name: string, opts?: MachineModuleOptions) {
-      let proxy = machineProxies.get(name);
-      if (!proxy) {
-        proxy = new Proxy({} as AnyModules, {
+      const proxy = getCached(machineProxies, name, () =>
+        new Proxy({} as AnyModules, {
           get(_target, moduleName) {
             if (!stringProp(moduleName)) return undefined;
             return moduleProxy(name, normalizeExpose(moduleName), opts);
           },
-        });
-        machineProxies.set(name, proxy);
-      }
+        }),
+      );
       return proxy as MachineProxy<M>;
     },
 

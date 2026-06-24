@@ -88,9 +88,9 @@ capability advertisement; there is no separate feature flag:
   program) and `app-state@1` (state + image digest reference) today.
 - `digest` (`sha256:<hex>`) is required for `image` — it is the cache key and
   the integrity check; consumers refuse artifacts whose bytes don't hash to it.
-- `ext` is the image's file extension (`.js`, `.jar`, `.py`…). Required:
-  consumer drivers pick boot commands by extension, so the cached artifact
-  must keep it.
+- `ext` is the artifact's file extension. It is required for drivers that
+  dispatch local dev/process guest programs by extension; full machine image
+  formats can ignore it.
 - `platform` is `any` for app-level artifacts; arch-bound formats (Phase 2
   vmstate) carry `linux/amd64` etc. and consumers refuse mismatches.
 

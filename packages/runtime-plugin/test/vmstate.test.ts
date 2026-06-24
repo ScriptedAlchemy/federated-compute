@@ -21,6 +21,10 @@ import {
 
 const HOST_RUNTIME = '0.6.1';
 const INCOMPATIBLE_RUNTIME = '0.5.1';
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 const COMPAT: VmstateCompatibility = {
   platform: 'linux/amd64',
@@ -28,6 +32,7 @@ const COMPAT: VmstateCompatibility = {
   vmstateFormat: VMSTATE_FORMAT,
   snapshotEngine: 'machinen-default',
   reseed: 'machinen-0.4.0-shim@1',
+  shell: SHELL,
 };
 
 function hex(bytes: Buffer | string): string {
@@ -130,6 +135,7 @@ describe('parseVmstateBundleManifest', () => {
     [{ format: 'oci-layout@7' }, /format "oci-layout@7"/],
     [{ name: '' }, /"name"/],
     [{ compatibility: undefined }, /"compatibility"/],
+    [{ compatibility: { ...COMPAT, shell: undefined } }, /compatibility\.shell/],
     [{ files: [] }, /"files" must be a non-empty array/],
   ])('rejects %j', (patch, message) => {
     expect(() =>
@@ -171,7 +177,7 @@ describe('parseVmstateBundleManifest', () => {
 });
 
 describe('vmstateCompatibilityError', () => {
-  const host = { platform: 'linux/amd64', machinenRuntime: HOST_RUNTIME };
+  const host = { platform: 'linux/amd64', machinenRuntime: HOST_RUNTIME, shell: SHELL };
 
   test('compatible bundle returns undefined', () => {
     expect(vmstateCompatibilityError(COMPAT, host)).toBeUndefined();
@@ -201,6 +207,15 @@ describe('vmstateCompatibilityError', () => {
       host,
     );
     expect(message).toMatch(/"criu-experimental"/);
+  });
+
+  test('shell mismatch names required and host digests', () => {
+    const message = vmstateCompatibilityError(
+      { ...COMPAT, shell: { ...SHELL, kernelDigest: `sha256:${'3'.repeat(64)}` } },
+      { ...host, shell: SHELL },
+    );
+    expect(message).toMatch(/shell mismatch/);
+    expect(message).toContain(SHELL.kernelDigest);
   });
 });
 
@@ -280,6 +295,17 @@ describe('ensureBlobCached', () => {
     expect(await readFile(cached.localPath)).toEqual(bytes);
   });
 
+  test('a blob stream cannot exceed the advertised size', async () => {
+    const bytes = Buffer.from('expected');
+    const origin = await serveBytes({ '/blob': Buffer.from('expected plus extra') });
+    const blobDir = await mkdtemp(path.join(os.tmpdir(), 'vmstate-blobs-'));
+
+    await expect(
+      ensureBlobCached(`${origin.url}/blob`, entryFor('state.vmstate', bytes), blobDir),
+    ).rejects.toThrow(/exceeded advertised size/);
+    expect(readdirSync(blobDir)).toEqual([]);
+  });
+
   test('a digest mismatch fails closed and caches nothing', async () => {
     const bytes = Buffer.from('expected bytes');
     const origin = await serveBytes({ '/blob': Buffer.from('tampered bytes') });
@@ -348,5 +374,16 @@ describe('materializeVmstateDir', () => {
 
     await materializeVmstateDir(built.manifest, blobPaths, dest);
     expect(existsSync(path.join(dest, 'state.vmstate'))).toBe(true);
+  });
+
+  test('a same-size tampered destination is rebuilt from verified blobs', async () => {
+    const { built, blobPaths, sourceDir } = await builtFixture();
+    const dest = path.join(await mkdtemp(path.join(os.tmpdir(), 'vmstate-mat-')), 'snap');
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    const file = path.join(dest, 'meta.json');
+    await writeFile(file, Buffer.alloc((await readFile(file)).length, 120));
+
+    await materializeVmstateDir(built.manifest, blobPaths, dest);
+    expect(await readFile(file)).toEqual(await readFile(path.join(sourceDir, 'meta.json')));
   });
 });

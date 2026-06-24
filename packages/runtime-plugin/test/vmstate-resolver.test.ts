@@ -25,6 +25,10 @@ const FILES: Record<string, Buffer> = {
 
 const HOST_RUNTIME = '0.6.1';
 const INCOMPATIBLE_RUNTIME = '0.5.1';
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 function makeBundle(compat: Partial<VmstateCompatibility> = {}) {
   const files = Object.entries(FILES).map(([filePath, bytes]) => ({
@@ -43,6 +47,7 @@ function makeBundle(compat: Partial<VmstateCompatibility> = {}) {
       vmstateFormat: VMSTATE_FORMAT,
       snapshotEngine: 'machinen-default',
       reseed: 'machinen-0.4.0-shim@1',
+      shell: SHELL,
       ...compat,
     },
     files,
@@ -133,7 +138,7 @@ function pullSpec(url: string, query = '?artifact=vmstate') {
   return parseMachineEntry('vm_origin', `machinen+pull+${url}${query}`);
 }
 
-const RESOLVE = { machinenRuntimeVersion: HOST_RUNTIME };
+const RESOLVE = { machinenRuntimeVersion: HOST_RUNTIME, vmstateShell: SHELL };
 
 describe('resolvePullEntry: vmstate artifacts', () => {
   test('downloads blobs, materializes a snapshot dir, and rewrites the spec for restore', async () => {
@@ -202,6 +207,28 @@ describe('resolvePullEntry: vmstate artifacts', () => {
     ).rejects.toThrow(
       `requires @machinen/runtime ${INCOMPATIBLE_RUNTIME}, installed ${HOST_RUNTIME}`,
     );
+    expect(origin.requests.filter((r) => r.startsWith('/blobs/'))).toHaveLength(0);
+  });
+
+  test('a shell mismatch is rejected before any blob moves', async () => {
+    const bundle = makeBundle({
+      shell: { ...SHELL, kernelDigest: `sha256:${'3'.repeat(64)}` },
+    });
+    const origin = await startVmstateOrigin(bundle);
+
+    await expect(
+      resolvePullEntry(pullSpec(origin.url), { cacheDir, ...RESOLVE }),
+    ).rejects.toThrow(/vmstate shell mismatch/);
+    expect(origin.requests.filter((r) => r.startsWith('/blobs/'))).toHaveLength(0);
+  });
+
+  test('a vmstate pull without local shell identity is refused before any blob moves', async () => {
+    const bundle = makeBundle();
+    const origin = await startVmstateOrigin(bundle);
+
+    await expect(
+      resolvePullEntry(pullSpec(origin.url), { cacheDir, machinenRuntimeVersion: HOST_RUNTIME }),
+    ).rejects.toThrow(/needs vmstateShell/);
     expect(origin.requests.filter((r) => r.startsWith('/blobs/'))).toHaveLength(0);
   });
 

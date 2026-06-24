@@ -30,11 +30,11 @@ public final class GuestServer {
   private final Exposes exposes;
   private final MachineState state;
 
-  public GuestServer(int port, Exposes exposes, MachineState state)
+  public GuestServer(String host, int port, Exposes exposes, MachineState state)
       throws IOException {
     this.exposes = exposes;
     this.state = state;
-    this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+    this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
     this.server.createContext("/", this::route);
     // A small pool instead of the default single dispatch thread, so one
     // slow or hostile call can't block /mf/health for everyone else.

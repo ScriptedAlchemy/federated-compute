@@ -9,9 +9,11 @@ machines as imports only need the [README](../README.md).
 
 ```ts
 import { createMachines } from '@federated-compute/machinen-plugin/client';
+import { machinenDriver } from '@federated-compute/machinen-plugin';
 
 const machines = createMachines({
-  remotes: { java_machine: 'machinen+http://127.0.0.1:3802' },
+  driver: machinenDriver(),
+  remotes: { java_machine: 'machinen+http://java-machine.example:3802?version=^1.0.0' },
   calls: { timeoutMs: 10_000, retries: 2, circuitBreaker: { threshold: 5, resetMs: 10_000 } },
 });
 await machines.warm();                         // preloadRemote analog
@@ -27,17 +29,34 @@ The raw MF runtime style (`createInstance` + `machinenPlugin` + `loadRemote`)
 keeps working underneath:
 
 ```ts
+import { createInstance } from '@module-federation/runtime';
+import {
+  httpAttachDriver,
+  machinenDriver,
+  machinenPlugin,
+  type MachineDriver,
+  type MachineSpec,
+} from '@federated-compute/machinen-plugin';
+
+const attach = httpAttachDriver();
+const vm = machinenDriver();
+const driver: MachineDriver = {
+  boot(spec: MachineSpec) {
+    return spec.kind === 'attach' ? attach.boot(spec) : vm.boot(spec);
+  },
+};
+
 const host = createInstance({
   name: 'host',
   remotes: [
     // attach to an independently deployed machine — address + required version
     { name: 'java_machine', entry: 'machinen+http://127.0.0.1:3802?version=^1.0.0' },
-    // or boot one from a local image (driver owns the transport)
+    // or boot one from a local machine image (deployment-owner path)
     { name: 'compute_machine', entry: 'machinen://images/compute.tar.gz?version=^1.0.0' },
     // or PULL the machine's published artifact and boot a local clone
     { name: 'fork_machine', entry: 'machinen+pull+http://127.0.0.1:3801?artifact=snapshot' },
   ],
-  plugins: [machinenPlugin({ driver: httpAttachDriver() })],
+  plugins: [machinenPlugin({ driver })],
 });
 
 // Types come from the machine's manifest via bindgen — not hand-written.
@@ -92,7 +111,7 @@ for await (const n of math.countdown(3)) ...  // streaming call (NDJSON under th
   - `processDriver()` — boot an image as a local child process: the lightweight
     local driver for dev and tests (no VMs, instant boots, app-state `.snap`
     bundles). Allocates ports and picks the boot command by
-    image type (`.js` → node, `.java` → java source mode, `.jar` → `java -jar`,
+    guest program type (`.js` → node, `.java` → java source mode, `.jar` → `java -jar`,
     `.py` → python3, extensible).
   - `inProcessDriver()` — same-process guest, used by tests.
   - `machinenDriver()` — the real thing: boots `machinen://` entries as
@@ -112,15 +131,19 @@ end to end.
 
 Entry params:
 
-- `?artifact=image|snapshot` — `image` (default) pulls the cold program, the
-  strict `remoteEntry.js` analog; `snapshot` pulls a freshly dehydrated warm
-  clone (state + image digest reference) from a live machine — fork-by-fetch.
+- `?artifact=image|snapshot|vmstate` — `image` (default) pulls the cold
+  program, the strict `remoteEntry.js` analog; `snapshot` pulls a freshly
+  dehydrated warm clone (state + image digest reference) from a live machine;
+  `vmstate` pulls a whole-VM bundle produced by `machinenDriver()` and restores
+  it locally. Vmstate pulls require the consumer to pass `vmstateShell` so the
+  resolver can prove the local MachineN shell matches before any state blobs
+  move.
 - `?version=^1.0.0` — negotiated against the origin manifest **before any
   bytes move**, then re-checked on the booted clone.
-- `?digest=sha256:…` — pin the exact image. Image pulls fail if the origin
-  offers anything else; snapshot pulls fail if the pulled snapshot references
-  a different image digest ("a warm clone, but only of exactly this code" —
-  live snapshot bytes change per request, so the pin always means the image).
+- `?digest=sha256:…` — pin the immutable artifact identity. Image pulls pin
+  the exact image; snapshot pulls pin the image referenced by the snapshot;
+  vmstate pulls pin the bundle manifest digest, so a restore never silently
+  follows the publisher's latest frozen state.
 
 Operational notes:
 
@@ -133,6 +156,14 @@ Operational notes:
   memo; the on-disk cache survives and is shared by digest.
 - Snapshot state travels by value, the image by digest reference: repeat
   pulls re-fetch only the tiny state and reuse the cached image.
+- Whole-VM vmstate bundles carry a MachineN shell identity: rootfs, kernel, and
+  optional dtb digests. Every restoring region advertises its local shell via
+  `vmstateShell`; the resolver rejects mismatches before downloading snapshot
+  blobs, and placement should only choose compatible regions. Today the
+  MachineN 0.6.1 restore API still restores the bundle's root disk, so a cold
+  region may transfer multi-GB state. The artifact contract is now ready for
+  the next runtime step: move RAM/delta state while reusing the region's local
+  shell image.
 - `beforeArtifactFetch` / `onArtifactFetched` hooks report descriptor,
   bytes fetched, cache hit/miss, and duration per pull.
 

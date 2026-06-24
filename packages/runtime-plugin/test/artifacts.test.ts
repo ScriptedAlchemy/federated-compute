@@ -12,6 +12,8 @@ import { parseMachineEntry, type MachineExposeManifest } from '../src/types.js';
 
 const IMAGE_BYTES = Buffer.from('// the pulled guest program\nexport const ok = true;\n');
 const IMAGE_DIGEST = `sha256:${createHash('sha256').update(IMAGE_BYTES).digest('hex')}`;
+const JAR_BYTES = Buffer.from('fake jar bytes\n');
+const JAR_DIGEST = `sha256:${createHash('sha256').update(JAR_BYTES).digest('hex')}`;
 
 interface StubOrigin {
   port: number;
@@ -86,6 +88,12 @@ const imageDescriptor = {
   bytes: IMAGE_BYTES.length,
   platform: 'any',
 };
+const jarDescriptor = {
+  ...imageDescriptor,
+  digest: JAR_DIGEST,
+  ext: '.jar',
+  bytes: JAR_BYTES.length,
+};
 
 let cacheDir: string;
 beforeEach(async () => {
@@ -134,6 +142,22 @@ describe('resolvePullEntry: image artifacts', () => {
     expect(second.fromCache).toBe(true);
     expect(second.bytesFetched).toBe(0);
     expect(origin.requests.filter((r) => r === '/mf-image')).toHaveLength(1);
+  });
+
+  test('preserves a jar extension for the host process fallback', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: jarDescriptor } },
+      { '/mf-image': (res) => serveImage(res, JAR_BYTES) },
+    );
+
+    const resolution = await resolvePullEntry(pullSpec(origin.url), { cacheDir });
+
+    expect(resolution.localPath).toBe(
+      path.join(cacheDir, `${JAR_DIGEST.slice('sha256:'.length)}.jar`),
+    );
+    expect(await readFile(resolution.localPath)).toEqual(JAR_BYTES);
+    expect(resolution.spec.kind).toBe('image');
+    expect(resolution.spec.image).toBe(resolution.localPath);
   });
 
   test('a corrupt cache entry is evicted and re-downloaded', async () => {
@@ -250,6 +274,18 @@ describe('resolvePullEntry: image artifacts', () => {
     expect(await readdir(cacheDir)).toEqual([]);
   });
 
+  test('an image stream cannot exceed the advertised size before digest verification', async () => {
+    const origin = await startOrigin(
+      { artifacts: { image: { ...imageDescriptor, bytes: 4 } } },
+      { '/mf-image': (res) => serveImage(res) },
+    );
+
+    await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow(
+      /exceeded advertised size 4 bytes/,
+    );
+    expect(await readdir(cacheDir)).toEqual([]);
+  });
+
   test('version is negotiated against the origin manifest BEFORE any artifact download', async () => {
     const origin = await startOrigin(
       { version: '1.0.0', artifacts: { image: imageDescriptor } },
@@ -287,6 +323,21 @@ describe('resolvePullEntry: image artifacts', () => {
     await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow(
       /publishes no .*artifact.*attach/is,
     );
+  });
+
+  test('caps origin manifest bodies before buffering unbounded metadata', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('x'.repeat(128));
+    });
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port)),
+    );
+    closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+    await expect(
+      resolvePullEntry(pullSpec(`http://127.0.0.1:${port}`), { cacheDir, maxBodyBytes: 64 }),
+    ).rejects.toThrow(/origin manifest body .* exceeded 64 bytes/);
   });
 
   test('unsupported artifact formats are rejected by name', async () => {
@@ -483,7 +534,7 @@ describe('resolvePullEntry: snapshot artifacts (fork-by-fetch)', () => {
 });
 
 describe('resolvePullEntry: adversarial origins (integrity)', () => {
-  test('an artifact endpoint answering HTML fails the digest check and caches nothing', async () => {
+  test('an artifact endpoint answering HTML fails closed and caches nothing', async () => {
     const origin = await startOrigin(
       { artifacts: { image: imageDescriptor } },
       {
@@ -495,7 +546,7 @@ describe('resolvePullEntry: adversarial origins (integrity)', () => {
     );
 
     await expect(resolvePullEntry(pullSpec(origin.url), { cacheDir })).rejects.toThrow(
-      /digest mismatch/i,
+      /digest mismatch|exceeded advertised size/i,
     );
     expect(await readdir(cacheDir)).toEqual([]);
   });
