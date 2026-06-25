@@ -729,7 +729,7 @@ async function handleGravityDeploy(_req: http.IncomingMessage, res: http.ServerR
 /**
  * The WAN latency a report actually ran at, read from the latency proxy's
  * control endpoint (instant — the control path skips the simulated delay).
- * Null when the link is unreachable; the UI omits the annotation honestly.
+ * Null when the link is unreachable; the UI omits the annotation.
  */
 async function currentWanLatencyMs(): Promise<number | null> {
   try {
@@ -845,6 +845,13 @@ type RouteHandler = (
 
 const routes = new Map<string, RouteHandler>([
   [
+    'GET /favicon.ico',
+    (_req, res) => {
+      res.writeHead(204, { 'cache-control': 'public, max-age=3600' });
+      res.end();
+    },
+  ],
+  [
     'GET /api/dashboard',
     (req, res) =>
       handleDashboard(req, res, { plugin, machines: MACHINES, remotes, lifecycleBody, vmBody: vmLaneBody }),
@@ -903,8 +910,7 @@ const server = http.createServer(async (req, res) => {
 
 // GET /vnc upgrade: splice the browser's websocket onto the android lab's
 // forwarded qemu VNC listener. qemu speaks the websocket protocol itself, so
-// this is a dumb TCP pipe — the original upgrade request is replayed verbatim
-// and qemu completes the handshake.
+// the original upgrade request is replayed verbatim.
 server.on('upgrade', (req, socket, head) => {
   const pathname = new URL(req.url ?? '/', `http://localhost:${PORT}`).pathname;
   const target = pathname === '/vnc' ? androidVncPort() : undefined;

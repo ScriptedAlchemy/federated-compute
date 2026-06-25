@@ -51,18 +51,22 @@ async function readManifest(name) {
 
 async function listMachines() {
   const entries = await readdir(machinesDir, { withFileTypes: true }).catch(() => []);
-  const machines = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const manifest = await readManifest(entry.name).catch(() => null);
-    if (!manifest) continue;
-    machines.push({
-      name: manifest.name ?? entry.name,
-      version: manifest.version ?? '0.0.0',
-      artifacts: Object.keys(manifest.artifacts ?? {}),
-      manifestUrl: `${machineBaseUrl(entry.name)}/mf-manifest.json`,
-    });
-  }
+  const machines = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const manifest = await readManifest(entry.name).catch(() => null);
+          if (!manifest) return null;
+          return {
+            name: manifest.name ?? entry.name,
+            version: manifest.version ?? '0.0.0',
+            artifacts: Object.keys(manifest.artifacts ?? {}),
+            manifestUrl: `${machineBaseUrl(entry.name)}/mf-manifest.json`,
+          };
+        }),
+    )
+  ).filter(Boolean);
   machines.sort((a, b) => a.name.localeCompare(b.name));
   return machines;
 }

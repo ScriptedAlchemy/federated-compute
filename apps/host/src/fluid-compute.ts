@@ -262,13 +262,6 @@ export function simulateAdaptiveFluidTraffic(
     });
   }
 
-  const fallbackMigration: AdaptiveMigrationEvent = {
-    atRequest: 0,
-    from: originRegion,
-    to: originRegion,
-    costMs: 0,
-    reason: 'traffic never stayed hot long enough to justify moving compute',
-  };
   const baselineTotalMs = samples.reduce((sum, sample) => sum + sample.baselineLatencyMs, 0);
   const adaptiveTotalMs = samples.reduce((sum, sample) => sum + sample.latencyMs, 0);
 
@@ -280,7 +273,13 @@ export function simulateAdaptiveFluidTraffic(
     baselineTotalMs,
     adaptiveTotalMs,
     savedMs: baselineTotalMs - adaptiveTotalMs,
-    migration: migration ?? fallbackMigration,
+    migration: migration ?? {
+      atRequest: 0,
+      from: originRegion,
+      to: originRegion,
+      costMs: 0,
+      reason: 'traffic never stayed hot long enough to justify moving compute',
+    },
     samples,
   };
 }

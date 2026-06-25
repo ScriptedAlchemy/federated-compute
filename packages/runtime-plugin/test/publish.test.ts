@@ -181,9 +181,9 @@ describe('publishSnapshotDir', () => {
         layoutDir: await mkdtemp(path.join(os.tmpdir(), 'publish-layout-')),
         compatibility: {
           shell: {
+            ...SHELL,
             rootfsDigest: 'not-a-digest',
-            kernelDigest: SHELL.kernelDigest,
-          } as unknown as typeof SHELL,
+          },
         },
       }),
     ).rejects.toThrow(/compatibility\.shell.*sha256/i);

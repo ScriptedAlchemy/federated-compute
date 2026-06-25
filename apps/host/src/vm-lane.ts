@@ -79,7 +79,7 @@ interface VmLaneState {
      * Whether the dump stopped the source guest, observed by probing it.
      * Current x86_64/KVM runtime: true (despite docs calling checkpoints
      * non-destructive — pinned by the vmstate e2e). On a fixed engine the
-     * source would survive and this reports false, honestly.
+     * source would survive and this reports false.
      */
     sourceDead: boolean;
     shell: VmstateShellIdentity;
@@ -163,7 +163,7 @@ export function vmLaneBody() {
   return rest;
 }
 
-/** Serialize lane steps; refuse honestly when the hardware can't run them. */
+/** Serialize lane steps and refuse when the hardware can't run them. */
 async function vmStep<T extends Record<string, unknown>>(
   res: http.ServerResponse,
   allowed: VmLaneState['phase'][],
@@ -256,12 +256,10 @@ export async function handleVmPublish(_req: http.IncomingMessage, res: http.Serv
       // started loopback artifact endpoint.
       const published = await vmPlugin!.publishMachine(VM_NAME);
       const publishMs = Math.round(performance.now() - t0);
-      // Honesty note: the current x86_64/KVM runtime kills the source guest at dump
-      // time despite the API docs calling checkpoints non-destructive (pinned
-      // by the vmstate e2e). PROBE the source rather than assert: the failed
-      // call routes through the plugin's own crash machinery, which evicts
-      // and disposes the dead handle. (Deliberately NOT disposeMachines():
-      // that would also close the artifact endpoint the restore pulls from.)
+      // Current x86_64/KVM runtime kills the source guest at dump time despite
+      // the API docs calling checkpoints non-destructive (pinned by the
+      // vmstate e2e). Probe the source so the plugin evicts and disposes the
+      // dead handle without closing the artifact endpoint the restore pulls from.
       let sourceDead = false;
       try {
         await solver.progress();
@@ -288,9 +286,7 @@ export async function handleVmPublish(_req: http.IncomingMessage, res: http.Serv
       );
       return {};
     } catch (error) {
-      // A failed dump may still have stopped the source (see honesty note):
-      // drop to a coherent cold state rather than reporting 'running' for a
-      // machine that may be dead.
+      // A failed dump may still stop the source; do not report a dead VM as running.
       await vmPlugin?.disposeMachines().catch(() => {});
       vmLane.phase = 'cold';
       vmLane.frozenAt = undefined;

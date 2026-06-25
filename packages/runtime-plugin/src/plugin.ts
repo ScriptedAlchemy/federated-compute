@@ -26,11 +26,7 @@ export interface MachinenPluginOptions {
   artifactFetchTimeoutMs?: number;
   /** Max stall between artifact body chunks before a pull download fails. Default 30s. */
   artifactStreamIdleTimeoutMs?: number;
-  /**
-   * Enables plugin-owned vmstate publication: publishMachine() writes
-   * content-addressed bundles under `dir` and a lazily started loopback
-   * endpoint serves them. Plumbing the plugin owns — nothing to deploy.
-   */
+  /** Enables plugin-owned vmstate publication served from a loopback endpoint. */
   publish?: { dir?: string; hostname?: string; port?: number };
 }
 
@@ -72,14 +68,11 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
     name: 'machinen-plugin',
     machineHooks,
 
-    // Capture machine remotes declared at init so warm() can pre-boot them.
     beforeInit(args) {
       session.rememberRemotes(args.userOptions?.remotes as RemoteCandidate[]);
       return args;
     },
 
-    // Capture machine remotes added at runtime via instance.registerRemotes()
-    // so warm() accepts them by name too.
     registerRemote(args) {
       session.rememberRemotes([args.remote as RemoteCandidate]);
       return args;
@@ -109,8 +102,6 @@ export function machinenPlugin(options: MachinenPluginOptions): MachinenPlugin {
       await session.dispose();
     },
 
-    // Custom remote loading strategy: claim machinen entries and return a
-    // virtual container whose get() produces function-binding modules.
     async loadEntry(args) {
       const { remoteInfo } = args as unknown as {
         remoteInfo: { name: string; entry: string };

@@ -502,11 +502,7 @@ export class MachineRuntimeSession {
     // stream fast at start, and stream transport failures feed back into
     // it. There is no mid-stream retry or restart — consumers re-invoke.
     const gate = this.breaker(entry);
-    if ((gate?.gate() ?? 'closed') === 'open') {
-      throw new MachineCircuitOpenError(
-        `[machinen-plugin] circuit for machine "${remoteName}" is open; failing fast`,
-      );
-    }
+    this.assertCircuitClosed({ remoteName, entry, modulePath, fn }, gate);
 
     const machine = await this.ensureMachine(remoteName, entry);
     if (!machine.handle.callStream) {

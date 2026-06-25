@@ -13,7 +13,7 @@ import { httpMachineHandle } from './http.js';
 import { getFreePort } from './process.js';
 
 /**
- * The REAL Machinen driver: boots `machinen://` entries as actual microVMs
+ * Machinen driver: boots `machinen://` entries as actual microVMs
  * through `@machinen/runtime` (KVM on Linux, HVF on Apple Silicon).
  *
  * Boot model (verified against machinen 0.6.1 on x86_64/KVM):
@@ -29,7 +29,7 @@ import { getFreePort } from './process.js';
  * vCPU state); booting a `machinen://<snapDir>` entry restores it and the
  * guest process resumes mid-heap.
  *
- * Current x86_64/KVM runtime workarounds baked in (each one empirically diagnosed):
+ * Current x86_64/KVM runtime workarounds:
  *   - explicit `memory` always passed (default 2048 MiB): the runtime's
  *     auto-sizing collides with the KVM APIC page (KvmCreateVcpuFailed),
  *   - `provision()` is NOT used (its exec stalls until a 300s timeout);
