@@ -16,6 +16,7 @@
     "@module-federation/runtime": "^2.5.1"
   },
   "devDependencies": {
+    "@machinen/cli": "0.6.1",
     "@machinen/runtime": "0.6.1",
     "@rsbuild/core": "^2.0.9",
     "@types/node": "^22",

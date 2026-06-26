@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -106,6 +107,7 @@ async function importMachinen(): Promise<MachinenModule> {
 
 afterEach(async () => {
   vi.doUnmock('@machinen/runtime');
+  vi.doUnmock('node:child_process');
   vi.resetModules();
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -182,6 +184,149 @@ describe('Machinen pure helpers', () => {
 });
 
 describe('Machinen driver unit behavior without KVM', () => {
+  test('fresh boot provisions missing base assets through the MachineN CLI and retries resolution', async () => {
+    const projectRoot = await tempDir('machinen-helpers-project-');
+    const cliBin = '/opt/machinen/bin/machinen';
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const resolveBaseRootfs = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw missing;
+      })
+      .mockReturnValue('/base/rootfs.tar');
+    const bootCalls: Record<string, unknown>[] = [];
+    const logs: string[] = [];
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+    const spawnMock = vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('{"fetched":true}\n'));
+        child.emit('exit', 0, null);
+      });
+      return child;
+    });
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        bootCalls.push(opts);
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs,
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({
+      guestReadyTimeoutMs: 1_000,
+      log: (line) => logs.push(line),
+      machinenCliBin: cliBin,
+      projectRoot,
+    });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`));
+
+    expect(resolveBaseRootfs).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [cliBin, 'install', '--json'],
+      expect.objectContaining({ cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+    expect(resolveBaseRootfs.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+    expect(spawnMock.mock.invocationCallOrder[0]).toBeLessThan(resolveBaseRootfs.mock.invocationCallOrder[1]);
+    expect(bootCalls[0].image).toBe('/base/rootfs.tar');
+    expect(logs.some((line) => line.includes('base assets missing'))).toBe(true);
+    await handle.dispose?.();
+  });
+
+  test('fresh boot can use an injected programmatic base asset provisioner', async () => {
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const resolveBaseRootfs = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw missing;
+      })
+      .mockReturnValue('/base/rootfs.tar');
+    const provisioner = vi.fn();
+    const spawnMock = vi.fn();
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs,
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({
+      baseAssetProvisioner: provisioner,
+      assetProvisionTimeoutMs: 1234,
+      guestReadyTimeoutMs: 1_000,
+    });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`));
+
+    expect(provisioner).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      log: expect.any(Function),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(resolveBaseRootfs).toHaveBeenCalledTimes(2);
+    await handle.dispose?.();
+  });
+
+  test('fresh boot can disable automatic base asset provisioning', async () => {
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const spawnMock = vi.fn();
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore: vi.fn(),
+      resolveBaseRootfs: () => {
+        throw missing;
+      },
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+
+    await expect(
+      machinenDriver({ autoProvisionBaseAssets: false }).boot(
+        parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`),
+      ),
+    ).rejects.toThrow(/base rootfs missing/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   test('fresh boot uses a finite boot timeout and stores the launcher as owner-only', async () => {
     const bootCalls: Record<string, unknown>[] = [];
     const writes: Array<{ guestPath: string; mode?: number; contents: string | Buffer }> = [];

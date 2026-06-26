@@ -21,6 +21,9 @@ importers:
         specifier: ^2.5.1
         version: 2.5.1
     devDependencies:
+      '@machinen/cli':
+        specifier: 0.6.1
+        version: 0.6.1
       '@machinen/runtime':
         specifier: 0.6.1
         version: 0.6.1

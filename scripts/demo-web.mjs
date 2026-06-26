@@ -214,12 +214,6 @@ function expect(cond, message) {
   if (!cond) throw new Error(message);
 }
 
-function isMissingMachineNBase(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('base rootfs tarball not found') ||
-    message.includes('does not contain rootfs-debian-amd64.tar.gz');
-}
-
 async function runSmoke(base) {
   await waitForHttpOk(`${base}/api/dashboard`, { what: 'host dashboard' });
   console.log('[smoke] GET /api/dashboard -> 200');
@@ -293,41 +287,36 @@ async function runSmoke(base) {
     `fluid local query should use the normal origin module: ${JSON.stringify(fluidLocal)}`);
   console.log(`[smoke] POST /api/fluid/query local -> ${fluidLocal.decision.replica}`);
 
-  try {
-    const fluidPrepared = await postJson(base, '/api/fluid/prepare');
-    expect(fluidPrepared.phase === 'prepared',
-      `fluid prepare should publish a prepared vmstate: ${JSON.stringify(fluidPrepared)}`);
-    expect(String(fluidPrepared.published?.digest).startsWith('sha256:'),
-      `fluid prepare should publish a digest: ${JSON.stringify(fluidPrepared.published)}`);
-    console.log(`[smoke] POST /api/fluid/prepare -> ${fluidPrepared.published.bytes} bytes, ` +
-      `${fluidPrepared.published.digest.slice(0, 19)}…`);
+  const fluidPrepared = await postJson(base, '/api/fluid/prepare');
+  expect(fluidPrepared.phase === 'prepared',
+    `fluid prepare should publish a prepared vmstate: ${JSON.stringify(fluidPrepared)}`);
+  expect(String(fluidPrepared.published?.digest).startsWith('sha256:'),
+    `fluid prepare should publish a digest: ${JSON.stringify(fluidPrepared.published)}`);
+  console.log(`[smoke] POST /api/fluid/prepare -> ${fluidPrepared.published.bytes} bytes, ` +
+    `${fluidPrepared.published.digest.slice(0, 19)}…`);
 
-    const fluidBodyJson = await postJson(base, '/api/fluid/query', {
-      query: 'ship this function across regions and stream the answer back',
-      policy: 'distribute',
-      callerRegion: 'us-east',
-    });
-    expect(fluidBodyJson.decision?.mode === 'distribute',
-      `fluid query should choose distribute: ${JSON.stringify(fluidBodyJson.decision)}`);
-    expect(fluidBodyJson.decision?.connection?.state === 'opened',
-      `fluid query should open a back-channel: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
-    expect(fluidBodyJson.decision?.connection?.kind === 'host-mediated-backhaul',
-      `fluid query should report the actual backhaul mode: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
-    expect(fluidBodyJson.restore?.artifact === 'vmstate',
-      `fluid query should restore vmstate, not cold boot image: ${JSON.stringify(fluidBodyJson.restore)}`);
-    expect(decodeURIComponent(String(fluidBodyJson.restore.entry)).includes(`digest=${fluidPrepared.published.digest}`),
-      `fluid query should pin the prepared vmstate digest: ${JSON.stringify(fluidBodyJson.restore)}`);
-    expect((fluidBodyJson.timeline ?? []).map((s) => s.kind).join(',') ===
-      'query,invoke,decide,restore,connect,return',
-      `fluid timeline malformed: ${JSON.stringify(fluidBodyJson.timeline)}`);
-    expect((fluidBodyJson.wire ?? []).some((e) => e.type === 'artifact' && e.artifact === 'vmstate'),
-      'fluid query should include real vmstate pull wire evidence');
-    console.log(`[smoke] POST /api/fluid/query distribute -> ${fluidBodyJson.decision.connection.from} ` +
-      `-> ${fluidBodyJson.decision.connection.to}`);
-  } catch (error) {
-    if (!isMissingMachineNBase(error)) throw error;
-    console.log('[smoke] skipped fluid vmstate prepare/query: machinen base rootfs assets are not installed');
-  }
+  const fluidBodyJson = await postJson(base, '/api/fluid/query', {
+    query: 'ship this function across regions and stream the answer back',
+    policy: 'distribute',
+    callerRegion: 'us-east',
+  });
+  expect(fluidBodyJson.decision?.mode === 'distribute',
+    `fluid query should choose distribute: ${JSON.stringify(fluidBodyJson.decision)}`);
+  expect(fluidBodyJson.decision?.connection?.state === 'opened',
+    `fluid query should open a back-channel: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+  expect(fluidBodyJson.decision?.connection?.kind === 'host-mediated-backhaul',
+    `fluid query should report the actual backhaul mode: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+  expect(fluidBodyJson.restore?.artifact === 'vmstate',
+    `fluid query should restore vmstate, not cold boot image: ${JSON.stringify(fluidBodyJson.restore)}`);
+  expect(decodeURIComponent(String(fluidBodyJson.restore.entry)).includes(`digest=${fluidPrepared.published.digest}`),
+    `fluid query should pin the prepared vmstate digest: ${JSON.stringify(fluidBodyJson.restore)}`);
+  expect((fluidBodyJson.timeline ?? []).map((s) => s.kind).join(',') ===
+    'query,invoke,decide,restore,connect,return',
+    `fluid timeline malformed: ${JSON.stringify(fluidBodyJson.timeline)}`);
+  expect((fluidBodyJson.wire ?? []).some((e) => e.type === 'artifact' && e.artifact === 'vmstate'),
+    'fluid query should include real vmstate pull wire evidence');
+  console.log(`[smoke] POST /api/fluid/query distribute -> ${fluidBodyJson.decision.connection.from} ` +
+    `-> ${fluidBodyJson.decision.connection.to}`);
 
   const fluidAdaptive = await postJson(base, '/api/fluid/adapt', {
     hotRegion: 'eu-west',

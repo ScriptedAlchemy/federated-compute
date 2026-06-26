@@ -1,5 +1,7 @@
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile as writeHostFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { MachineDriver, MachineHandle, MachineSpec } from '../types.js';
@@ -48,6 +50,8 @@ const DEFAULT_GUEST_PORT = 3801;
 const DEFAULT_MEMORY_MIB = 2048;
 const DEFAULT_JAVA_ROOT_DISK_BYTES = 4 * 1024 ** 3;
 const DEFAULT_BOOT_TIMEOUT_MS = 120_000;
+const DEFAULT_ASSET_PROVISION_TIMEOUT_MS = 10 * 60_000;
+const ASSET_PROVISION_OUTPUT_MAX_BYTES = 64 * 1024;
 const GUEST_DIR = '/opt/federated';
 const NODE_GUEST_BUNDLE = `${GUEST_DIR}/guest.mjs`;
 const JAVA_GUEST_BUNDLE = `${GUEST_DIR}/guest.jar`;
@@ -128,6 +132,20 @@ interface MachinenRuntime {
   resolveBaseDtb(explicit?: string, cwd?: string): string | undefined;
 }
 
+interface BaseBootBundle {
+  image: string;
+  assets: { kernel: string; dtb?: string };
+}
+
+export interface MachinenBaseAssetProvisionContext {
+  timeoutMs: number;
+  log: (line: string) => void;
+}
+
+export type MachinenBaseAssetProvisioner = (
+  context: MachinenBaseAssetProvisionContext,
+) => Promise<void> | void;
+
 /**
  * The CLI resolves kernel/dtb before spawning the VMM, but programmatic
  * `boot()`/`restore()` do not — without an explicit `kernel` the
@@ -202,6 +220,23 @@ export interface MachinenDriverOptions {
   guestReadyTimeoutMs?: number;
   /** Deadline for the VMM boot/restore call itself. Default 120s. */
   bootTimeoutMs?: number;
+  /**
+   * Fetch missing MachineN base assets on demand through @machinen/cli, then
+   * retry rootfs/kernel/dtb resolution once. Default: true.
+   */
+  autoProvisionBaseAssets?: boolean;
+  /**
+   * Optional programmatic base-asset provisioner. The built-in fallback runs
+   * the project-local `@machinen/cli install --json` because @machinen/runtime
+   * 0.6.1 does not export the release-asset downloader used by that command.
+   */
+  baseAssetProvisioner?: MachinenBaseAssetProvisioner;
+  /** Project root used to resolve/run the built-in @machinen/cli provisioner. Default: process.cwd(). */
+  projectRoot?: string;
+  /** Explicit @machinen/cli executable for the built-in provisioner. */
+  machinenCliBin?: string;
+  /** Deadline for the on-demand `machinen install --json` prefetch. Default 10m. */
+  assetProvisionTimeoutMs?: number;
   /** Startup progress lines (one per phase). Default: process.stderr. */
   log?: (line: string) => void;
 }
@@ -228,6 +263,165 @@ export async function loadRuntime(): Promise<MachinenRuntime> {
     },
   );
   return runtimePromise;
+}
+
+function missingBaseAssetCode(error: unknown): string | undefined {
+  if (!isRecord(error) || typeof error.code !== 'string') return undefined;
+  return error.code;
+}
+
+function isMissingBaseAssetError(error: unknown): boolean {
+  const code = missingBaseAssetCode(error);
+  return (
+    code === 'PROVISION_BASE_NOT_FOUND' ||
+    code === 'PROVISION_KERNEL_NOT_FOUND' ||
+    code === 'PROVISION_DTB_NOT_FOUND'
+  );
+}
+
+function resolveMachinenCliBin(opts: MachinenDriverOptions): string | undefined {
+  const projectRoot = opts.projectRoot ?? process.cwd();
+  if (opts.machinenCliBin) {
+    return path.resolve(projectRoot, opts.machinenCliBin);
+  }
+
+  try {
+    const requireFromProject = createRequire(path.join(projectRoot, 'package.json'));
+    const pkgPath = requireFromProject.resolve('@machinen/cli/package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { bin?: string | Record<string, string> };
+    const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.machinen;
+    if (!bin) return undefined;
+    return path.resolve(path.dirname(pkgPath), bin);
+  } catch {
+    return undefined;
+  }
+}
+
+async function provisionBaseAssets(
+  opts: MachinenDriverOptions,
+  timeoutMs: number,
+  log: (line: string) => void,
+): Promise<void> {
+  if (opts.baseAssetProvisioner) {
+    await opts.baseAssetProvisioner({ timeoutMs, log });
+    return;
+  }
+  await runBaseAssetProvision(opts, timeoutMs, log);
+}
+
+async function runBaseAssetProvision(
+  opts: MachinenDriverOptions,
+  timeoutMs: number,
+  log: (line: string) => void,
+): Promise<void> {
+  const projectRoot = opts.projectRoot ?? process.cwd();
+  const cliBin = resolveMachinenCliBin(opts);
+  if (!cliBin) {
+    throw new Error(
+      '[machinen-plugin] MachineN base assets are missing, and @machinen/cli is not installed ' +
+        `from ${projectRoot}. Install @machinen/cli next to the app, set machinenCliBin, ` +
+        'or prefetch assets with `machinen install`.',
+    );
+  }
+
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_ASSET_PROVISION_TIMEOUT_MS;
+  log(`[machinen] base assets missing; running ${cliBin} install --json`);
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [cliBin, 'install', '--json'], {
+      cwd: projectRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+    let settled = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
+    }, timeout);
+    timer.unref();
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout = appendBoundedOutput(stdout, chunk.toString('utf8'));
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr = appendBoundedOutput(stderr, chunk.toString('utf8'));
+    });
+    child.on('error', (error) => {
+      finish(new Error(`[machinen-plugin] failed to start MachineN asset provisioning: ${error.message}`));
+    });
+    child.on('exit', (code, signal) => {
+      if (timedOut) {
+        finish(new Error(`[machinen-plugin] MachineN asset provisioning timed out after ${timeout}ms`));
+        return;
+      }
+      if (code === 0) {
+        const suffix = stdout.trim() ? `: ${stdout.trim()}` : '';
+        log(`[machinen] base assets ready${suffix}`);
+        finish();
+        return;
+      }
+      const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+      const detail = stderr.trim() || stdout.trim();
+      finish(
+        new Error(
+          `[machinen-plugin] MachineN asset provisioning failed with ${reason}` +
+            (detail ? `: ${detail}` : ''),
+        ),
+      );
+    });
+  });
+}
+
+function appendBoundedOutput(current: string, chunk: string): string {
+  const next = current + chunk;
+  return next.length > ASSET_PROVISION_OUTPUT_MAX_BYTES
+    ? next.slice(next.length - ASSET_PROVISION_OUTPUT_MAX_BYTES)
+    : next;
+}
+
+async function resolveBaseBootBundle(
+  runtime: MachinenRuntime,
+  opts: MachinenDriverOptions,
+  log: (line: string) => void,
+  image?: string,
+): Promise<BaseBootBundle> {
+  const resolve = (): BaseBootBundle => ({
+    image: image ?? runtime.resolveBaseRootfs(),
+    assets: baseBootAssets(runtime),
+  });
+
+  try {
+    return resolve();
+  } catch (error) {
+    if (opts.autoProvisionBaseAssets === false || !isMissingBaseAssetError(error)) throw error;
+    await provisionBaseAssets(
+      opts,
+      opts.assetProvisionTimeoutMs ?? DEFAULT_ASSET_PROVISION_TIMEOUT_MS,
+      log,
+    );
+    try {
+      return resolve();
+    } catch (retryError) {
+      throw new Error(
+        '[machinen-plugin] MachineN base assets are still unavailable after base asset provisioning: ' +
+          `${(retryError as Error)?.message ?? retryError}`,
+        { cause: retryError },
+      );
+    }
+  }
 }
 
 /** A machinen snapshot bundle is a directory holding meta.json (+ state.vmstate). */
@@ -587,8 +781,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
   async function bootFresh(spec: MachineSpec, program: GuestProgram): Promise<MachineHandle> {
     const runtime = await loadRuntime();
     const bundle = await readFile(program.bundlePath);
-    const image = opts.image ?? runtime.resolveBaseRootfs();
-    const assets = baseBootAssets(runtime);
+    const { image, assets } = await resolveBaseBootBundle(runtime, opts, log, opts.image);
     const guestPort = guestPortFor(spec);
     const hostPort = await getFreePort();
     const memory = Number(spec.params.get('memory')) || opts.memoryMib || DEFAULT_MEMORY_MIB;
@@ -674,7 +867,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const guestPort = resolveGuestPort(spec, marker);
     const hostPort = await getFreePort();
     const name = vmName(spec.remoteName);
-    const assets = baseBootAssets(runtime);
+    const { assets } = await resolveBaseBootBundle(runtime, opts, log, marker.image);
     const localShell = await shellIdentity(marker.image, assets);
     if (!sameShell(marker.shell, localShell)) {
       throw new Error(
