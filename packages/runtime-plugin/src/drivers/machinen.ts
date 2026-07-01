@@ -6,6 +6,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { MachineDriver, MachineHandle, MachineSpec } from '../types.js';
 import {
+  formatShell,
   isVmstateShellIdentity,
   sameShell,
   sha256File,
@@ -173,22 +174,24 @@ function isSnapMarker(value: unknown): value is SnapMarker {
   return (
     isRecord(value) &&
     typeof value.remoteName === 'string' &&
+    typeof value.guestPort === 'number' &&
     Number.isInteger(value.guestPort) &&
+    value.guestPort >= 1 &&
+    value.guestPort <= 65_535 &&
     typeof value.image === 'string' &&
     isVmstateShellIdentity(value.shell) &&
     typeof value.snappedAt === 'string'
   );
 }
 
-function describeShell(shell: VmstateShellIdentity): string {
-  const dtb = shell.dtbDigest ? `, dtb=${shell.dtbDigest}` : '';
-  return `rootfs=${shell.rootfsDigest}, kernel=${shell.kernelDigest}${dtb}`;
-}
-
 export interface MachinenSnapshotDescriptor {
   /** Snapshot bundle directory — boot a `machinen://<snapDir>` entry to restore. */
   snapDir: string;
-  /** Rootfs tarball the source VM booted from (recorded for cross-host moves). */
+  /**
+   * Rootfs tarball the source VM booted from. Provenance only: restores
+   * derive the local shell from this host's own assets and never read the
+   * recorded path (it may not exist off the producer host).
+   */
   image: string;
   /** Digest identity of the MachineN shell that produced the vmstate. */
   shell: VmstateShellIdentity;
@@ -481,7 +484,15 @@ async function guestProgramForMachineImage(imageDir: string): Promise<GuestProgr
   const manifestPath = path.join(imageDir, MACHINE_IMAGE_MANIFEST);
   if (!existsSync(manifestPath)) return undefined;
 
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as MachinenMachineManifest;
+  let manifest: MachinenMachineManifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as MachinenMachineManifest;
+  } catch (error) {
+    throw new Error(
+      `[machinen-plugin] machine image manifest ${manifestPath} is not readable JSON: ` +
+        `${(error as Error)?.message ?? error}`,
+    );
+  }
   if (manifest.format !== 'machinen-machine@1') {
     throw new Error(
       `[machinen-plugin] machine image manifest ${manifestPath} has unsupported format "${String(manifest.format)}"`,
@@ -778,10 +789,31 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   assertValidEnvKeys(opts.env);
 
+  /**
+   * The boot bundle THIS host offers (provisioning missing base assets on
+   * demand) — never derived from paths recorded inside a pulled bundle.
+   */
+  function localBootBundle(runtime: MachinenRuntime): Promise<BaseBootBundle> {
+    return resolveBaseBootBundle(runtime, opts, log, opts.image);
+  }
+
+  // Memoized per driver: the local assets do not change within a process,
+  // and hashing a multi-GB rootfs on every restore would be pure waste.
+  let localShellPromise: Promise<VmstateShellIdentity> | undefined;
+  function localShell(runtime: MachinenRuntime): Promise<VmstateShellIdentity> {
+    localShellPromise ??= localBootBundle(runtime)
+      .then(({ image, assets }) => shellIdentity(image, assets))
+      .catch((error: unknown) => {
+        localShellPromise = undefined;
+        throw error;
+      });
+    return localShellPromise;
+  }
+
   async function bootFresh(spec: MachineSpec, program: GuestProgram): Promise<MachineHandle> {
     const runtime = await loadRuntime();
     const bundle = await readFile(program.bundlePath);
-    const { image, assets } = await resolveBaseBootBundle(runtime, opts, log, opts.image);
+    const { image, assets } = await localBootBundle(runtime);
     const guestPort = guestPortFor(spec);
     const hostPort = await getFreePort();
     const memory = Number(spec.params.get('memory')) || opts.memoryMib || DEFAULT_MEMORY_MIB;
@@ -843,7 +875,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
         'start guest launcher',
       );
 
-      const handle = buildHandle(spec, vm, hostPort, guestPort, image, () => shellIdentity(image, assets), snapshotDir, log);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, image, () => localShell(runtime), snapshotDir, log);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `boot of "${spec.remoteName}"`,
@@ -867,12 +899,16 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const guestPort = resolveGuestPort(spec, marker);
     const hostPort = await getFreePort();
     const name = vmName(spec.remoteName);
-    const { assets } = await resolveBaseBootBundle(runtime, opts, log, marker.image);
-    const localShell = await shellIdentity(marker.image, assets);
-    if (!sameShell(marker.shell, localShell)) {
+    const { image: localRootfs, assets } = await localBootBundle(runtime);
+    // The shell this host offers is derived from ITS OWN assets. marker.image
+    // is a producer-host path inside an untrusted bundle: reading it would
+    // break cross-host restores (ENOENT) and hand hostile bundles an
+    // arbitrary-file hash oracle.
+    const hostShell = await localShell(runtime);
+    if (!sameShell(marker.shell, hostShell)) {
       throw new Error(
         `[machinen-plugin] snapshot "${snapDir}" shell mismatch: snapshot requires ` +
-          `${describeShell(marker.shell)}, this host has ${describeShell(localShell)}`,
+          `${formatShell(marker.shell)}, this host has ${formatShell(hostShell)}`,
       );
     }
 
@@ -895,7 +931,9 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     );
 
     try {
-      const handle = buildHandle(spec, vm, hostPort, guestPort, marker.image, async () => marker.shell, snapshotDir, log);
+      // Re-snapshots of this restored VM record THIS host's rootfs path (its
+      // digests were just verified to match the marker shell).
+      const handle = buildHandle(spec, vm, hostPort, guestPort, localRootfs, async () => marker.shell, snapshotDir, log);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `restore of "${spec.remoteName}"`,

@@ -19,13 +19,11 @@ import { createInstance } from '@module-federation/runtime';
 import {
   DEFAULT_POLICY,
   MachineVersionError,
-  httpAttachDriver,
+  formatShell,
   machinenDriver,
   machinenPlugin,
   parseMachineEntry,
   type MachinenPlugin,
-  type MachineDriver,
-  type MachineSpec,
   type PublishedMachine,
   type VmstateShellIdentity,
 } from '@federated-compute/machinen-plugin';
@@ -55,6 +53,7 @@ import {
   lifecycleBody,
   snapPlugin,
 } from './lifecycle.js';
+import { mixedDriver } from './mixed-driver.js';
 import {
   disposeVmLane,
   handleVmBoot,
@@ -109,21 +108,14 @@ function entryFor(name: string, port: number): string {
 
 const remotes = MACHINES.map(({ name, port }) => ({ name, entry: entryFor(name, port) }));
 
-function mixedDriver(): MachineDriver {
-  const attach = httpAttachDriver();
-  const vm = machinenDriver({
+// ---- the entire federation setup ------------------------------------------
+const plugin = machinenPlugin({
+  driver: mixedDriver({
     snapshotDir: path.resolve(import.meta.dirname, '../.machinen/java-vm-snapshots'),
     bootTimeoutMs: 180_000,
-  });
-  return {
-    boot(spec: MachineSpec) {
-      return spec.kind === 'attach' ? attach.boot(spec) : vm.boot(spec);
-    },
-  };
-}
-
-// ---- the entire federation setup ------------------------------------------
-const plugin = machinenPlugin({ driver: mixedDriver(), bootTimeoutMs: 180_000 });
+  }),
+  bootTimeoutMs: 180_000,
+});
 const host = createInstance({
   name: 'host',
   remotes,
@@ -333,10 +325,6 @@ function regionSlug(region: string): string {
   return region.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'region';
 }
 
-function vmstateShellKey(shell: VmstateShellIdentity): string {
-  return JSON.stringify(shell);
-}
-
 function ensureFluidSourceInstance(): void {
   if (fluidSourcePlugin) return;
   fluidSourcePlugin = machinenPlugin({
@@ -353,7 +341,7 @@ function ensureFluidSourceInstance(): void {
 }
 
 async function ensureFluidRestoreInstance(shell: VmstateShellIdentity): Promise<void> {
-  const shellKey = vmstateShellKey(shell);
+  const shellKey = formatShell(shell);
   if (fluidRestorePlugin && fluidRestoreShellKey === shellKey) return;
   await fluidRestorePlugin?.disposeMachines();
   fluidRestorePlugin = machinenPlugin({
@@ -443,7 +431,21 @@ function fluidRestoreRemoteFor(
   return { name, entry };
 }
 
+/**
+ * The fluid prepare/restore paths boot real machinenDriver VMs — same
+ * hardware requirements as the vm lane, same honest 503 when they are absent.
+ */
+function refuseFluidVmWithoutCapability(res: http.ServerResponse): boolean {
+  if (vmCapability.available) return false;
+  json(res, 503, {
+    error: `live VM track unavailable: ${vmCapability.detail}`,
+    capability: vmCapability,
+  });
+  return true;
+}
+
 async function handleFluidPrepare(req: http.IncomingMessage, res: http.ServerResponse) {
+  if (refuseFluidVmWithoutCapability(res)) return;
   const body = await readBody(req);
   const reset = body.reset !== false;
   const prepared = await prepareFluidSnapshot({ reset });
@@ -463,7 +465,7 @@ async function handleFluidQuery(req: http.IncomingMessage, res: http.ServerRespo
     ? body.callerRegion.trim()
     : 'us-east';
   const preparedShell = fluidPrepared?.published.compatibility.shell;
-  const preparedShellKey = preparedShell ? vmstateShellKey(preparedShell) : undefined;
+  const preparedShellKey = preparedShell ? formatShell(preparedShell) : undefined;
 
   const decision = decideFluidPlacement({
     policy,
@@ -491,6 +493,7 @@ async function handleFluidQuery(req: http.IncomingMessage, res: http.ServerRespo
   let restoreEntry: string | undefined;
   let workerHost: ReturnType<typeof createInstance> = host;
   if (decision.mode !== 'local') {
+    if (refuseFluidVmWithoutCapability(res)) return;
     if (!fluidPrepared) {
       throw new HttpError(409, 'fluid snapshot is not prepared — POST /api/fluid/prepare first');
     }

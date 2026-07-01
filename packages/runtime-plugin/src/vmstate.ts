@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, link, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
@@ -379,7 +379,8 @@ export function sameShell(a: VmstateShellIdentity, b: VmstateShellIdentity): boo
   );
 }
 
-function formatShell(shell: VmstateShellIdentity): string {
+/** Canonical one-line rendering of a shell identity (messages, memo keys). */
+export function formatShell(shell: VmstateShellIdentity): string {
   const dtb = shell.dtbDigest ? `, dtb=${shell.dtbDigest}` : '';
   return `rootfs=${shell.rootfsDigest}, kernel=${shell.kernelDigest}${dtb}`;
 }
@@ -453,15 +454,6 @@ export async function ensureBlobCached(
       throw error;
     }
   });
-}
-
-/** Hardlink when possible (same fs, zero copy for 2.5GB blobs), copy otherwise. */
-export async function linkOrCopy(source: string, dest: string): Promise<void> {
-  try {
-    await link(source, dest);
-  } catch {
-    await copyFile(source, dest);
-  }
 }
 
 /**

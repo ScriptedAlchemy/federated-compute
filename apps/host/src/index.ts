@@ -3,25 +3,10 @@
 // driver, retries, circuit breaker, and version negotiation all live
 // behind these imports.
 import { math, text, strings, compute, stats, data } from './generated';
-import {
-  httpAttachDriver,
-  machinenDriver,
-  type MachineDriver,
-  type MachineSpec,
-} from '@federated-compute/machinen-plugin';
 import { configureMachines, getMachines } from '@federated-compute/machinen-plugin/client';
+import { mixedDriver } from './mixed-driver.js';
 
-function mixedDriver(): MachineDriver {
-  const attach = httpAttachDriver();
-  const vm = machinenDriver({ bootTimeoutMs: 180_000 });
-  return {
-    boot(spec: MachineSpec) {
-      return spec.kind === 'attach' ? attach.boot(spec) : vm.boot(spec);
-    },
-  };
-}
-
-configureMachines({ driver: mixedDriver(), bootTimeoutMs: 180_000 });
+configureMachines({ driver: mixedDriver({ bootTimeoutMs: 180_000 }), bootTimeoutMs: 180_000 });
 
 async function main() {
   try {

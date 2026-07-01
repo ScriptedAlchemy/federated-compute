@@ -287,36 +287,47 @@ async function runSmoke(base) {
     `fluid local query should use the normal origin module: ${JSON.stringify(fluidLocal)}`);
   console.log(`[smoke] POST /api/fluid/query local -> ${fluidLocal.decision.replica}`);
 
-  const fluidPrepared = await postJson(base, '/api/fluid/prepare');
-  expect(fluidPrepared.phase === 'prepared',
-    `fluid prepare should publish a prepared vmstate: ${JSON.stringify(fluidPrepared)}`);
-  expect(String(fluidPrepared.published?.digest).startsWith('sha256:'),
-    `fluid prepare should publish a digest: ${JSON.stringify(fluidPrepared.published)}`);
-  console.log(`[smoke] POST /api/fluid/prepare -> ${fluidPrepared.published.bytes} bytes, ` +
-    `${fluidPrepared.published.digest.slice(0, 19)}…`);
+  // The fluid prepare/distribute steps boot real microVMs — run them only
+  // where the host says it can (same capability signal the vm lane uses).
+  const fluidCap = await fetch(`${base}/api/vm/capability`).then((r) => r.json());
+  if (fluidCap.available) {
+    const fluidPrepared = await postJson(base, '/api/fluid/prepare');
+    expect(fluidPrepared.phase === 'prepared',
+      `fluid prepare should publish a prepared vmstate: ${JSON.stringify(fluidPrepared)}`);
+    expect(String(fluidPrepared.published?.digest).startsWith('sha256:'),
+      `fluid prepare should publish a digest: ${JSON.stringify(fluidPrepared.published)}`);
+    console.log(`[smoke] POST /api/fluid/prepare -> ${fluidPrepared.published.bytes} bytes, ` +
+      `${fluidPrepared.published.digest.slice(0, 19)}…`);
 
-  const fluidBodyJson = await postJson(base, '/api/fluid/query', {
-    query: 'ship this function across regions and stream the answer back',
-    policy: 'distribute',
-    callerRegion: 'us-east',
-  });
-  expect(fluidBodyJson.decision?.mode === 'distribute',
-    `fluid query should choose distribute: ${JSON.stringify(fluidBodyJson.decision)}`);
-  expect(fluidBodyJson.decision?.connection?.state === 'opened',
-    `fluid query should open a back-channel: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
-  expect(fluidBodyJson.decision?.connection?.kind === 'host-mediated-backhaul',
-    `fluid query should report the actual backhaul mode: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
-  expect(fluidBodyJson.restore?.artifact === 'vmstate',
-    `fluid query should restore vmstate, not cold boot image: ${JSON.stringify(fluidBodyJson.restore)}`);
-  expect(decodeURIComponent(String(fluidBodyJson.restore.entry)).includes(`digest=${fluidPrepared.published.digest}`),
-    `fluid query should pin the prepared vmstate digest: ${JSON.stringify(fluidBodyJson.restore)}`);
-  expect((fluidBodyJson.timeline ?? []).map((s) => s.kind).join(',') ===
-    'query,invoke,decide,restore,connect,return',
-    `fluid timeline malformed: ${JSON.stringify(fluidBodyJson.timeline)}`);
-  expect((fluidBodyJson.wire ?? []).some((e) => e.type === 'artifact' && e.artifact === 'vmstate'),
-    'fluid query should include real vmstate pull wire evidence');
-  console.log(`[smoke] POST /api/fluid/query distribute -> ${fluidBodyJson.decision.connection.from} ` +
-    `-> ${fluidBodyJson.decision.connection.to}`);
+    const fluidBodyJson = await postJson(base, '/api/fluid/query', {
+      query: 'ship this function across regions and stream the answer back',
+      policy: 'distribute',
+      callerRegion: 'us-east',
+    });
+    expect(fluidBodyJson.decision?.mode === 'distribute',
+      `fluid query should choose distribute: ${JSON.stringify(fluidBodyJson.decision)}`);
+    expect(fluidBodyJson.decision?.connection?.state === 'opened',
+      `fluid query should open a back-channel: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+    expect(fluidBodyJson.decision?.connection?.kind === 'host-mediated-backhaul',
+      `fluid query should report the actual backhaul mode: ${JSON.stringify(fluidBodyJson.decision?.connection)}`);
+    expect(fluidBodyJson.restore?.artifact === 'vmstate',
+      `fluid query should restore vmstate, not cold boot image: ${JSON.stringify(fluidBodyJson.restore)}`);
+    expect(decodeURIComponent(String(fluidBodyJson.restore.entry)).includes(`digest=${fluidPrepared.published.digest}`),
+      `fluid query should pin the prepared vmstate digest: ${JSON.stringify(fluidBodyJson.restore)}`);
+    expect((fluidBodyJson.timeline ?? []).map((s) => s.kind).join(',') ===
+      'query,invoke,decide,restore,connect,return',
+      `fluid timeline malformed: ${JSON.stringify(fluidBodyJson.timeline)}`);
+    expect((fluidBodyJson.wire ?? []).some((e) => e.type === 'artifact' && e.artifact === 'vmstate'),
+      'fluid query should include real vmstate pull wire evidence');
+    console.log(`[smoke] POST /api/fluid/query distribute -> ${fluidBodyJson.decision.connection.from} ` +
+      `-> ${fluidBodyJson.decision.connection.to}`);
+  } else {
+    const refused = await fetch(`${base}/api/fluid/prepare`, { method: 'POST' });
+    expect(refused.status === 503,
+      `fluid prepare without VM capability must refuse with 503, got ${refused.status}`);
+    console.log(`[smoke] skipped fluid vmstate prepare/query (${fluidCap.reason}); ` +
+      'POST /api/fluid/prepare honestly refuses with 503');
+  }
 
   const fluidAdaptive = await postJson(base, '/api/fluid/adapt', {
     hotRegion: 'eu-west',

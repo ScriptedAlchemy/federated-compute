@@ -194,9 +194,16 @@ export async function getFreePort(): Promise<number> {
   }
   // Fallback to the kernel's choice if the reserved range is unexpectedly
   // saturated or unavailable; preserve the old behavior instead of failing.
-  return probePort(0).catch(() => {
-    throw lastError;
-  });
+  try {
+    return await probePort(0);
+  } catch (fallbackError) {
+    throw new Error(
+      `[machinen-plugin] getFreePort: ${PORT_PROBE_ATTEMPTS} reserved-range probes failed ` +
+        `(last: ${(lastError as Error)?.message ?? lastError}); listen(0) fallback failed too: ` +
+        `${(fallbackError as Error)?.message ?? fallbackError}`,
+      { cause: fallbackError },
+    );
+  }
 }
 
 async function waitForManifest(

@@ -24,6 +24,7 @@ export {
   VMSTATE_FORMAT,
   buildVmstateBundle,
   ensureBlobCached,
+  formatShell,
   installedMachinenRuntimeVersion,
   materializeVmstateDir,
   ociHostPlatform,

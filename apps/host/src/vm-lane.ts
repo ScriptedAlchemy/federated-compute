@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
 import {
+  formatShell,
   machinenDriver,
   machinenPlugin,
   type MachinenPlugin,
@@ -126,10 +127,6 @@ function logVmHooks(p: MachinenPlugin): void {
   });
 }
 
-function vmstateShellKey(shell: VmstateShellIdentity): string {
-  return JSON.stringify(shell);
-}
-
 function ensureVmInstances(): void {
   if (vmPlugin) return;
   vmPlugin = machinenPlugin({
@@ -143,7 +140,7 @@ function ensureVmInstances(): void {
 }
 
 async function ensureVmPullInstance(shell: VmstateShellIdentity): Promise<void> {
-  const shellKey = vmstateShellKey(shell);
+  const shellKey = formatShell(shell);
   if (vmPullPlugin && vmPullShellKey === shellKey) return;
   await vmPullPlugin?.disposeMachines();
   vmPullPlugin = machinenPlugin({

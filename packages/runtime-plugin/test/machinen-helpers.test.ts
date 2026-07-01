@@ -556,7 +556,7 @@ describe('Machinen driver unit behavior without KVM', () => {
     vi.doMock('@machinen/runtime', () => ({
       boot: vi.fn(),
       restore,
-      resolveBaseRootfs: () => '/base/rootfs.tar',
+      resolveBaseRootfs: () => sourceSnap.image,
       resolveBaseKernel: () => otherKernel,
       resolveBaseDtb: () => undefined,
     }));
@@ -566,6 +566,77 @@ describe('Machinen driver unit behavior without KVM', () => {
       machinenDriver().boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`)),
     ).rejects.toThrow(/shell mismatch/);
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('direct snapshot restore rejects out-of-range marker guest ports before restore', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    await writeFile(
+      path.join(sourceSnap.dir, 'federated-machine.json'),
+      JSON.stringify({
+        remoteName: 'vm_machine',
+        guestPort: 70_000,
+        image: sourceSnap.image,
+        shell: sourceSnap.shell,
+        snappedAt: '2026-06-10T00:00:00.000Z',
+      }),
+    );
+    const restore = vi.fn();
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => sourceSnap.kernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    await expect(
+      machinenDriver().boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`)),
+    ).rejects.toThrow(/invalid MachineN shell marker/);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('restore derives the local shell from local assets, never the marker image path', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    // A bundle moved across hosts records the PRODUCER's rootfs path. The
+    // consumer must never read it (it may not exist, or worse, point at a
+    // hostile file) — the restore still works when the local shell matches.
+    await writeFile(
+      path.join(sourceSnap.dir, 'federated-machine.json'),
+      JSON.stringify({
+        remoteName: 'vm_machine',
+        guestPort: 4707,
+        image: '/producer-host/only/rootfs.tar',
+        shell: sourceSnap.shell,
+        snappedAt: '2026-06-10T00:00:00.000Z',
+      }),
+    );
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+    const restore = vi.fn(async (opts: Record<string, unknown>) => {
+      const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+      await startHealthServer(hostPort);
+      return vm;
+    });
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => sourceSnap.kernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({ guestReadyTimeoutMs: 1_000 });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`));
+
+    expect(restore).toHaveBeenCalledTimes(1);
+    await handle.dispose?.();
   });
 
   test('snapshotting a restored VM records the marker guest port used for restore', async () => {
@@ -602,7 +673,7 @@ describe('Machinen driver unit behavior without KVM', () => {
         return vm;
       }),
       attach,
-      resolveBaseRootfs: () => '/base/rootfs.tar',
+      resolveBaseRootfs: () => sourceSnap.image,
       resolveBaseKernel: () => sourceSnap.kernel,
       resolveBaseDtb: () => undefined,
     }));
