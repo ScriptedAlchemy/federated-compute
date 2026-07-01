@@ -5,6 +5,7 @@ export default defineConfig({
     entry: {
       index: './src/index.ts',
       server: './src/server.ts',
+      'fluid-compute': './src/fluid-compute.ts',
       'region-agent': './src/region-agent.ts',
     },
   },

@@ -17,6 +17,7 @@ export const PORTS = {
   python_machine: 3803,
   db_machine: 3804,
   analytics_machine: 3805,
+  artifact_machine: 3807,
 };
 
 // Deploy-by-pull infrastructure (web demo): the analytics ORIGIN runs in
@@ -34,6 +35,7 @@ export const LIFECYCLE_PORT = 3811;
 // the consumer's pull entry is a static, displayable string; 3814 because
 // 3812/3813 belong to the lifecycle clones above.
 export const VM_PUBLISH_PORT = 3814;
+export const ARTIFACT_REGISTRY_PORT = 3815;
 
 // Simulated WAN links into the data region (latency proxies in front of these).
 export const WAN_PORTS = {
@@ -71,6 +73,7 @@ const COMMANDS = {
   python_machine: ['python3', path.join(ROOT, 'apps/remote-python/main.py')],
   db_machine: ['node', path.join(ROOT, 'apps/machine-db/src/index.mjs')],
   analytics_machine: ['node', path.join(ROOT, 'apps/machine-analytics/dist/index.js')],
+  artifact_machine: ['node', path.join(ROOT, 'apps/machine-artifact/dist/index.js')],
 };
 
 /** Command line for a machine's guest program (also used for the origin copy). */
@@ -83,6 +86,11 @@ const ENV = {
   java_machine: { MACHINEN_TYPES_FILE: path.join(ROOT, 'apps/remote-java/dist/mf-types.ts') },
   // Co-located with db_machine: its db entry is the LOCAL address, no WAN.
   analytics_machine: remoteEnv(['db_machine']),
+  artifact_machine: {
+    MACHINEN_ARTIFACT_REGISTRY_DIR: path.join(ROOT, '.machinen', 'registry'),
+    ARTIFACT_PORT: String(ARTIFACT_REGISTRY_PORT),
+    ARTIFACT_BASE_URL: `http://127.0.0.1:${ARTIFACT_REGISTRY_PORT}`,
+  },
 };
 
 export const MACHINES = Object.entries(PORTS).map(([name, port]) => ({

@@ -6,6 +6,7 @@
   "description": "Consumer service: imports functions from a machine-backed Module Federation remote.",
   "scripts": {
     "build": "rsbuild build",
+    "test": "pnpm build && node --test test/*.test.mjs",
     "start": "node dist/index.js",
     "serve": "node dist/server.js",
     "bindgen": "node node_modules/@federated-compute/machinen-plugin/dist/cli.js"
@@ -15,6 +16,7 @@
     "@module-federation/runtime": "^2.5.1"
   },
   "devDependencies": {
+    "@machinen/cli": "0.6.1",
     "@machinen/runtime": "0.6.1",
     "@rsbuild/core": "^2.0.9",
     "@types/node": "^22",

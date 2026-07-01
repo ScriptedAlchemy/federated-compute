@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createReadStream } from 'node:fs';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import type { ArtifactDescriptor, MachineExposeManifest } from './types.js';
@@ -9,9 +9,9 @@ import {
   VMSTATE_FORMAT,
   VMSTATE_RESEED,
   VMSTATE_SNAPSHOT_ENGINE,
+  assertVmstateShellIdentity,
   buildVmstateBundle,
   installedMachinenRuntimeVersion,
-  linkOrCopy,
   ociHostPlatform,
   type VmstateCompatibility,
 } from './vmstate.js';
@@ -30,6 +30,9 @@ import {
  */
 
 export const DEFAULT_PUBLISH_DIR = path.join('.machinen', 'registry');
+// Machine names become path segments under machines/<name> and URL segments
+// under /machines/<name>; keep the write path as strict as the read path.
+const MACHINE_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 
 export interface PublishSnapshotDirOptions {
   /** The machinen snapshot bundle directory to publish. */
@@ -58,14 +61,25 @@ export interface PublishedVmstate {
   /** Path of the published bundle manifest. */
   bundlePath: string;
   descriptor: ArtifactDescriptor;
+  compatibility: VmstateCompatibility;
 }
 
 /** publishMachine() result: the layout facts plus the served base URL. */
 export type PublishedMachine = PublishedVmstate & { url: string };
 
+export function assertValidPublishedMachineName(name: string): void {
+  if (!MACHINE_NAME_RE.test(name)) {
+    throw new Error(
+      `[machinen-plugin] publish machine name "${name}" is invalid: names must be one path segment ` +
+        'using letters, numbers, dots, underscores, or hyphens',
+    );
+  }
+}
+
 export async function publishSnapshotDir(
   options: PublishSnapshotDirOptions,
 ): Promise<PublishedVmstate> {
+  assertValidPublishedMachineName(options.name);
   const layoutDir = options.layoutDir ?? DEFAULT_PUBLISH_DIR;
   const machinenRuntime =
     options.compatibility?.machinenRuntime ?? installedMachinenRuntimeVersion();
@@ -75,12 +89,17 @@ export async function publishSnapshotDir(
         '@machinen/runtime is not installed and no compatibility.machinenRuntime override was given',
     );
   }
+  const shell = assertVmstateShellIdentity(
+    options.compatibility?.shell,
+    `[machinen-plugin] publish "${options.name}": compatibility.shell`,
+  );
   const compatibility: VmstateCompatibility = {
     platform: options.compatibility?.platform ?? ociHostPlatform(),
     machinenRuntime,
     vmstateFormat: VMSTATE_FORMAT,
     snapshotEngine: options.compatibility?.snapshotEngine ?? VMSTATE_SNAPSHOT_ENGINE,
     reseed: options.compatibility?.reseed ?? VMSTATE_RESEED,
+    shell,
   };
 
   const built = await buildVmstateBundle(options.snapDir, {
@@ -92,7 +111,7 @@ export async function publishSnapshotDir(
   const blobDir = path.join(machineDir, 'blobs', 'sha256');
   await mkdir(blobDir, { recursive: true });
   for (const [i, file] of built.manifest.files.entries()) {
-    await linkOrCopy(built.sources[i], path.join(blobDir, file.digest.slice('sha256:'.length)));
+    await copyFile(built.sources[i], path.join(blobDir, file.digest.slice('sha256:'.length)));
   }
 
   const bundleJson = JSON.stringify(built.manifest, null, 2);
@@ -123,7 +142,14 @@ export async function publishSnapshotDir(
     JSON.stringify(published, null, 2),
   );
 
-  return { digest: `sha256:${digestHex}`, bytes, machineDir, bundlePath, descriptor };
+  return {
+    digest: `sha256:${digestHex}`,
+    bytes,
+    machineDir,
+    bundlePath,
+    descriptor,
+    compatibility,
+  };
 }
 
 export interface ArtifactEndpointOptions {
@@ -140,11 +166,8 @@ export interface ArtifactEndpoint {
   close(): Promise<void>;
 }
 
-// Same segment discipline as bundle paths: no dots-only names, no separators.
-const PATH_SEGMENT_RE = /^(?!\.+$)[A-Za-z0-9._-]+$/;
-
 function safeJoin(root: string, segments: string[]): string | undefined {
-  if (!segments.length || !segments.every((segment) => PATH_SEGMENT_RE.test(segment))) {
+  if (!segments.length || !segments.every((segment) => MACHINE_NAME_RE.test(segment))) {
     return undefined;
   }
   return path.join(root, ...segments);

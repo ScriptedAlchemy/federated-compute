@@ -59,11 +59,14 @@ bindings from. `apps/remote` is this exact shape in production trim
 
 ## Java
 
-No SDK required: `apps/remote-java` implements the protocol in plain Java 21
+No SDK required: `apps/remote-java` implements the protocol in plain Java
 (`src/dev/machinen/*` — server, runtime, modules, state), zero dependencies,
-and builds a single `dist/java-machine.jar`. Because the manifest itself
-carries full function signatures, a Java (or any non-TS) machine needs no
-TypeScript toolchain — hosts render bindings from the manifest alone.
+and builds `dist/java-machine.jar` plus a `dist/java_machine.machine` bundle.
+The jar is compiled on the host and remains a local process fallback for
+`processDriver()`; Machinen demos use the machine bundle, where the jar is
+payload inside the machine image rather than the entry consumers pass around.
+The guest runtime needs Java, not `javac`, Gradle, Maven, or any
+TypeScript toolchain; hosts render bindings from the manifest alone.
 
 Implementing from scratch in another language? The checklist, with where
 the Java reference does each step:

@@ -39,10 +39,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function parseMachinenConfig(
-  raw: string,
-  file: string,
-): Pick<MachinenConfig, 'machines' | 'bindgen'> {
+function parseConfigJson(raw: string, file: string): Record<string, unknown> {
   let json: unknown;
   try {
     json = JSON.parse(raw);
@@ -50,40 +47,65 @@ export function parseMachinenConfig(
     fail(file, `invalid JSON (${(error as Error).message})`);
   }
   if (!isPlainObject(json)) fail(file, 'must be a JSON object');
+  return json;
+}
 
-  if (!isPlainObject(json.machines)) {
+function parseMachineConfig(
+  file: string,
+  name: string,
+  value: unknown,
+): MachinenConfigMachine {
+  // The barrel is written as <outDir>/index.ts; a machine named "index"
+  // would be overwritten by it and make the barrel import itself.
+  if (name.toLowerCase() === 'index') {
+    fail(file, `machines.${name}: "index" is reserved for the generated barrel`);
+  }
+  if (!isPlainObject(value)) fail(file, `machines.${name} must be an object`);
+  const { url, version } = value;
+  if (typeof url !== 'string' || url.length === 0) {
+    fail(file, `machines.${name}.url must be a non-empty string`);
+  }
+  if (version !== undefined && typeof version !== 'string') {
+    fail(file, `machines.${name}.version must be a string`);
+  }
+  return version === undefined ? { url } : { url, version };
+}
+
+function parseMachinesConfig(
+  file: string,
+  value: unknown,
+): Record<string, MachinenConfigMachine> {
+  if (!isPlainObject(value)) {
     fail(file, '"machines" must be an object mapping machine names to { url, version? }');
   }
-  const machines: Record<string, MachinenConfigMachine> = {};
-  for (const [name, value] of Object.entries(json.machines)) {
-    // The barrel is written as <outDir>/index.ts; a machine named "index"
-    // would be overwritten by it and make the barrel import itself.
-    if (name.toLowerCase() === 'index') {
-      fail(file, `machines.${name}: "index" is reserved for the generated barrel`);
-    }
-    if (!isPlainObject(value)) fail(file, `machines.${name} must be an object`);
-    const { url, version } = value;
-    if (typeof url !== 'string' || url.length === 0) {
-      fail(file, `machines.${name}.url must be a non-empty string`);
-    }
-    if (version !== undefined && typeof version !== 'string') {
-      fail(file, `machines.${name}.version must be a string`);
-    }
-    machines[name] = version === undefined ? { url } : { url, version };
-  }
+  return Object.fromEntries(
+    Object.entries(value).map(([name, machine]) => [
+      name,
+      parseMachineConfig(file, name, machine),
+    ]),
+  );
+}
 
-  let outDir = 'src/generated';
-  if (json.bindgen !== undefined) {
-    if (!isPlainObject(json.bindgen)) fail(file, '"bindgen" must be an object');
-    const candidate = json.bindgen.outDir;
-    if (candidate !== undefined) {
-      if (typeof candidate !== 'string' || candidate.length === 0) {
-        fail(file, 'bindgen.outDir must be a non-empty string');
-      }
-      outDir = candidate;
-    }
+function parseBindgenConfig(file: string, value: unknown): { outDir: string } {
+  if (value === undefined) return { outDir: 'src/generated' };
+  if (!isPlainObject(value)) fail(file, '"bindgen" must be an object');
+  const candidate = value.outDir;
+  if (candidate === undefined) return { outDir: 'src/generated' };
+  if (typeof candidate !== 'string' || candidate.length === 0) {
+    fail(file, 'bindgen.outDir must be a non-empty string');
   }
-  return { machines, bindgen: { outDir } };
+  return { outDir: candidate };
+}
+
+export function parseMachinenConfig(
+  raw: string,
+  file: string,
+): Pick<MachinenConfig, 'machines' | 'bindgen'> {
+  const json = parseConfigJson(raw, file);
+  return {
+    machines: parseMachinesConfig(file, json.machines),
+    bindgen: parseBindgenConfig(file, json.bindgen),
+  };
 }
 
 /** Load the nearest config, or undefined when none exists. Throws on invalid content. */

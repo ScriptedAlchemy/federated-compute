@@ -225,6 +225,21 @@
     .freeze-scope { flex-direction: column; gap: 8px; }
     header { padding: 22px 18px 16px; }
   }
+  @media (max-width: 520px) {
+    .stepcard {
+      grid-template-columns: 26px minmax(0, 1fr);
+      align-items: start;
+    }
+    .stepcard .sno { grid-row: span 3; }
+    .stepcard .sdesc { grid-column: 2; }
+    .stepcard button {
+      grid-column: 2;
+      grid-row: auto;
+      width: 100%;
+      min-width: 0;
+    }
+    #reset-btn { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -236,6 +251,7 @@
     <a href="/gravity"><span class="tno">02</span>data gravity</a>
     <a href="/android" class="tab-active" aria-current="page"><span class="tno">03</span>android lab</a>
     <a href="/screen"><span class="tno">04</span>device screen</a>
+    <a href="/fluid"><span class="tno">05</span>fluid compute</a>
   </nav>
 </header>
 

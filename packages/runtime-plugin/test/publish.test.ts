@@ -28,6 +28,10 @@ const FILES: Record<string, Buffer> = {
   'state.vmstate': Buffer.from('vm-ram-'.repeat(2000)),
   'federated-machine.json': Buffer.from(JSON.stringify({ remoteName: 'vm_machine', guestPort: 3801 })),
 };
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 async function fakeSnapshotDir(): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'publish-snap-'));
@@ -38,6 +42,19 @@ async function fakeSnapshotDir(): Promise<string> {
 }
 
 describe('publishSnapshotDir', () => {
+  test('rejects machine names that are not one safe path segment', async () => {
+    const layoutDir = await mkdtemp(path.join(os.tmpdir(), 'publish-layout-'));
+    await expect(
+      publishSnapshotDir({
+        snapDir: await fakeSnapshotDir(),
+        name: '../escape',
+        manifest: GUEST_MANIFEST,
+        layoutDir,
+        compatibility: { shell: SHELL },
+      }),
+    ).rejects.toThrow(/machine name.*invalid/i);
+  });
+
   test('writes blobs, bundle.json, and a vmstate-only mf-manifest.json into the layout', async () => {
     const snapDir = await fakeSnapshotDir();
     const layoutDir = await mkdtemp(path.join(os.tmpdir(), 'publish-layout-'));
@@ -47,6 +64,7 @@ describe('publishSnapshotDir', () => {
       name: 'vm_machine',
       manifest: GUEST_MANIFEST,
       layoutDir,
+      compatibility: { shell: SHELL },
     });
 
     const machineDir = path.join(layoutDir, 'machines', 'vm_machine');
@@ -83,6 +101,28 @@ describe('publishSnapshotDir', () => {
     expect(published.descriptor.format).toBe(VMSTATE_FORMAT);
   });
 
+  test('published digest-addressed blobs do not follow later source mutations', async () => {
+    const snapDir = await fakeSnapshotDir();
+    const layoutDir = await mkdtemp(path.join(os.tmpdir(), 'publish-layout-'));
+    const published = await publishSnapshotDir({
+      snapDir,
+      name: 'vm_machine',
+      manifest: GUEST_MANIFEST,
+      layoutDir,
+      compatibility: { shell: SHELL },
+    });
+
+    await writeFile(path.join(snapDir, 'state.vmstate'), Buffer.from('mutated'));
+
+    const blobPath = path.join(
+      published.machineDir,
+      'blobs',
+      'sha256',
+      hex(FILES['state.vmstate']),
+    );
+    expect(await readFile(blobPath)).toEqual(FILES['state.vmstate']);
+  });
+
   test('republishing writes a second bundle and the manifest advertises the latest', async () => {
     // createdAt is part of the bundle bytes, so each publish gets its own
     // digest and bundle dir; blobs dedupe by content underneath.
@@ -94,12 +134,14 @@ describe('publishSnapshotDir', () => {
       name: 'vm_machine',
       manifest: GUEST_MANIFEST,
       layoutDir,
+      compatibility: { shell: SHELL },
     });
     const second = await publishSnapshotDir({
       snapDir,
       name: 'vm_machine',
       manifest: GUEST_MANIFEST,
       layoutDir,
+      compatibility: { shell: SHELL },
     });
     expect(existsSync(first.bundlePath)).toBe(true);
     expect(existsSync(second.bundlePath)).toBe(true);
@@ -119,7 +161,7 @@ describe('publishSnapshotDir', () => {
       name: 'vm_machine',
       manifest: GUEST_MANIFEST,
       layoutDir,
-      compatibility: { platform: 'linux/never-arch', machinenRuntime: '9.9.9' },
+      compatibility: { platform: 'linux/never-arch', machinenRuntime: '9.9.9', shell: SHELL },
     });
     const bundle = parseVmstateBundleManifest(
       await readFile(published.bundlePath, 'utf8'),
@@ -128,6 +170,23 @@ describe('publishSnapshotDir', () => {
     expect(bundle.compatibility.platform).toBe('linux/never-arch');
     expect(bundle.compatibility.machinenRuntime).toBe('9.9.9');
     expect(published.descriptor.platform).toBe('linux/never-arch');
+  });
+
+  test('rejects malformed shell compatibility', async () => {
+    await expect(
+      publishSnapshotDir({
+        snapDir: await fakeSnapshotDir(),
+        name: 'vm_machine',
+        manifest: GUEST_MANIFEST,
+        layoutDir: await mkdtemp(path.join(os.tmpdir(), 'publish-layout-')),
+        compatibility: {
+          shell: {
+            ...SHELL,
+            rootfsDigest: 'not-a-digest',
+          },
+        },
+      }),
+    ).rejects.toThrow(/compatibility\.shell.*sha256/i);
   });
 });
 
@@ -144,6 +203,7 @@ describe('startArtifactEndpoint', () => {
       name: 'vm_machine',
       manifest: GUEST_MANIFEST,
       layoutDir,
+      compatibility: { shell: SHELL },
     });
     if (extraMachine) {
       await publishSnapshotDir({
@@ -151,6 +211,7 @@ describe('startArtifactEndpoint', () => {
         name: extraMachine,
         manifest: { ...GUEST_MANIFEST, name: extraMachine },
         layoutDir,
+        compatibility: { shell: SHELL },
       });
     }
     const endpoint = await startArtifactEndpoint({ layoutDir });

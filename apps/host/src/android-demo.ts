@@ -272,8 +272,10 @@ async function snapshotVm(outDir: string): Promise<number> {
   await mkdir(path.dirname(outDir), { recursive: true });
   // Snapshot through an attach() handle (boot-owned handles can deadlock
   // under the CRIU engine — same workaround as the machinen driver).
-  const snapVm = await runtime.attach({ pid: vm.pid });
+  const livePid = vm.pid;
+  const snapVm = await runtime.attach({ pid: livePid });
   await snapVm.snapshot({ outDir, timeoutMs: 300_000 });
+  vm = await runtime.attach({ pid: livePid });
   // The snapshot writes the rootdisk copy non-sparse — every unwritten
   // block lands as literal zeros. Re-dig the holes: zeros read back as
   // zeros either way, so restores are byte-identical, but the bundle's

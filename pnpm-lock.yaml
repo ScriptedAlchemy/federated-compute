@@ -21,6 +21,9 @@ importers:
         specifier: ^2.5.1
         version: 2.5.1
     devDependencies:
+      '@machinen/cli':
+        specifier: 0.6.1
+        version: 0.6.1
       '@machinen/runtime':
         specifier: 0.6.1
         version: 0.6.1
@@ -35,6 +38,16 @@ importers:
         version: 5.9.3
 
   apps/machine-analytics:
+    dependencies:
+      '@federated-compute/machinen-plugin':
+        specifier: workspace:*
+        version: link:../../packages/runtime-plugin
+    devDependencies:
+      '@rsbuild/core':
+        specifier: ^2.0.9
+        version: 2.0.11
+
+  apps/machine-artifact:
     dependencies:
       '@federated-compute/machinen-plugin':
         specifier: workspace:*

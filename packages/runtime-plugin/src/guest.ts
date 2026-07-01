@@ -281,6 +281,171 @@ async function readJsonBody(
   return parsed as Record<string, unknown>;
 }
 
+interface GuestRouteContext {
+  guest: GuestRuntime;
+  guestName: string;
+  exposeStacks: boolean;
+  image?: ImageArtifact;
+  artifacts?: MachineExposeManifest['artifacts'];
+}
+
+function handleMetadataRoute(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  { guest, guestName, image, artifacts }: GuestRouteContext,
+): boolean {
+  if (req.method === 'GET' && req.url === '/mf/health') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, name: guestName }));
+    return true;
+  }
+
+  if (req.method === 'GET' && req.url === '/mf-manifest.json') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ...guest.manifest(), ...(artifacts ? { artifacts } : {}) }));
+    return true;
+  }
+
+  if (req.method === 'GET' && req.url === '/mf-image' && image) {
+    res.writeHead(200, {
+      'content-type': image.descriptor.mediaType ?? 'application/octet-stream',
+      'content-length': image.bytes.length,
+      'x-mf-digest': image.descriptor.digest!,
+      'x-mf-format': image.descriptor.format,
+    });
+    res.end(image.bytes);
+    return true;
+  }
+
+  if (req.method === 'GET' && req.url === '/mf-snapshot' && image && guest.state) {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(
+      JSON.stringify({
+        name: guestName,
+        imageDigest: image.descriptor.digest,
+        state: guest.state.dehydrate(),
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    return true;
+  }
+
+  // Type distribution: the machine's own bindings, MF's @mf-types analog.
+  if (req.method === 'GET' && req.url === '/mf-types.ts') {
+    res.writeHead(200, { 'content-type': 'application/typescript' });
+    res.end(generateBindings(guest.manifest()));
+    return true;
+  }
+
+  return false;
+}
+
+async function handleStateRoute(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  { guest, exposeStacks }: GuestRouteContext,
+): Promise<boolean> {
+  if (req.url !== '/mf/state') return false;
+
+  if (!guest.state) {
+    res.writeHead(501, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: { message: 'state capture not supported by this machine', type: 'StateError' },
+      }),
+    );
+    return true;
+  }
+
+  if (req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, state: guest.state.dehydrate() }));
+    return true;
+  }
+
+  if (req.method !== 'POST') return false;
+
+  const body = await readJsonBody(req, res);
+  if (!body) return true;
+
+  try {
+    guest.state.rehydrate(body.state);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (error) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(errorBody(error, exposeStacks)));
+  }
+  return true;
+}
+
+async function writeStreamResponse(
+  res: http.ServerResponse,
+  openStream: () => AsyncIterable<unknown>,
+  exposeStacks: boolean,
+): Promise<void> {
+  res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+  // Respect socket backpressure (wait for 'drain' when the buffer is
+  // full) and stop producing as soon as the connection goes away.
+  const closed = new AbortController();
+  res.once('close', () => closed.abort());
+  const write = async (line: string) => {
+    if (!res.write(line)) {
+      await once(res, 'drain', { signal: closed.signal }).catch(() => {});
+    }
+  };
+
+  try {
+    for await (const chunk of openStream()) {
+      if (closed.signal.aborted) break;
+      await write(`${JSON.stringify({ chunk })}\n`);
+    }
+    if (!closed.signal.aborted) await write(`${JSON.stringify({ done: true })}\n`);
+  } catch (error) {
+    if (!closed.signal.aborted) {
+      await write(`${JSON.stringify({ error: errorBody(error, exposeStacks).error })}\n`);
+    }
+  }
+  res.end();
+}
+
+async function handleCallRoute(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  { guest, exposeStacks }: GuestRouteContext,
+): Promise<boolean> {
+  if (req.method !== 'POST' || req.url !== '/mf/call') return false;
+
+  const body = await readJsonBody(req, res);
+  if (!body) return true;
+  const { module: modulePath, fn, args } = body as {
+    module: string;
+    fn: string;
+    args?: unknown[];
+  };
+
+  const signature = guest.signature(modulePath, fn);
+  if (signature?.stream) {
+    await writeStreamResponse(
+      res,
+      () => guest.dispatchStream(modulePath, fn, args ?? []),
+      exposeStacks,
+    );
+    return true;
+  }
+
+  try {
+    const result = await guest.dispatch(modulePath, fn, args ?? []);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, result }));
+  } catch (error) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(errorBody(error, exposeStacks)));
+  }
+  return true;
+}
+
 /**
  * Serve a guest runtime over HTTP (`GET /mf-manifest.json`, `GET /mf/health`,
  * `POST /mf/call`). Streaming functions respond as NDJSON. Under
@@ -298,123 +463,14 @@ export async function serveGuest(guest: GuestRuntime, opts: ServeGuestOptions): 
   const artifacts: MachineExposeManifest['artifacts'] = image
     ? { image: image.descriptor, ...(guest.state ? { snapshot: SNAPSHOT_DESCRIPTOR } : {}) }
     : undefined;
+  const routeContext: GuestRouteContext = { guest, guestName, exposeStacks, image, artifacts };
 
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.method === 'GET' && req.url === '/mf/health') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, name: guestName }));
-        return;
-      }
-      if (req.method === 'GET' && req.url === '/mf-manifest.json') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ...guest.manifest(), ...(artifacts ? { artifacts } : {}) }));
-        return;
-      }
-      if (req.method === 'GET' && req.url === '/mf-image' && image) {
-        res.writeHead(200, {
-          'content-type': image.descriptor.mediaType ?? 'application/octet-stream',
-          'content-length': image.bytes.length,
-          'x-mf-digest': image.descriptor.digest!,
-          'x-mf-format': image.descriptor.format,
-        });
-        res.end(image.bytes);
-        return;
-      }
-      if (req.method === 'GET' && req.url === '/mf-snapshot' && image && guest.state) {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(
-          JSON.stringify({
-            name: guestName,
-            imageDigest: image.descriptor.digest,
-            state: guest.state.dehydrate(),
-            createdAt: new Date().toISOString(),
-          }),
-        );
-        return;
-      }
-      // Type distribution: the machine's own bindings, MF's @mf-types analog.
-      if (req.method === 'GET' && req.url === '/mf-types.ts') {
-        res.writeHead(200, { 'content-type': 'application/typescript' });
-        res.end(generateBindings(guest.manifest()));
-        return;
-      }
-      if (req.url === '/mf/state') {
-        if (!guest.state) {
-          res.writeHead(501, { 'content-type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              ok: false,
-              error: { message: 'state capture not supported by this machine', type: 'StateError' },
-            }),
-          );
-          return;
-        }
-        if (req.method === 'GET') {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, state: guest.state.dehydrate() }));
-          return;
-        }
-        if (req.method === 'POST') {
-          const body = await readJsonBody(req, res);
-          if (!body) return;
-          try {
-            guest.state.rehydrate(body.state);
-            res.writeHead(200, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ ok: true }));
-          } catch (error) {
-            res.writeHead(200, { 'content-type': 'application/json' });
-            res.end(JSON.stringify(errorBody(error, exposeStacks)));
-          }
-          return;
-        }
-      }
-      if (req.method === 'POST' && req.url === '/mf/call') {
-        const body = await readJsonBody(req, res);
-        if (!body) return;
-        const { module: modulePath, fn, args } = body as {
-          module: string;
-          fn: string;
-          args?: unknown[];
-        };
+      if (handleMetadataRoute(req, res, routeContext)) return;
+      if (await handleStateRoute(req, res, routeContext)) return;
+      if (await handleCallRoute(req, res, routeContext)) return;
 
-        const signature = guest.signature(modulePath, fn);
-        if (signature?.stream) {
-          res.writeHead(200, { 'content-type': 'application/x-ndjson' });
-          // Respect socket backpressure (wait for 'drain' when the buffer is
-          // full) and stop producing as soon as the connection goes away.
-          const closed = new AbortController();
-          res.once('close', () => closed.abort());
-          const write = async (line: string) => {
-            if (!res.write(line)) {
-              await once(res, 'drain', { signal: closed.signal }).catch(() => {});
-            }
-          };
-          try {
-            for await (const chunk of guest.dispatchStream(modulePath, fn, args ?? [])) {
-              if (closed.signal.aborted) break;
-              await write(`${JSON.stringify({ chunk })}\n`);
-            }
-            if (!closed.signal.aborted) await write(`${JSON.stringify({ done: true })}\n`);
-          } catch (error) {
-            if (!closed.signal.aborted) {
-              await write(`${JSON.stringify({ error: errorBody(error, exposeStacks).error })}\n`);
-            }
-          }
-          res.end();
-          return;
-        }
-
-        try {
-          const result = await guest.dispatch(modulePath, fn, args ?? []);
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, result }));
-        } catch (error) {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(errorBody(error, exposeStacks)));
-        }
-        return;
-      }
       res.writeHead(404);
       res.end();
     } catch (error) {

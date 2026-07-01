@@ -11,6 +11,12 @@ export interface ComputeMachineCounter {
   increment(): Promise<number>;
 }
 
+export interface ComputeMachineFluid {
+  acceptBackhaul(from: string, chunk: string): Promise<{ accepted: boolean; inboxSize: number; from: string; pid: number }>;
+  compute(query: string, placement: string): Promise<{ chunk: string; words: number; placement: string; pid: number; node: string }>;
+  inbox(): Promise<{ from: string; chunk: string; at: string }[]>;
+}
+
 export interface ComputeMachineMath {
   add(a: number, b: number): Promise<number>;
   countdown(from: number): AsyncIterable<number>;
@@ -35,6 +41,7 @@ export interface ComputeMachineText {
 export interface ComputeMachineModules {
   './admin': ComputeMachineAdmin;
   './counter': ComputeMachineCounter;
+  './fluid': ComputeMachineFluid;
   './math': ComputeMachineMath;
   './solver': ComputeMachineSolver;
   './system': ComputeMachineSystem;
@@ -43,6 +50,7 @@ export interface ComputeMachineModules {
 
 export const admin = machineModule<ComputeMachineAdmin>('compute_machine', './admin', { version: '^1.0.0' });
 export const counter = machineModule<ComputeMachineCounter>('compute_machine', './counter', { version: '^1.0.0' });
+export const fluid = machineModule<ComputeMachineFluid>('compute_machine', './fluid', { version: '^1.0.0' });
 export const math = machineModule<ComputeMachineMath>('compute_machine', './math', { version: '^1.0.0', streams: ['countdown'] });
 export const solver = machineModule<ComputeMachineSolver>('compute_machine', './solver', { version: '^1.0.0' });
 export const system = machineModule<ComputeMachineSystem>('compute_machine', './system', { version: '^1.0.0' });

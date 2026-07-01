@@ -175,34 +175,34 @@ public final class Json {
   }
 
   private static void writeTo(StringBuilder sb, Object value) {
-    switch (value) {
-      case null -> sb.append("null");
-      case String str -> writeString(sb, str);
-      case Boolean b -> sb.append(b);
-      case Number n -> sb.append(n);
-      case Map<?, ?> map -> {
-        sb.append('{');
-        boolean first = true;
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-          if (!first) sb.append(',');
-          first = false;
-          writeString(sb, String.valueOf(entry.getKey()));
-          sb.append(':');
-          writeTo(sb, entry.getValue());
-        }
-        sb.append('}');
+    if (value == null) {
+      sb.append("null");
+    } else if (value instanceof String str) {
+      writeString(sb, str);
+    } else if (value instanceof Boolean || value instanceof Number) {
+      sb.append(value);
+    } else if (value instanceof Map<?, ?> map) {
+      sb.append('{');
+      boolean first = true;
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        if (!first) sb.append(',');
+        first = false;
+        writeString(sb, String.valueOf(entry.getKey()));
+        sb.append(':');
+        writeTo(sb, entry.getValue());
       }
-      case Iterable<?> items -> {
-        sb.append('[');
-        boolean first = true;
-        for (Object item : items) {
-          if (!first) sb.append(',');
-          first = false;
-          writeTo(sb, item);
-        }
-        sb.append(']');
+      sb.append('}');
+    } else if (value instanceof Iterable<?> items) {
+      sb.append('[');
+      boolean first = true;
+      for (Object item : items) {
+        if (!first) sb.append(',');
+        first = false;
+        writeTo(sb, item);
       }
-      default -> writeString(sb, String.valueOf(value));
+      sb.append(']');
+    } else {
+      writeString(sb, String.valueOf(value));
     }
   }
 

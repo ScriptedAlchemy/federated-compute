@@ -189,6 +189,8 @@ export interface StreamToTempMessages {
   noBody: () => Error;
   /** Error for a stream that stalled past the idle timeout. */
   stalled: (idleTimeoutMs: number) => Error;
+  /** Error for a stream that served more bytes than advertised. */
+  exceeded?: (maxBytes: number) => Error;
 }
 
 /**
@@ -202,6 +204,7 @@ export async function streamHashedToTemp(
   temp: string,
   idleTimeoutMs: number,
   messages: StreamToTempMessages,
+  maxBytes?: number,
 ): Promise<{ bytesFetched: number; hex: string }> {
   if (!res.body) throw messages.noBody();
   // Open before taking the reader: an open failure must not strand an
@@ -235,6 +238,9 @@ export async function streamHashedToTemp(
       if (done) break;
       hash.update(value);
       bytesFetched += value.byteLength;
+      if (maxBytes !== undefined && bytesFetched > maxBytes) {
+        throw messages.exceeded?.(maxBytes) ?? new Error(`response body exceeded ${maxBytes} bytes`);
+      }
       await file.write(value);
     }
   } catch (error) {

@@ -49,9 +49,13 @@
     "semver": "^7.8.3"
   },
   "peerDependencies": {
+    "@machinen/cli": "^0.6.1",
     "@machinen/runtime": "^0.6.1"
   },
   "peerDependenciesMeta": {
+    "@machinen/cli": {
+      "optional": true
+    },
     "@machinen/runtime": {
       "optional": true
     }

@@ -20,6 +20,10 @@ const MANIFEST: MachineExposeManifest = {
   version: '2.0.0',
   exposes: { './counter': { increment: { params: [], returns: 'number' } } },
 };
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 // The MF runtime caches loaded remotes globally by name/module, so every
 // test gets its own remote name + producer entry (client.test.ts pattern).
@@ -47,7 +51,7 @@ function producerDriver(snapDir: string): MachineDriver {
   const handle: MachineHandle = {
     manifest: async () => MANIFEST,
     call: async () => 2,
-    snapshot: async () => ({ snapDir, image: 'base.tar.gz' }),
+    snapshot: async () => ({ snapDir, image: 'base.tar.gz', shell: SHELL }),
   };
   return { boot: async () => handle };
 }
@@ -99,7 +103,7 @@ describe('vmstate fork-by-pull, fakes for the VM only', () => {
       name,
       `machinen+pull+${published.url}?artifact=vmstate&version=^2.0.0`,
     );
-    const resolution = await resolvePullEntry(spec, { cacheDir });
+    const resolution = await resolvePullEntry(spec, { cacheDir, vmstateShell: SHELL });
 
     expect(resolution.artifact).toBe('vmstate');
     expect(await isMachinenSnapshotDir(resolution.localPath)).toBe(true);
@@ -117,6 +121,7 @@ describe('vmstate fork-by-pull, fakes for the VM only', () => {
     const consumer = createMachines({
       driver: recordingConsumerDriver(booted),
       artifactCacheDir: cacheDir,
+      vmstateShell: SHELL,
       remotes: { [name]: `machinen+pull+${published.url}?artifact=vmstate` },
     });
     clients.push(consumer);
@@ -135,6 +140,7 @@ describe('vmstate fork-by-pull, fakes for the VM only', () => {
     const consumer = createMachines({
       driver: recordingConsumerDriver(booted),
       artifactCacheDir: cacheDir,
+      vmstateShell: SHELL,
       remotes: { [name]: `machinen+pull+${rootUrl}?artifact=vmstate` },
     });
     clients.push(consumer);
@@ -148,9 +154,9 @@ describe('vmstate fork-by-pull, fakes for the VM only', () => {
     const spec = (suffix: string) =>
       parseMachineEntry(name, `machinen+pull+${published.url}?artifact=vmstate${suffix}`);
 
-    const first = await resolvePullEntry(spec(''), { cacheDir });
+    const first = await resolvePullEntry(spec(''), { cacheDir, vmstateShell: SHELL });
     const pinnedEntry = `&digest=${published.digest}`;
-    const second = await resolvePullEntry(spec(pinnedEntry), { cacheDir });
+    const second = await resolvePullEntry(spec(pinnedEntry), { cacheDir, vmstateShell: SHELL });
 
     expect(first.localPath).toBe(second.localPath);
     expect(second.fromCache).toBe(true);

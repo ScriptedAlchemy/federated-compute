@@ -50,6 +50,7 @@ const PUBLIC_DIR = path.resolve(import.meta.dirname, '../public');
 const PAGES: Record<string, string> = {
   '/': 'index.html',
   '/gravity': 'gravity.html',
+  '/fluid': 'fluid.html',
   '/android': 'android.html',
   '/screen': 'screen.html',
 };

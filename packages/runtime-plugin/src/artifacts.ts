@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import semverSatisfies from 'semver/functions/satisfies.js';
-import semverValid from 'semver/functions/valid.js';
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
@@ -13,13 +11,13 @@ import {
   tempCachePath,
   verifyCachedFile,
 } from './blob-cache.js';
-import { MachineVersionError } from './errors.js';
 import {
   formatMachineEntry,
   type ArtifactDescriptor,
   type MachineExposeManifest,
   type MachineSpec,
 } from './types.js';
+import { assertManifestVersion } from './compatibility.js';
 import {
   VMSTATE_FORMAT,
   ensureBlobCached,
@@ -30,6 +28,7 @@ import {
   vmstateCompatibilityError,
   type CachedBlob,
   type VmstateBundleManifest,
+  type VmstateShellIdentity,
 } from './vmstate.js';
 
 // Test-only memo observability, re-exported from the shared cache module so
@@ -45,6 +44,7 @@ export { resetVerifyMemo, verifyMemoCounters } from './blob-cache.js';
  */
 
 export const DEFAULT_ARTIFACT_CACHE_DIR = path.join('.machinen', 'cache');
+export const DEFAULT_PULL_BODY_MAX_BYTES = 5 * 1024 * 1024;
 
 const DIGEST_RE = /^sha256:([a-f0-9]{64})$/;
 // Drivers dispatch boot commands on the extension; a hostile manifest must
@@ -81,12 +81,19 @@ export interface ResolvePullOptions {
    * capping the total transfer time of large artifacts. Default 30s.
    */
   streamIdleTimeoutMs?: number;
+  /** Max bytes buffered for manifest/snapshot/vmstate JSON bodies. Default 5 MiB. */
+  maxBodyBytes?: number;
   /**
    * Override the installed @machinen/runtime version used for vmstate
    * compatibility negotiation. Default: read from the installed package.
    * (Exists for hermetic tests and unusual ops setups.)
    */
   machinenRuntimeVersion?: string;
+  /**
+   * Local MachineN shell available for vmstate restores. When set, vmstate
+   * pulls must declare the same shell before any snapshot blobs are fetched.
+   */
+  vmstateShell?: VmstateShellIdentity;
 }
 
 /** ResolvePullOptions with defaults applied, threaded through resolution. */
@@ -94,8 +101,10 @@ interface PullContext {
   cacheDir: string;
   fetchTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  maxBodyBytes: number;
   /** Undefined means "read from the installed package" at the vmstate gate. */
   machinenRuntimeVersion?: string;
+  vmstateShell?: VmstateShellIdentity;
 }
 
 /** The wire shape of an `app-state@1` snapshot (`GET /mf-snapshot`). */
@@ -112,6 +121,11 @@ interface MaterializedSnapBundle {
   image: string;
   state: unknown;
   createdAt: string;
+}
+
+interface CachedVmstateFiles {
+  blobPaths: string[];
+  bytesFetched: number;
 }
 
 function failMessage(spec: MachineSpec, message: string): string {
@@ -153,6 +167,9 @@ async function fetchOk(
   return fetchOkWith(url, what, timeoutMs, scope, (message) => fail(spec, message));
 }
 
+/** Sentinel for readBodyOk's own size-limit refusal (vs transport errors). */
+class BodyLimitError extends Error {}
+
 /**
  * Read a small response body whose request carries a 'request'-scoped
  * deadline, converting a mid-body abort into the machine-named timeout
@@ -164,32 +181,35 @@ async function readBodyOk(
   url: string,
   what: string,
   timeoutMs: number,
+  maxBytes: number,
 ): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
   try {
-    return await res.text();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new BodyLimitError(`${what} body from ${url} exceeded ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString('utf8');
   } catch (error) {
-    if ((error as Error).name === 'TimeoutError' || (error as Error).name === 'AbortError') {
+    const err = error instanceof Error ? error : new Error(String(error));
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
       fail(spec, `${what} request to ${url} timed out after ${timeoutMs}ms while reading the body`);
     }
-    fail(spec, `${what} body from ${url} could not be read: ${(error as Error).message}`);
-  }
-}
-
-function checkOriginVersion(spec: MachineSpec, manifest: MachineExposeManifest): void {
-  const required = spec.params.get('version');
-  if (!required) return;
-  const actual = manifest.version;
-  if (!actual || !semverValid(actual)) {
-    throw new MachineVersionError(
-      `[machinen-plugin] pull "${spec.remoteName}": entry requires version "${required}" but the origin manifest has no valid version (got "${actual}")`,
-      { required, reported: actual },
-    );
-  }
-  if (!semverSatisfies(actual, required)) {
-    throw new MachineVersionError(
-      `[machinen-plugin] pull "${spec.remoteName}": origin version mismatch before download: required "${required}", origin reports "${actual}"`,
-      { required, reported: actual },
-    );
+    if (err instanceof BodyLimitError) {
+      fail(spec, err.message);
+    }
+    fail(spec, `${what} body from ${url} could not be read: ${err.message}`);
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -231,16 +251,30 @@ async function streamVerifiedToTemp(
   spec: MachineSpec,
   res: Response,
   expectedDigest: string,
+  expectedBytes: number | undefined,
   temp: string,
   idleTimeoutMs: number,
 ): Promise<number> {
-  const { bytesFetched, hex } = await streamHashedToTemp(res, temp, idleTimeoutMs, {
-    noBody: () => new Error(failMessage(spec, 'image artifact response had no body')),
-    stalled: (ms) =>
-      new Error(
-        failMessage(spec, `image artifact body stalled: no data for ${ms}ms (stream idle timeout)`),
-      ),
-  });
+  const { bytesFetched, hex } = await streamHashedToTemp(
+    res,
+    temp,
+    idleTimeoutMs,
+    {
+      noBody: () => new Error(failMessage(spec, 'image artifact response had no body')),
+      stalled: (ms) =>
+        new Error(
+          failMessage(
+            spec,
+            `image artifact body stalled: no data for ${ms}ms (stream idle timeout)`,
+          ),
+        ),
+      exceeded: (maxBytes) =>
+        new Error(
+          failMessage(spec, `image artifact body exceeded advertised size ${maxBytes} bytes`),
+        ),
+    },
+    expectedBytes,
+  );
   const actual = `sha256:${hex}`;
   if (actual !== expectedDigest) {
     fail(
@@ -298,6 +332,7 @@ async function ensureImageCached(
         spec,
         res,
         expectedDigest,
+        descriptor.bytes,
         temp,
         ctx.streamIdleTimeoutMs,
       );
@@ -393,6 +428,74 @@ async function resolveImage(
   };
 }
 
+function parsePulledSnapshot(
+  spec: MachineSpec,
+  url: string,
+  snapshotText: string,
+): PulledSnapshot {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshotText);
+  } catch {
+    fail(spec, `snapshot artifact at ${url} is not valid JSON`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    const got = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : `a ${typeof parsed}`;
+    fail(spec, `snapshot artifact at ${url} is not a JSON object (got ${got})`);
+  }
+  return parsed as PulledSnapshot;
+}
+
+async function ensureSnapshotImageCached(
+  spec: MachineSpec,
+  manifest: MachineExposeManifest,
+  snapshot: PulledSnapshot,
+  imageDigest: string,
+  ctx: PullContext,
+): Promise<CachedImage> {
+  const imageDescriptor = manifest.artifacts?.image;
+  const originDigest = imageDescriptor?.digest;
+  if (imageDescriptor && originDigest === snapshot.imageDigest) {
+    checkPlatform(spec, imageDescriptor);
+    return ensureImageCached(spec, imageDescriptor, snapshot.imageDigest!, ctx);
+  }
+
+  // The cache may still hold it (e.g. pinned earlier); ext must come from
+  // the image descriptor when present, else we cannot name the file.
+  const notCached: () => never = () =>
+    fail(
+      spec,
+      `snapshot references image digest "${snapshot.imageDigest}" but the origin ` +
+        (originDigest ? `serves "${originDigest}"` : 'publishes no image artifact') +
+        ' and the digest is not in the local cache',
+    );
+  if (!imageDescriptor) notCached();
+  const cachePath = path.join(ctx.cacheDir, `${imageDigest}${imageExt(spec, imageDescriptor)}`);
+  if (!(await verifyCachedFile(cachePath, imageDigest))) notCached();
+  return { localPath: cachePath, bytesFetched: 0, fromCache: true };
+}
+
+async function materializeSnapshotBundle(
+  spec: MachineSpec,
+  snapshot: PulledSnapshot,
+  cachedImage: CachedImage,
+  ctx: PullContext,
+): Promise<string> {
+  const bundle: MaterializedSnapBundle = {
+    name: typeof snapshot.name === 'string' ? snapshot.name : spec.remoteName,
+    image: cachedImage.localPath,
+    state: snapshot.state,
+    createdAt:
+      typeof snapshot.createdAt === 'string' ? snapshot.createdAt : new Date().toISOString(),
+  };
+  const bundleJson = JSON.stringify(bundle, null, 2);
+  // Content-addressed bundle name: identical pulled state reuses one file,
+  // and a memoized resolution stays valid across crash-restarts.
+  const snapPath = path.join(ctx.cacheDir, `${sha256Hex(bundleJson)}.snap`);
+  await writeAtomic(snapPath, bundleJson);
+  return snapPath;
+}
+
 async function resolveSnapshot(
   spec: MachineSpec,
   manifest: MachineExposeManifest,
@@ -405,18 +508,15 @@ async function resolveSnapshot(
 
   const url = joinArtifactUrl(spec.url!, descriptor.href);
   const res = await fetchOk(spec, url, 'snapshot artifact', ctx.fetchTimeoutMs);
-  const snapshotText = await readBodyOk(spec, res, url, 'snapshot artifact', ctx.fetchTimeoutMs);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(snapshotText);
-  } catch {
-    fail(spec, `snapshot artifact at ${url} is not valid JSON`);
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    const got = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : `a ${typeof parsed}`;
-    fail(spec, `snapshot artifact at ${url} is not a JSON object (got ${got})`);
-  }
-  const snapshot = parsed as PulledSnapshot;
+  const snapshotText = await readBodyOk(
+    spec,
+    res,
+    url,
+    'snapshot artifact',
+    ctx.fetchTimeoutMs,
+    ctx.maxBodyBytes,
+  );
+  const snapshot = parsePulledSnapshot(spec, url, snapshotText);
   const imageDigest = parseDigest(spec, snapshot.imageDigest, 'snapshot');
   if (snapshot.state === undefined) fail(spec, `snapshot artifact at ${url} carries no "state"`);
 
@@ -435,42 +535,8 @@ async function resolveSnapshot(
   // State travels by value; the image only by digest reference. Resolve the
   // reference: the cache first, then the origin's image artifact — but only
   // when the origin still serves the digest the snapshot references.
-  const imageDescriptor = manifest.artifacts?.image;
-  const originDigest = imageDescriptor?.digest;
-  let cachedImage: CachedImage;
-  if (imageDescriptor && originDigest === snapshot.imageDigest) {
-    checkPlatform(spec, imageDescriptor);
-    cachedImage = await ensureImageCached(spec, imageDescriptor, snapshot.imageDigest!, ctx);
-  } else {
-    // The cache may still hold it (e.g. pinned earlier); ext must come from
-    // the image descriptor when present, else we cannot name the file.
-    const notCached: () => never = () =>
-      fail(
-        spec,
-        `snapshot references image digest "${snapshot.imageDigest}" but the origin ` +
-          (originDigest
-            ? `serves "${originDigest}"`
-            : 'publishes no image artifact') +
-          ' and the digest is not in the local cache',
-      );
-    if (!imageDescriptor) notCached();
-    const cachePath = path.join(ctx.cacheDir, `${imageDigest}${imageExt(spec, imageDescriptor)}`);
-    if (!(await verifyCachedFile(cachePath, imageDigest))) notCached();
-    cachedImage = { localPath: cachePath, bytesFetched: 0, fromCache: true };
-  }
-
-  const bundle: MaterializedSnapBundle = {
-    name: typeof snapshot.name === 'string' ? snapshot.name : spec.remoteName,
-    image: cachedImage.localPath,
-    state: snapshot.state,
-    createdAt:
-      typeof snapshot.createdAt === 'string' ? snapshot.createdAt : new Date().toISOString(),
-  };
-  const bundleJson = JSON.stringify(bundle, null, 2);
-  // Content-addressed bundle name: identical pulled state reuses one file,
-  // and a memoized resolution stays valid across crash-restarts.
-  const snapPath = path.join(ctx.cacheDir, `${sha256Hex(bundleJson)}.snap`);
-  await writeAtomic(snapPath, bundleJson);
+  const cachedImage = await ensureSnapshotImageCached(spec, manifest, snapshot, imageDigest, ctx);
+  const snapPath = await materializeSnapshotBundle(spec, snapshot, cachedImage, ctx);
 
   return {
     spec: rewriteSpec(spec, snapPath),
@@ -483,13 +549,7 @@ async function resolveSnapshot(
   };
 }
 
-async function resolveVmstate(
-  spec: MachineSpec,
-  manifest: MachineExposeManifest,
-  ctx: PullContext,
-  startedAt: number,
-): Promise<PullResolution> {
-  const descriptor = requireDescriptor(spec, manifest, 'vmstate');
+function prepareVmstateDescriptor(spec: MachineSpec, descriptor: ArtifactDescriptor): string {
   checkFormat(spec, descriptor, VMSTATE_FORMAT);
 
   // vmstate is arch-bound and uses the OCI vocabulary; the descriptor gates
@@ -511,11 +571,25 @@ async function resolveVmstate(
       `entry pins digest "${pinned}" but the origin offers "${descriptor.digest}" — the origin's published bundle changed`,
     );
   }
-  const expectedHex = parseDigest(spec, pinned ?? descriptor.digest, 'vmstate artifact');
+  return parseDigest(spec, pinned ?? descriptor.digest, 'vmstate artifact');
+}
 
+async function fetchVmstateBundle(
+  spec: MachineSpec,
+  descriptor: ArtifactDescriptor,
+  expectedHex: string,
+  ctx: PullContext,
+): Promise<VmstateBundleManifest> {
   const bundleUrl = joinArtifactUrl(spec.url!, descriptor.href);
   const res = await fetchOk(spec, bundleUrl, 'vmstate bundle manifest', ctx.fetchTimeoutMs);
-  const bundleText = await readBodyOk(spec, res, bundleUrl, 'vmstate bundle manifest', ctx.fetchTimeoutMs);
+  const bundleText = await readBodyOk(
+    spec,
+    res,
+    bundleUrl,
+    'vmstate bundle manifest',
+    ctx.fetchTimeoutMs,
+    ctx.maxBodyBytes,
+  );
   const actualHex = sha256Hex(bundleText);
   if (actualHex !== expectedHex) {
     fail(
@@ -523,15 +597,18 @@ async function resolveVmstate(
       `vmstate bundle manifest digest mismatch: expected "sha256:${expectedHex}" but ${bundleUrl} served bytes hashing to "sha256:${actualHex}"`,
     );
   }
-  let bundle: VmstateBundleManifest;
   try {
-    bundle = parseVmstateBundleManifest(bundleText, `at ${bundleUrl}`);
+    return parseVmstateBundleManifest(bundleText, `at ${bundleUrl}`);
   } catch (error) {
     fail(spec, (error as Error).message);
   }
+}
 
-  // The requiredVersion analog for hardware/runtime: reject BEFORE any blob
-  // bytes move, with a negotiation-style error instead of a VMM crash.
+function assertVmstateRuntimeCompatible(
+  spec: MachineSpec,
+  bundle: VmstateBundleManifest,
+  ctx: PullContext,
+): void {
   const machinenRuntime = ctx.machinenRuntimeVersion ?? installedMachinenRuntimeVersion();
   if (!machinenRuntime) {
     fail(
@@ -540,12 +617,26 @@ async function resolveVmstate(
         '(it is an optional peer dependency: `pnpm add @machinen/runtime@0.6.1`)',
     );
   }
+  if (!ctx.vmstateShell) {
+    fail(
+      spec,
+      'vmstate pull needs vmstateShell in the plugin or resolver options; refusing to restore ' +
+        'state without a local MachineN shell identity',
+    );
+  }
   const incompatible = vmstateCompatibilityError(bundle.compatibility, {
-    platform: hostOci,
+    platform: ociHostPlatform(),
     machinenRuntime,
+    shell: ctx.vmstateShell,
   });
   if (incompatible) fail(spec, incompatible);
+}
 
+async function cacheVmstateFiles(
+  spec: MachineSpec,
+  bundle: VmstateBundleManifest,
+  ctx: PullContext,
+): Promise<CachedVmstateFiles> {
   const blobDir = path.join(ctx.cacheDir, 'blobs', 'sha256');
   let bytesFetched = 0;
   const blobPaths: string[] = [];
@@ -562,6 +653,23 @@ async function resolveVmstate(
     bytesFetched += blob.fetched;
     blobPaths.push(blob.localPath);
   }
+  return { blobPaths, bytesFetched };
+}
+
+async function resolveVmstate(
+  spec: MachineSpec,
+  manifest: MachineExposeManifest,
+  ctx: PullContext,
+  startedAt: number,
+): Promise<PullResolution> {
+  const descriptor = requireDescriptor(spec, manifest, 'vmstate');
+  const expectedHex = prepareVmstateDescriptor(spec, descriptor);
+  const bundle = await fetchVmstateBundle(spec, descriptor, expectedHex, ctx);
+
+  // The requiredVersion analog for hardware/runtime: reject BEFORE any blob
+  // bytes move, with a negotiation-style error instead of a VMM crash.
+  assertVmstateRuntimeCompatible(spec, bundle, ctx);
+  const { blobPaths, bytesFetched } = await cacheVmstateFiles(spec, bundle, ctx);
 
   const destDir = path.join(ctx.cacheDir, 'vmstate', `sha256-${expectedHex}`);
   await materializeVmstateDir(bundle, blobPaths, destDir);
@@ -598,13 +706,22 @@ export async function resolvePullEntry(
     cacheDir: options.cacheDir ?? DEFAULT_ARTIFACT_CACHE_DIR,
     fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     streamIdleTimeoutMs: options.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    maxBodyBytes: options.maxBodyBytes ?? DEFAULT_PULL_BODY_MAX_BYTES,
     machinenRuntimeVersion: options.machinenRuntimeVersion,
+    vmstateShell: options.vmstateShell,
   };
   await mkdir(ctx.cacheDir, { recursive: true });
 
   const manifestUrl = `${spec.url.replace(/\/+$/, '')}/mf-manifest.json`;
   const res = await fetchOk(spec, manifestUrl, 'origin manifest', ctx.fetchTimeoutMs);
-  const manifestText = await readBodyOk(spec, res, manifestUrl, 'origin manifest', ctx.fetchTimeoutMs);
+  const manifestText = await readBodyOk(
+    spec,
+    res,
+    manifestUrl,
+    'origin manifest',
+    ctx.fetchTimeoutMs,
+    ctx.maxBodyBytes,
+  );
   let manifest: MachineExposeManifest | undefined;
   try {
     manifest = JSON.parse(manifestText) as MachineExposeManifest;
@@ -618,8 +735,8 @@ export async function resolvePullEntry(
     );
   }
   // Fail fast on version mismatch, before any artifact bytes move. The
-  // booted clone is re-validated by the plugin's own checkVersion.
-  checkOriginVersion(spec, manifest);
+  // booted clone is re-validated by the plugin's guest compatibility gate.
+  assertManifestVersion(spec, manifest, 'pull-origin');
 
   const artifact = selectArtifact(spec);
   switch (artifact) {

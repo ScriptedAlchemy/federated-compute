@@ -51,5 +51,21 @@ jobs:
       - name: Data gravity demo (move the code to the data)
         run: node scripts/demo-gravity.mjs
 
+      - name: Enable KVM access for web demo smoke
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            test -r /dev/kvm -a -w /dev/kvm
+          else
+            echo "/dev/kvm is required for the fluid vmstate web smoke"
+            exit 1
+          fi
+
+      - name: Provision Machinen base assets for web demo smoke
+        run: pnpm exec machinen install --json
+
       - name: Web demo smoke
         run: node scripts/demo-web.mjs --smoke

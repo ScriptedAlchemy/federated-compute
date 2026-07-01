@@ -1,8 +1,8 @@
 // Interactive demo backend. The host is a stock Module Federation runtime
 // consumer — createInstance({ remotes, plugins }) + host.loadRemote(...) —
 // exactly the shape from module-federation.io, except the remotes are
-// machines: the machinen plugin claims `machinen+http://` entries and turns
-// them into containers of typed async function proxies.
+// machines: the machinen plugin claims machinen entries and turns them into
+// containers of typed async function proxies.
 //
 // IMPORTANT for readers: federation happens HERE, in this Node process. The
 // browser only ever does plain fetch('/api/...'); every loadRemote below runs
@@ -11,14 +11,16 @@
 // real data captured from the plugin's hooks — so the UI can show exactly
 // what crossed which boundary.
 import { once } from 'node:events';
+import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
+import path from 'node:path';
 import { createInstance } from '@module-federation/runtime';
 import {
   DEFAULT_POLICY,
   MachineVersionError,
-  httpAttachDriver,
   machinenPlugin,
+  parseMachineEntry,
 } from '@federated-compute/machinen-plugin';
 import {
   androidVncPort,
@@ -31,6 +33,12 @@ import {
   handleAndroidStatus,
 } from './android-demo.js';
 import { handleDashboard, logHooks, machineStatus } from './dashboard.js';
+import {
+  disposeFluidLane,
+  handleFluidAdapt,
+  handleFluidPrepare,
+  handleFluidQuery,
+} from './fluid-lane.js';
 import type { ComputeMachineModules } from './generated/compute_machine';
 import type { JavaMachineModules } from './generated/java_machine';
 import type { PythonMachineModules } from './generated/python_machine';
@@ -46,6 +54,7 @@ import {
   lifecycleBody,
   snapPlugin,
 } from './lifecycle.js';
+import { mixedDriver } from './mixed-driver.js';
 import {
   disposeVmLane,
   handleVmBoot,
@@ -75,8 +84,16 @@ const MACHINES = [
   { name: 'analytics_machine', port: 3805, region: 'eu-west' },
 ] as const;
 
-/** Machine entry: deploy-time env override, or the dev-loop default port. */
+const JAVA_VM_IMAGE_ENTRY = `machinen://${path.resolve(
+  import.meta.dirname,
+  '../../remote-java/dist/java_machine.machine',
+)}?memory=2048&version=^1.0.0`;
+
+/** Machine entry: deploy-time env override, optional Java VM, or the dev-loop default port. */
 function entryFor(name: string, port: number): string {
+  if (name === 'java_machine' && process.env.MACHINEN_JAVA_VM === '1') {
+    return process.env.MACHINEN_REMOTE_JAVA_MACHINE ?? JAVA_VM_IMAGE_ENTRY;
+  }
   return (
     process.env[`MACHINEN_REMOTE_${name.toUpperCase()}`] ??
     `machinen+http://127.0.0.1:${port}?version=^1.0.0`
@@ -86,7 +103,13 @@ function entryFor(name: string, port: number): string {
 const remotes = MACHINES.map(({ name, port }) => ({ name, entry: entryFor(name, port) }));
 
 // ---- the entire federation setup ------------------------------------------
-const plugin = machinenPlugin({ driver: httpAttachDriver() });
+const plugin = machinenPlugin({
+  driver: mixedDriver({
+    snapshotDir: path.resolve(import.meta.dirname, '../.machinen/java-vm-snapshots'),
+    bootTimeoutMs: 180_000,
+  }),
+  bootTimeoutMs: 180_000,
+});
 const host = createInstance({
   name: 'host',
   remotes,
@@ -265,7 +288,6 @@ async function handleChaosProbe(_req: http.IncomingMessage, res: http.ServerResp
     });
   }
 }
-// ----------------------------------------------------------------------------
 
 // ---- version negotiation rejection ------------------------------------------
 // Every other trace shows the happy path. This control registers a SECOND
@@ -329,16 +351,42 @@ const MAX_TYPES_BYTES = 1024 * 1024;
 const TYPES_CACHE_TTL_MS = 60_000;
 const typesCache = new Map<string, { types: string; url: string; at: number }>();
 
+/** Answer from the TTL cache when it holds fresh types for this source url. */
+function typesFromCache(res: http.ServerResponse, name: string, url: string): boolean {
+  const cached = typesCache.get(name);
+  if (!cached || cached.url !== url || Date.now() - cached.at >= TYPES_CACHE_TTL_MS) return false;
+  json(res, 200, { machine: name, url: cached.url, types: cached.types });
+  return true;
+}
+
+/** Cache freshly fetched types and answer with them. */
+function serveTypes(res: http.ServerResponse, name: string, url: string, types: string): void {
+  typesCache.set(name, { types, url, at: Date.now() });
+  json(res, 200, { machine: name, url, types });
+}
+
 async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const name = url.searchParams.get('machine') ?? '';
   const machine = remotes.find((r) => r.name === name);
   if (!machine) return json(res, 400, { error: `unknown machine "${name}"` });
+  const spec = parseMachineEntry(name, machine.entry);
+  if (spec.kind === 'image' && spec.image) {
+    const typesFile = path.join(path.dirname(spec.image), 'mf-types.ts');
+    if (typesFromCache(res, name, typesFile)) return;
+    try {
+      const info = await stat(typesFile);
+      if (info.size > MAX_TYPES_BYTES) {
+        return json(res, 502, { error: `machine's /mf-types.ts exceeds ${MAX_TYPES_BYTES} bytes` });
+      }
+      const types = await readFile(typesFile, 'utf8');
+      return serveTypes(res, name, typesFile, types);
+    } catch (error) {
+      return json(res, 502, { error: `machine types artifact unavailable: ${errorMessage(error)}` });
+    }
+  }
   const base = machine.entry.replace(/^machinen\+/, '').split('?')[0];
   const typesUrl = `${base}/mf-types.ts`;
-  const cached = typesCache.get(name);
-  if (cached && cached.url === typesUrl && Date.now() - cached.at < TYPES_CACHE_TTL_MS) {
-    return json(res, 200, { machine: name, url: cached.url, types: cached.types });
-  }
+  if (typesFromCache(res, name, typesUrl)) return;
   let upstream: Response;
   try {
     upstream = await fetch(typesUrl, { signal: AbortSignal.timeout(5_000) });
@@ -366,13 +414,7 @@ async function handleTypes(_req: http.IncomingMessage, res: http.ServerResponse,
       chunks.push(Buffer.from(value));
     }
   }
-  const types = Buffer.concat(chunks).toString();
-  typesCache.set(name, { types, url: typesUrl, at: Date.now() });
-  json(res, 200, {
-    machine: name,
-    url: typesUrl,
-    types,
-  });
+  serveTypes(res, name, typesUrl, Buffer.concat(chunks).toString());
 }
 // ----------------------------------------------------------------------------
 
@@ -418,7 +460,7 @@ async function handleGravityDeploy(_req: http.IncomingMessage, res: http.ServerR
 /**
  * The WAN latency a report actually ran at, read from the latency proxy's
  * control endpoint (instant — the control path skips the simulated delay).
- * Null when the link is unreachable; the UI omits the annotation honestly.
+ * Null when the link is unreachable; the UI omits the annotation.
  */
 async function currentWanLatencyMs(): Promise<number | null> {
   try {
@@ -534,6 +576,13 @@ type RouteHandler = (
 
 const routes = new Map<string, RouteHandler>([
   [
+    'GET /favicon.ico',
+    (_req, res) => {
+      res.writeHead(204, { 'cache-control': 'public, max-age=3600' });
+      res.end();
+    },
+  ],
+  [
     'GET /api/dashboard',
     (req, res) =>
       handleDashboard(req, res, { plugin, machines: MACHINES, remotes, lifecycleBody, vmBody: vmLaneBody }),
@@ -541,6 +590,12 @@ const routes = new Map<string, RouteHandler>([
   ['POST /api/pipeline', handlePipeline],
   ['GET /api/countdown', handleCountdown],
   ['POST /api/counter', handleCounter],
+  // Fluid lane: placement decisions + vmstate prepare/restore (fluid-lane.ts).
+  // The local query path runs at the origin machine, so the lane borrows the
+  // main host instance (same closure wiring as the dashboard route).
+  ['POST /api/fluid/prepare', handleFluidPrepare],
+  ['POST /api/fluid/query', (req, res) => handleFluidQuery(req, res, host)],
+  ['POST /api/fluid/adapt', handleFluidAdapt],
   ['POST /api/chaos/kill', handleChaosKill],
   ['POST /api/chaos/probe', handleChaosProbe],
   ['POST /api/version/demand', handleVersionDemand],
@@ -589,8 +644,7 @@ const server = http.createServer(async (req, res) => {
 
 // GET /vnc upgrade: splice the browser's websocket onto the android lab's
 // forwarded qemu VNC listener. qemu speaks the websocket protocol itself, so
-// this is a dumb TCP pipe — the original upgrade request is replayed verbatim
-// and qemu completes the handshake.
+// the original upgrade request is replayed verbatim.
 server.on('upgrade', (req, socket, head) => {
   const pathname = new URL(req.url ?? '/', `http://localhost:${PORT}`).pathname;
   const target = pathname === '/vnc' ? androidVncPort() : undefined;
@@ -626,6 +680,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     void Promise.allSettled([
       snapPlugin.disposeMachines(),
+      disposeFluidLane(),
       disposeVmLane(),
       disposeAndroidLab(),
     ]).finally(() => {

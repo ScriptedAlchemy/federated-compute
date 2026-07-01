@@ -12,6 +12,10 @@ const MANIFEST: MachineExposeManifest = {
   version: '1.0.0',
   exposes: { './counter': { current: { params: [], returns: 'number' } } },
 };
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 // The MF runtime caches loaded remotes globally by name/module, so every
 // test gets its own remote name + entry (same pattern as client.test.ts).
@@ -38,10 +42,19 @@ function stubVmDriver(snapDir: string, snapshots: unknown[] = []): MachineDriver
     manifest: async () => MANIFEST,
     call: async () => 7,
     snapshot: async () => {
-      const result = { snapDir, image: 'base.tar.gz' };
+      const result = { snapDir, image: 'base.tar.gz', shell: SHELL };
       snapshots.push(result);
       return result;
     },
+  };
+  return { boot: async () => handle };
+}
+
+function stubVmDriverWithoutShell(snapDir: string): MachineDriver {
+  const handle: MachineHandle = {
+    manifest: async () => MANIFEST,
+    call: async () => 7,
+    snapshot: async () => ({ snapDir, image: 'base.tar.gz' }),
   };
   return { boot: async () => handle };
 }
@@ -134,6 +147,21 @@ describe('plugin.publishMachine', () => {
 
     await expect(machines.plugin.publishMachine(name)).rejects.toThrow(
       /machinenDriver/,
+    );
+  });
+
+  test('a vmstate snapshot without a shell identity is refused', async () => {
+    const { name, entry } = unique();
+    const machines = createMachines({
+      driver: stubVmDriverWithoutShell(await fakeSnapshotDir()),
+      publish: { dir: await mkdtemp(path.join(os.tmpdir(), 'plugin-pub-layout-')) },
+      remotes: { [name]: entry },
+    });
+    clients.push(machines);
+    await machines.machine(name).counter.current();
+
+    await expect(machines.plugin.publishMachine(name)).rejects.toThrow(
+      /MachineN shell identity/,
     );
   });
 });

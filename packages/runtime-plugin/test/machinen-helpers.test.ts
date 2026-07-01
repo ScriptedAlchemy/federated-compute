@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -7,9 +9,17 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseMachineEntry, type MachineSpec } from '../src/types.js';
 
 type MachinenModule = typeof import('../src/drivers/machinen.js');
+const SHELL = {
+  rootfsDigest: `sha256:${'1'.repeat(64)}`,
+  kernelDigest: `sha256:${'2'.repeat(64)}`,
+};
 
 const tempDirs: string[] = [];
 const servers: http.Server[] = [];
+
+function digest(bytes: string): string {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+}
 
 async function tempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
@@ -24,8 +34,44 @@ async function writeGuestBundle(): Promise<string> {
   return file;
 }
 
-async function writeSnapshotBundle(guestPort: number): Promise<string> {
+async function writeGuestJar(): Promise<string> {
+  const dir = await tempDir('machinen-helpers-jar-');
+  const file = path.join(dir, 'java-machine.jar');
+  await writeFile(file, 'jar bytes\n');
+  await writeFile(path.join(dir, 'mf-types.ts'), 'export interface JavaMachine {}\n');
+  return file;
+}
+
+async function writeJavaMachineImage(): Promise<string> {
+  const dir = await tempDir('machinen-helpers-java-machine-');
+  await writeFile(path.join(dir, 'guest.jar'), 'jar bytes\n');
+  await writeFile(path.join(dir, 'mf-types.ts'), 'export interface JavaMachine {}\n');
+  await writeFile(
+    path.join(dir, 'machinen-machine.json'),
+    JSON.stringify({
+      format: 'machinen-machine@1',
+      runtime: 'java',
+      program: 'guest.jar',
+      types: 'mf-types.ts',
+      rootDiskSizeBytes: 4 * 1024 ** 3,
+    }),
+  );
+  return dir;
+}
+
+async function writeSnapshotBundle(
+  guestPort: number,
+  shell?: typeof SHELL,
+): Promise<{ dir: string; image: string; kernel: string; shell: typeof SHELL }> {
   const dir = await tempDir('machinen-helpers-snapshot-');
+  const image = path.join(dir, 'rootfs.tar');
+  const kernel = path.join(dir, 'kernel');
+  await writeFile(image, 'rootfs bytes');
+  await writeFile(kernel, 'kernel bytes');
+  const markerShell = shell ?? {
+    rootfsDigest: digest('rootfs bytes'),
+    kernelDigest: digest('kernel bytes'),
+  };
   await writeFile(path.join(dir, 'meta.json'), '{}\n');
   await writeFile(path.join(dir, 'state.vmstate'), '');
   await writeFile(
@@ -33,11 +79,12 @@ async function writeSnapshotBundle(guestPort: number): Promise<string> {
     JSON.stringify({
       remoteName: 'vm_machine',
       guestPort,
-      image: '/base/rootfs.tar',
+      image,
+      shell: markerShell,
       snappedAt: '2026-06-10T00:00:00.000Z',
     }),
   );
-  return dir;
+  return { dir, image, kernel, shell: markerShell };
 }
 
 async function startHealthServer(port: number): Promise<void> {
@@ -60,6 +107,7 @@ async function importMachinen(): Promise<MachinenModule> {
 
 afterEach(async () => {
   vi.doUnmock('@machinen/runtime');
+  vi.doUnmock('node:child_process');
   vi.resetModules();
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -136,6 +184,149 @@ describe('Machinen pure helpers', () => {
 });
 
 describe('Machinen driver unit behavior without KVM', () => {
+  test('fresh boot provisions missing base assets through the MachineN CLI and retries resolution', async () => {
+    const projectRoot = await tempDir('machinen-helpers-project-');
+    const cliBin = '/opt/machinen/bin/machinen';
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const resolveBaseRootfs = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw missing;
+      })
+      .mockReturnValue('/base/rootfs.tar');
+    const bootCalls: Record<string, unknown>[] = [];
+    const logs: string[] = [];
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+    const spawnMock = vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('{"fetched":true}\n'));
+        child.emit('exit', 0, null);
+      });
+      return child;
+    });
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        bootCalls.push(opts);
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs,
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({
+      guestReadyTimeoutMs: 1_000,
+      log: (line) => logs.push(line),
+      machinenCliBin: cliBin,
+      projectRoot,
+    });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`));
+
+    expect(resolveBaseRootfs).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [cliBin, 'install', '--json'],
+      expect.objectContaining({ cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+    expect(resolveBaseRootfs.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+    expect(spawnMock.mock.invocationCallOrder[0]).toBeLessThan(resolveBaseRootfs.mock.invocationCallOrder[1]);
+    expect(bootCalls[0].image).toBe('/base/rootfs.tar');
+    expect(logs.some((line) => line.includes('base assets missing'))).toBe(true);
+    await handle.dispose?.();
+  });
+
+  test('fresh boot can use an injected programmatic base asset provisioner', async () => {
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const resolveBaseRootfs = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw missing;
+      })
+      .mockReturnValue('/base/rootfs.tar');
+    const provisioner = vi.fn();
+    const spawnMock = vi.fn();
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs,
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({
+      baseAssetProvisioner: provisioner,
+      assetProvisionTimeoutMs: 1234,
+      guestReadyTimeoutMs: 1_000,
+    });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`));
+
+    expect(provisioner).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      log: expect.any(Function),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(resolveBaseRootfs).toHaveBeenCalledTimes(2);
+    await handle.dispose?.();
+  });
+
+  test('fresh boot can disable automatic base asset provisioning', async () => {
+    const missing = Object.assign(new Error('base rootfs missing'), { code: 'PROVISION_BASE_NOT_FOUND' });
+    const spawnMock = vi.fn();
+    vi.doMock('node:child_process', () => ({ spawn: spawnMock }));
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore: vi.fn(),
+      resolveBaseRootfs: () => {
+        throw missing;
+      },
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+
+    await expect(
+      machinenDriver({ autoProvisionBaseAssets: false }).boot(
+        parseMachineEntry('vm_machine', `machinen://${await writeGuestBundle()}`),
+      ),
+    ).rejects.toThrow(/base rootfs missing/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   test('fresh boot uses a finite boot timeout and stores the launcher as owner-only', async () => {
     const bootCalls: Record<string, unknown>[] = [];
     const writes: Array<{ guestPath: string; mode?: number; contents: string | Buffer }> = [];
@@ -168,6 +359,103 @@ describe('Machinen driver unit behavior without KVM', () => {
 
     expect(bootCalls[0].timeoutMs).toBe(120_000);
     expect(writes.find((write) => write.guestPath === '/opt/federated/run.sh')?.mode).toBe(0o600);
+    await handle.dispose?.();
+  });
+
+  test('direct jar entries are not Machinen machine images', async () => {
+    const { machinenDriver } = await importMachinen();
+
+    await expect(
+      machinenDriver().boot(parseMachineEntry('java_machine', `machinen://${await writeGuestJar()}`)),
+    ).rejects.toThrow(/machinen-machine@1 image directory/i);
+  });
+
+  test('java machine image installs a JRE, writes the jar payload and types artifact, and launches java', async () => {
+    const bootCalls: Record<string, unknown>[] = [];
+    const writes: Array<{ guestPath: string; mode?: number; contents: string | Buffer }> = [];
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(async (guestPath: string, contents: string | Buffer, opts?: { mode?: number }) => {
+        writes.push({ guestPath, contents, mode: opts?.mode });
+      }),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        bootCalls.push(opts);
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs: () => '/base/rootfs.tar',
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({ guestReadyTimeoutMs: 1_000 });
+    const handle = await driver.boot(parseMachineEntry('java_machine', `machinen://${await writeJavaMachineImage()}`));
+
+    expect(bootCalls[0].rootDiskSizeBytes).toBe(4 * 1024 ** 3);
+    expect(vm.exec).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends default-jre-headless ca-certificates </dev/null',
+      ),
+      { execTimeoutMs: 240_000 },
+    );
+    expect(vm.exec).toHaveBeenCalledWith(expect.stringContaining('mkdir -p /usr/share/man/man1'), {
+      execTimeoutMs: 240_000,
+    });
+    expect(vm.exec).toHaveBeenCalledWith(expect.stringContaining('/var/log/apt/term.log'), {
+      execTimeoutMs: 240_000,
+    });
+    expect(writes.find((write) => write.guestPath === '/opt/federated/guest.jar')?.contents).toEqual(
+      Buffer.from('jar bytes\n'),
+    );
+    expect(writes.find((write) => write.guestPath === '/opt/federated/mf-types.ts')?.contents).toEqual(
+      Buffer.from('export interface JavaMachine {}\n'),
+    );
+    const launcher = String(writes.find((write) => write.guestPath === '/opt/federated/run.sh')?.contents);
+    expect(launcher).toContain("export HOST='0.0.0.0'");
+    expect(launcher).toContain("export MACHINEN_TYPES_FILE='/opt/federated/mf-types.ts'");
+    expect(launcher).toContain('exec java -jar /opt/federated/guest.jar');
+    await handle.dispose?.();
+  });
+
+  test('java machine image boot accepts a root disk size override from the entry', async () => {
+    const bootCalls: Record<string, unknown>[] = [];
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(async (opts: Record<string, unknown>) => {
+        bootCalls.push(opts);
+        const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+        await startHealthServer(hostPort);
+        return vm;
+      }),
+      restore: vi.fn(),
+      resolveBaseRootfs: () => '/base/rootfs.tar',
+      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({ guestReadyTimeoutMs: 1_000 });
+    const handle = await driver.boot(
+      parseMachineEntry('java_machine', `machinen://${await writeJavaMachineImage()}?rootDiskSizeBytes=5368709120`),
+    );
+
+    expect(bootCalls[0].rootDiskSizeBytes).toBe(5 * 1024 ** 3);
     await handle.dispose?.();
   });
 
@@ -232,6 +520,125 @@ describe('Machinen driver unit behavior without KVM', () => {
     expect(vm.kill).toHaveBeenCalledTimes(1);
   });
 
+  test('direct snapshot restore rejects malformed shell markers before restore', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    await writeFile(
+      path.join(sourceSnap.dir, 'federated-machine.json'),
+      JSON.stringify({
+        remoteName: 'vm_machine',
+        guestPort: 4707,
+        image: sourceSnap.image,
+        shell: {},
+        snappedAt: '2026-06-10T00:00:00.000Z',
+      }),
+    );
+    const restore = vi.fn();
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => '/base/rootfs.tar',
+      resolveBaseKernel: () => sourceSnap.kernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    await expect(
+      machinenDriver().boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`)),
+    ).rejects.toThrow(/invalid MachineN shell marker/);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('direct snapshot restore rejects local shell mismatches before restore', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    const otherKernel = path.join(await tempDir('machinen-helpers-other-kernel-'), 'kernel');
+    await writeFile(otherKernel, 'different kernel bytes');
+    const restore = vi.fn();
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => otherKernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    await expect(
+      machinenDriver().boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`)),
+    ).rejects.toThrow(/shell mismatch/);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('direct snapshot restore rejects out-of-range marker guest ports before restore', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    await writeFile(
+      path.join(sourceSnap.dir, 'federated-machine.json'),
+      JSON.stringify({
+        remoteName: 'vm_machine',
+        guestPort: 70_000,
+        image: sourceSnap.image,
+        shell: sourceSnap.shell,
+        snappedAt: '2026-06-10T00:00:00.000Z',
+      }),
+    );
+    const restore = vi.fn();
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => sourceSnap.kernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    await expect(
+      machinenDriver().boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`)),
+    ).rejects.toThrow(/invalid MachineN shell marker/);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('restore derives the local shell from local assets, never the marker image path', async () => {
+    const sourceSnap = await writeSnapshotBundle(4707);
+    // A bundle moved across hosts records the PRODUCER's rootfs path. The
+    // consumer must never read it (it may not exist, or worse, point at a
+    // hostile file) — the restore still works when the local shell matches.
+    await writeFile(
+      path.join(sourceSnap.dir, 'federated-machine.json'),
+      JSON.stringify({
+        remoteName: 'vm_machine',
+        guestPort: 4707,
+        image: '/producer-host/only/rootfs.tar',
+        shell: sourceSnap.shell,
+        snappedAt: '2026-06-10T00:00:00.000Z',
+      }),
+    );
+    const vm = {
+      pid: 1,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFile: vi.fn(),
+      snapshot: vi.fn(),
+      kill: vi.fn(async () => {}),
+    };
+    const restore = vi.fn(async (opts: Record<string, unknown>) => {
+      const [{ hostPort }] = opts.portForward as Array<{ hostPort: number; guestPort: number }>;
+      await startHealthServer(hostPort);
+      return vm;
+    });
+    vi.doMock('@machinen/runtime', () => ({
+      boot: vi.fn(),
+      restore,
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => sourceSnap.kernel,
+      resolveBaseDtb: () => undefined,
+    }));
+
+    const { machinenDriver } = await importMachinen();
+    const driver = machinenDriver({ guestReadyTimeoutMs: 1_000 });
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`));
+
+    expect(restore).toHaveBeenCalledTimes(1);
+    await handle.dispose?.();
+  });
+
   test('snapshotting a restored VM records the marker guest port used for restore', async () => {
     const restoreCalls: Record<string, unknown>[] = [];
     const vm = {
@@ -256,6 +663,7 @@ describe('Machinen driver unit behavior without KVM', () => {
       kill: vi.fn(async () => {}),
     };
     const attach = vi.fn(async () => snapVm);
+    const sourceSnap = await writeSnapshotBundle(4707);
     vi.doMock('@machinen/runtime', () => ({
       boot: vi.fn(),
       restore: vi.fn(async (opts: Record<string, unknown>) => {
@@ -265,16 +673,15 @@ describe('Machinen driver unit behavior without KVM', () => {
         return vm;
       }),
       attach,
-      resolveBaseRootfs: () => '/base/rootfs.tar',
-      resolveBaseKernel: () => '/base/kernel',
+      resolveBaseRootfs: () => sourceSnap.image,
+      resolveBaseKernel: () => sourceSnap.kernel,
       resolveBaseDtb: () => undefined,
     }));
 
     const { machinenDriver } = await importMachinen();
     const snapshotDir = await tempDir('machinen-helpers-output-');
-    const sourceSnap = await writeSnapshotBundle(4707);
     const driver = machinenDriver({ snapshotDir, guestReadyTimeoutMs: 1_000 });
-    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap}`));
+    const handle = await driver.boot(parseMachineEntry('vm_machine', `machinen://${sourceSnap.dir}`));
 
     expect((restoreCalls[0].portForward as Array<{ guestPort: number }>)[0].guestPort).toBe(4707);
     const snap = (await handle.snapshot?.()) as { snapDir: string };
@@ -289,8 +696,10 @@ describe('Machinen driver unit behavior without KVM', () => {
     );
     const marker = JSON.parse(await readFile(path.join(snap.snapDir, 'federated-machine.json'), 'utf8')) as {
       guestPort: number;
+      shell: typeof sourceSnap.shell;
     };
     expect(marker.guestPort).toBe(4707);
+    expect(marker.shell).toEqual(sourceSnap.shell);
     expect(existsSync(path.join(snap.snapDir, 'state.vmstate'))).toBe(true);
     await handle.dispose?.();
   });
