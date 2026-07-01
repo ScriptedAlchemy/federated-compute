@@ -160,18 +160,27 @@ export function vmLaneBody() {
   return rest;
 }
 
+/**
+ * Refuse with the honest 503 when this host cannot run live microVMs.
+ * Shared by every lane that boots machinenDriver VMs (vm lane, fluid lane).
+ * Returns true when the response has been written.
+ */
+export function refuseWithoutVmCapability(res: http.ServerResponse): boolean {
+  if (vmCapability.available) return false;
+  json(res, 503, {
+    error: `live VM track unavailable: ${vmCapability.detail}`,
+    capability: vmCapability,
+  });
+  return true;
+}
+
 /** Serialize lane steps and refuse when the hardware can't run them. */
 async function vmStep<T extends Record<string, unknown>>(
   res: http.ServerResponse,
   allowed: VmLaneState['phase'][],
   step: () => Promise<T>,
 ): Promise<void> {
-  if (!vmCapability.available) {
-    return json(res, 503, {
-      error: `live VM track unavailable: ${vmCapability.detail}`,
-      capability: vmCapability,
-    });
-  }
+  if (refuseWithoutVmCapability(res)) return;
   if (vmLane.busy) return json(res, 409, { error: 'a VM step is already running' });
   if (!allowed.includes(vmLane.phase)) {
     return json(res, 409, {

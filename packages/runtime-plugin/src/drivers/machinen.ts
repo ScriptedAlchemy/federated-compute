@@ -792,16 +792,18 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
   /**
    * The boot bundle THIS host offers (provisioning missing base assets on
    * demand) — never derived from paths recorded inside a pulled bundle.
+   * Resolves the runtime itself (loadRuntime() is memoized) so the memo
+   * below cannot be handed a runtime it silently ignores.
    */
-  function localBootBundle(runtime: MachinenRuntime): Promise<BaseBootBundle> {
-    return resolveBaseBootBundle(runtime, opts, log, opts.image);
+  async function localBootBundle(): Promise<BaseBootBundle> {
+    return resolveBaseBootBundle(await loadRuntime(), opts, log, opts.image);
   }
 
   // Memoized per driver: the local assets do not change within a process,
   // and hashing a multi-GB rootfs on every restore would be pure waste.
   let localShellPromise: Promise<VmstateShellIdentity> | undefined;
-  function localShell(runtime: MachinenRuntime): Promise<VmstateShellIdentity> {
-    localShellPromise ??= localBootBundle(runtime)
+  function localShell(): Promise<VmstateShellIdentity> {
+    localShellPromise ??= localBootBundle()
       .then(({ image, assets }) => shellIdentity(image, assets))
       .catch((error: unknown) => {
         localShellPromise = undefined;
@@ -813,7 +815,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
   async function bootFresh(spec: MachineSpec, program: GuestProgram): Promise<MachineHandle> {
     const runtime = await loadRuntime();
     const bundle = await readFile(program.bundlePath);
-    const { image, assets } = await localBootBundle(runtime);
+    const { image, assets } = await localBootBundle();
     const guestPort = guestPortFor(spec);
     const hostPort = await getFreePort();
     const memory = Number(spec.params.get('memory')) || opts.memoryMib || DEFAULT_MEMORY_MIB;
@@ -875,7 +877,7 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
         'start guest launcher',
       );
 
-      const handle = buildHandle(spec, vm, hostPort, guestPort, image, () => localShell(runtime), snapshotDir, log);
+      const handle = buildHandle(spec, vm, hostPort, guestPort, image, localShell, snapshotDir, log);
       const readyMs = await waitForGuest(
         () => handle.health?.() ?? Promise.resolve(false),
         `boot of "${spec.remoteName}"`,
@@ -899,12 +901,12 @@ export function machinenDriver(opts: MachinenDriverOptions = {}): MachineDriver 
     const guestPort = resolveGuestPort(spec, marker);
     const hostPort = await getFreePort();
     const name = vmName(spec.remoteName);
-    const { image: localRootfs, assets } = await localBootBundle(runtime);
+    const { image: localRootfs, assets } = await localBootBundle();
     // The shell this host offers is derived from ITS OWN assets. marker.image
     // is a producer-host path inside an untrusted bundle: reading it would
     // break cross-host restores (ENOENT) and hand hostile bundles an
     // arbitrary-file hash oracle.
-    const hostShell = await localShell(runtime);
+    const hostShell = await localShell();
     if (!sameShell(marker.shell, hostShell)) {
       throw new Error(
         `[machinen-plugin] snapshot "${snapDir}" shell mismatch: snapshot requires ` +

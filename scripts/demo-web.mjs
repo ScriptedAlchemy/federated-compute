@@ -289,7 +289,9 @@ async function runSmoke(base) {
 
   // The fluid prepare/distribute steps boot real microVMs — run them only
   // where the host says it can (same capability signal the vm lane uses).
-  const fluidCap = await fetch(`${base}/api/vm/capability`).then((r) => r.json());
+  const fluidCapRes = await fetch(`${base}/api/vm/capability`);
+  expect(fluidCapRes.ok, `GET /api/vm/capability -> ${fluidCapRes.status}`);
+  const fluidCap = await fluidCapRes.json();
   if (fluidCap.available) {
     const fluidPrepared = await postJson(base, '/api/fluid/prepare');
     expect(fluidPrepared.phase === 'prepared',
@@ -397,7 +399,9 @@ async function runSmoke(base) {
     `${dash.cache.hits} hits / ${dash.cache.misses} misses`);
 
   // ---- whole-VM lane: capability honesty + replay availability -------------
-  const cap = await fetch(`${base}/api/vm/capability`).then((r) => r.json());
+  const capRes = await fetch(`${base}/api/vm/capability`);
+  expect(capRes.ok, `GET /api/vm/capability -> ${capRes.status}`);
+  const cap = await capRes.json();
   expect(typeof cap.available === 'boolean' && typeof cap.reason === 'string',
     `vm capability malformed: ${JSON.stringify(cap)}`);
   console.log(`[smoke] GET /api/vm/capability -> ${cap.reason}`);

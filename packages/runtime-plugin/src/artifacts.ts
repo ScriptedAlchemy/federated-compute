@@ -167,6 +167,9 @@ async function fetchOk(
   return fetchOkWith(url, what, timeoutMs, scope, (message) => fail(spec, message));
 }
 
+/** Sentinel for readBodyOk's own size-limit refusal (vs transport errors). */
+class BodyLimitError extends Error {}
+
 /**
  * Read a small response body whose request carries a 'request'-scoped
  * deadline, converting a mid-body abort into the machine-named timeout
@@ -191,7 +194,7 @@ async function readBodyOk(
       bytes += value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel().catch(() => {});
-        throw new Error(`${what} body from ${url} exceeded ${maxBytes} bytes`);
+        throw new BodyLimitError(`${what} body from ${url} exceeded ${maxBytes} bytes`);
       }
       chunks.push(value);
     }
@@ -201,7 +204,7 @@ async function readBodyOk(
     if (err.name === 'TimeoutError' || err.name === 'AbortError') {
       fail(spec, `${what} request to ${url} timed out after ${timeoutMs}ms while reading the body`);
     }
-    if (err.message.startsWith(`${what} body from ${url} exceeded `)) {
+    if (err instanceof BodyLimitError) {
       fail(spec, err.message);
     }
     fail(spec, `${what} body from ${url} could not be read: ${err.message}`);
